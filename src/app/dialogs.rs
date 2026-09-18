@@ -297,6 +297,122 @@ impl EditorApp {
                 ui.add_space(8.0);
                 if let Some(adjustment) = &mut edit.adjustment {
                     match adjustment {
+                        Adjustment::HueRanges { settings } => {
+                            egui::ComboBox::from_id_salt("hue_range")
+                                .selected_text(xuan::color::HueSettings::RANGES[settings.range])
+                                .show_ui(ui, |ui| {
+                                    for (index, name) in
+                                        xuan::color::HueSettings::RANGES.iter().enumerate()
+                                    {
+                                        changed |= ui
+                                            .selectable_value(&mut settings.range, index, *name)
+                                            .changed();
+                                    }
+                                });
+                            let values = &mut settings.adjustments[settings.range];
+                            changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut values[0], -180.0..=360.0)
+                                        .text("Hue")
+                                        .suffix("°"),
+                                )
+                                .changed();
+                            changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut values[1], -100.0..=100.0)
+                                        .text("Saturation"),
+                                )
+                                .changed();
+                            changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut values[2], -100.0..=100.0)
+                                        .text("Lightness"),
+                                )
+                                .changed();
+                            changed |= ui.checkbox(&mut settings.colorize, "Colorize").changed();
+                            if settings.range > 0 {
+                                changed |= ui
+                                    .checkbox(
+                                        &mut settings.invert_range,
+                                        "Invert selected color range",
+                                    )
+                                    .changed();
+                                ui.collapsing("Color range falloff", |ui| {
+                                    for (index, label) in
+                                        ["Falloff start", "Range start", "Range end", "Falloff end"]
+                                            .iter()
+                                            .enumerate()
+                                    {
+                                        changed |= ui
+                                            .add(
+                                                egui::Slider::new(
+                                                    &mut settings.bands[settings.range][index],
+                                                    0.0..=360.0,
+                                                )
+                                                .text(*label),
+                                            )
+                                            .changed();
+                                    }
+                                });
+                            }
+                        }
+                        Adjustment::LevelsChannels { ranges } => {
+                            channel_picker(ui, &mut edit.channel);
+                            let source = render::render_scaled(&edit.original, 256, 192);
+                            histogram(ui, &source);
+                            let range = &mut ranges[edit.channel];
+                            let maximum = range[2] - 1.0;
+                            changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut range[0], 0.0..=maximum)
+                                        .text("Input black"),
+                                )
+                                .changed();
+                            changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut range[1], 0.1..=9.99)
+                                        .text("Gamma")
+                                        .logarithmic(true),
+                                )
+                                .changed();
+                            let minimum = range[0] + 1.0;
+                            changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut range[2], minimum..=255.0)
+                                        .text("Input white"),
+                                )
+                                .changed();
+                            ui.separator();
+                            changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut range[3], 0.0..=255.0)
+                                        .text("Output black"),
+                                )
+                                .changed();
+                            changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut range[4], 0.0..=255.0)
+                                        .text("Output white"),
+                                )
+                                .changed();
+                            if ui.button("Auto").clicked() {
+                                if let Adjustment::Levels {
+                                    black,
+                                    gamma,
+                                    white,
+                                    output_black,
+                                    output_white,
+                                } = effects::auto_levels(&source)
+                                {
+                                    *range = [black, gamma, white, output_black, output_white];
+                                }
+                                changed = true;
+                            }
+                        }
+                        Adjustment::CurvesChannels { channels } => {
+                            channel_picker(ui, &mut edit.channel);
+                            changed |= curve_editor(ui, &mut channels[edit.channel]);
+                        }
                         Adjustment::HueSaturation {
                             hue,
                             saturation,
@@ -370,82 +486,7 @@ impl EditorApp {
                             }
                         }
                         Adjustment::Curves { points } => {
-                            ui.label(
-                                RichText::new(
-                                    "Click to add a point · Drag points to reshape the curve",
-                                )
-                                .color(theme::MUTED),
-                            );
-                            let (rect, response) = ui.allocate_exact_size(
-                                vec2(360.0, 220.0),
-                                egui::Sense::click_and_drag(),
-                            );
-                            ui.painter().rect_filled(rect, 4.0, Color32::from_gray(28));
-                            for i in 1..4 {
-                                let t = i as f32 / 4.0;
-                                ui.painter().line_segment(
-                                    [
-                                        rect.left_top() + vec2(rect.width() * t, 0.0),
-                                        rect.left_bottom() + vec2(rect.width() * t, 0.0),
-                                    ],
-                                    Stroke::new(1.0_f32, Color32::from_gray(55)),
-                                );
-                                ui.painter().line_segment(
-                                    [
-                                        rect.left_top() + vec2(0.0, rect.height() * t),
-                                        rect.right_top() + vec2(0.0, rect.height() * t),
-                                    ],
-                                    Stroke::new(1.0_f32, Color32::from_gray(55)),
-                                );
-                            }
-                            let map = |p: Point| {
-                                egui::pos2(
-                                    rect.left() + p.x * rect.width(),
-                                    rect.bottom() - p.y * rect.height(),
-                                )
-                            };
-                            ui.painter().line_segment(
-                                [rect.left_bottom(), rect.right_top()],
-                                Stroke::new(1.0_f32, Color32::from_gray(75)),
-                            );
-                            ui.painter().add(egui::Shape::line(
-                                (0..=255)
-                                    .map(|i| {
-                                        let x = i as f32 / 255.0;
-                                        map(Point::new(x, effects::curve_value(points, x)))
-                                    })
-                                    .collect(),
-                                Stroke::new(1.5_f32, theme::TEXT),
-                            ));
-                            for p in points.iter() {
-                                ui.painter().circle_filled(map(*p), 3.0, theme::TEXT);
-                            }
-                            if let Some(p) = response.interact_pointer_pos() {
-                                let point = Point::new(
-                                    ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0),
-                                    ((rect.bottom() - p.y) / rect.height()).clamp(0.0, 1.0),
-                                );
-                                if response.clicked()
-                                    && points.len() < 32
-                                    && !points.iter().any(|v| (v.x - point.x).abs() < 0.025)
-                                {
-                                    points.push(point);
-                                    points.sort_by(|a, b| a.x.total_cmp(&b.x));
-                                    changed = true;
-                                }
-                                if response.dragged()
-                                    && let Some(index) = points
-                                        .iter()
-                                        .enumerate()
-                                        .min_by(|(_, a), (_, b)| {
-                                            (a.x - point.x).abs().total_cmp(&(b.x - point.x).abs())
-                                        })
-                                        .map(|(i, _)| i)
-                                {
-                                    points[index].y = point.y;
-                                    changed = true;
-                                }
-                            }
+                            changed |= curve_editor(ui, points);
                         }
                         Adjustment::Exposure {
                             exposure,
@@ -576,7 +617,14 @@ impl EditorApp {
                 session.document = edit.original.clone();
                 if edit.preview || apply {
                     let result = if let Some(adjustment) = &edit.adjustment {
-                        if edit.as_layer {
+                        if let Some(target) = edit.target {
+                            if let Some(layer) =
+                                session.document.layers.iter_mut().find(|l| l.id == target)
+                            {
+                                layer.adjustment = Some(adjustment.clone());
+                            }
+                            Ok(())
+                        } else if edit.as_layer {
                             let mut layer = Layer::blank(
                                 adjustment.name(),
                                 session.document.width,
@@ -840,4 +888,90 @@ fn histogram(ui: &mut egui::Ui, image: &image::RgbaImage) {
             Stroke::new(rect.width() / 256.0, Color32::from_gray(177)),
         );
     }
+}
+
+fn channel_picker(ui: &mut egui::Ui, channel: &mut usize) {
+    egui::ComboBox::from_id_salt("adjustment_channel")
+        .selected_text(["RGB", "Red", "Green", "Blue"][*channel])
+        .show_ui(ui, |ui| {
+            for (index, name) in ["RGB", "Red", "Green", "Blue"].iter().enumerate() {
+                ui.selectable_value(channel, index, *name);
+            }
+        });
+}
+
+fn curve_editor(ui: &mut egui::Ui, points: &mut Vec<Point>) -> bool {
+    let mut changed = false;
+
+    ui.label(
+        RichText::new("Click to add a point · Drag points to reshape the curve")
+            .color(theme::MUTED),
+    );
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(360.0, 220.0), egui::Sense::click_and_drag());
+    ui.painter().rect_filled(rect, 4.0, Color32::from_gray(28));
+    for i in 1..4 {
+        let t = i as f32 / 4.0;
+        ui.painter().line_segment(
+            [
+                rect.left_top() + vec2(rect.width() * t, 0.0),
+                rect.left_bottom() + vec2(rect.width() * t, 0.0),
+            ],
+            Stroke::new(1.0_f32, Color32::from_gray(55)),
+        );
+        ui.painter().line_segment(
+            [
+                rect.left_top() + vec2(0.0, rect.height() * t),
+                rect.right_top() + vec2(0.0, rect.height() * t),
+            ],
+            Stroke::new(1.0_f32, Color32::from_gray(55)),
+        );
+    }
+    let map = |p: Point| {
+        egui::pos2(
+            rect.left() + p.x * rect.width(),
+            rect.bottom() - p.y * rect.height(),
+        )
+    };
+    ui.painter().line_segment(
+        [rect.left_bottom(), rect.right_top()],
+        Stroke::new(1.0_f32, Color32::from_gray(75)),
+    );
+    ui.painter().add(egui::Shape::line(
+        (0..=255)
+            .map(|i| {
+                let x = i as f32 / 255.0;
+                map(Point::new(x, effects::curve_value(points, x)))
+            })
+            .collect(),
+        Stroke::new(1.5_f32, theme::TEXT),
+    ));
+    for p in points.iter() {
+        ui.painter().circle_filled(map(*p), 3.0, theme::TEXT);
+    }
+    if let Some(p) = response.interact_pointer_pos() {
+        let point = Point::new(
+            ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0),
+            ((rect.bottom() - p.y) / rect.height()).clamp(0.0, 1.0),
+        );
+        if response.clicked()
+            && points.len() < 32
+            && !points.iter().any(|v| (v.x - point.x).abs() < 0.025)
+        {
+            points.push(point);
+            points.sort_by(|a, b| a.x.total_cmp(&b.x));
+            changed = true;
+        }
+        if response.dragged()
+            && let Some(index) = points
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| (a.x - point.x).abs().total_cmp(&(b.x - point.x).abs()))
+                .map(|(i, _)| i)
+        {
+            points[index].y = point.y;
+            changed = true;
+        }
+    }
+    changed
 }

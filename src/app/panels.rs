@@ -409,6 +409,7 @@ impl EditorApp {
         let mut reorder = None;
         let mut appearance = None;
         let mut rename = None;
+        let mut edit_adjustment = None;
         egui::SidePanel::right("layers_panel").default_width(252.0).width_range(202.0..=352.0).resizable(true)
             .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::same(0))).show(ctx,|ui|{
             ui.add_enabled_ui(self.dialog.is_none(),|ui|{
@@ -481,12 +482,13 @@ impl EditorApp {
                                     }
                                     let response=ui.add(egui::Label::new(RichText::new(&layer.name).color(if layer.visible{theme::TEXT}else{theme::MUTED})).truncate().sense(Sense::click_and_drag()));
                                     if response.clicked(){select=Some((layer.id,false));}
-                                    if response.double_clicked(){rename=Some((layer.id,layer.name.clone()));}
+                                    if response.double_clicked(){if layer.adjustment.is_some(){edit_adjustment=Some(layer.id);}else{rename=Some((layer.id,layer.name.clone()));}}
                                     if response.drag_started(){response.dnd_set_drag_payload(layer.id);}
                                     if layer.locked {ui.label(RichText::new("·").color(theme::MUTED));}
                                 });
                             });
                             row.response.context_menu(|ui|{
+                                if layer.adjustment.is_some() && ui.button("Edit adjustment…").clicked() {edit_adjustment=Some(layer.id);ui.close();}
                                 if ui.button("Rename…").clicked(){rename=Some((layer.id,layer.name.clone()));ui.close();}
                                 for (label,command) in [("Duplicate","duplicate"),("New Group","group"),("Merge Down / Selected","merge"),("Add Mask","mask"),("Clipping Mask","clip"),("Delete","delete_layer")] {
                                     if ui.button(label).clicked(){select=Some((layer.id,false));action=Some(command);ui.close();}
@@ -576,6 +578,9 @@ impl EditorApp {
                 doc.select(source, false);
                 Ok(())
             });
+        }
+        if let Some(id) = edit_adjustment {
+            self.edit_adjustment_layer(id);
         }
         if let Some(rename) = rename {
             self.rename = Some(rename);

@@ -22,21 +22,14 @@ fn item(
 pub(super) fn adjustment_menu(ui: &mut egui::Ui) -> Option<Adjustment> {
     let mut result = None;
     for adjustment in [
-        Adjustment::HueSaturation {
-            hue: 0.0,
-            saturation: 0.0,
-            lightness: 0.0,
-            colorize: false,
+        Adjustment::HueRanges {
+            settings: Box::default(),
         },
-        Adjustment::Levels {
-            black: 0.0,
-            gamma: 1.0,
-            white: 255.0,
-            output_black: 0.0,
-            output_white: 255.0,
+        Adjustment::LevelsChannels {
+            ranges: [xuan::color::DEFAULT_LEVELS; 4],
         },
-        Adjustment::Curves {
-            points: vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)],
+        Adjustment::CurvesChannels {
+            channels: std::array::from_fn(|_| vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)]),
         },
         Adjustment::Exposure {
             exposure: 0.0,

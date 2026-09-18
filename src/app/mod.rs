@@ -259,6 +259,8 @@ struct EffectEdit {
     as_layer: bool,
     preview: bool,
     refresh: bool,
+    channel: usize,
+    target: Option<Uuid>,
 }
 
 #[derive(Clone, Copy)]
@@ -598,6 +600,8 @@ impl EditorApp {
             as_layer,
             preview: true,
             refresh: true,
+            channel: 0,
+            target: None,
         });
         self.dialog = Some(Dialog::Effect);
     }
@@ -614,8 +618,23 @@ impl EditorApp {
             as_layer: false,
             preview: true,
             refresh: true,
+            channel: 0,
+            target: None,
         });
         self.dialog = Some(Dialog::Effect);
+    }
+
+    fn edit_adjustment_layer(&mut self, id: Uuid) {
+        let adjustment = self
+            .session()
+            .and_then(|s| s.document.layers.iter().find(|l| l.id == id))
+            .and_then(|l| l.adjustment.clone());
+        if let Some(adjustment) = adjustment {
+            self.start_adjustment(adjustment, false);
+            if let Some(edit) = &mut self.effect {
+                edit.target = Some(id);
+            }
+        }
     }
 
     fn add_demo(&mut self) {

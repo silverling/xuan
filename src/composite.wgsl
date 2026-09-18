@@ -6,7 +6,7 @@ struct Parameters {
     appearance: vec4<f32>, // Opacity, unused.
     first: vec4<f32>,
     second: vec4<f32>,
-    points: array<vec4<f32>, 32>,
+    points: array<vec4<f32>, 128>,
 }
 
 @group(0) @binding(0) var previous: texture_2d<f32>;
@@ -82,33 +82,33 @@ fn hue_to_rgb(hue: f32, saturation: f32, lightness: f32) -> vec3<f32> {
     return rgb + lightness - c * 0.5;
 }
 
-fn curve_slope(index: u32) -> f32 {
-    let a = params.points[index].xy;
-    let b = params.points[index + 1u].xy;
+fn curve_slope(index: u32, base: u32) -> f32 {
+    let a = params.points[base + index].xy;
+    let b = params.points[base + index + 1u].xy;
     return (b.y - a.y) / max(b.x - a.x, 0.000001);
 }
 
-fn curve_tangent(index: u32) -> f32 {
-    if index == 0u { return curve_slope(0u); }
-    if index == params.flags.w - 1u { return curve_slope(index - 1u); }
-    let a = curve_slope(index - 1u);
-    let b = curve_slope(index);
+fn curve_tangent(index: u32, base: u32, count: u32) -> f32 {
+    if index == 0u { return curve_slope(0u, base); }
+    if index == count - 1u { return curve_slope(index - 1u, base); }
+    let a = curve_slope(index - 1u, base);
+    let b = curve_slope(index, base);
     if a * b <= 0.0 { return 0.0; }
     return 2.0 / (1.0 / a + 1.0 / b);
 }
 
-fn curve(value: f32) -> f32 {
+fn curve(value: f32, base: u32, count: u32) -> f32 {
     var index = 0u;
-    for (var i = 0u; i + 1u < params.flags.w; i++) { if params.points[i].x <= value { index = i; } }
-    index = min(index, params.flags.w - 2u);
-    let a = params.points[index].xy;
-    let b = params.points[index + 1u].xy;
+    for (var i = 0u; i + 1u < count; i++) { if params.points[base + i].x <= value { index = i; } }
+    index = min(index, count - 2u);
+    let a = params.points[base + index].xy;
+    let b = params.points[base + index + 1u].xy;
     let h = max(b.x - a.x, 0.000001);
     let t = clamp((value - a.x) / h, 0.0, 1.0);
     let t2 = t * t;
     let t3 = t2 * t;
-    return clamp((2.0*t3 - 3.0*t2 + 1.0)*a.y + (t3 - 2.0*t2 + t)*h*curve_tangent(index)
-        + (-2.0*t3 + 3.0*t2)*b.y + (t3 - t2)*h*curve_tangent(index + 1u), 0.0, 1.0);
+    return clamp((2.0*t3 - 3.0*t2 + 1.0)*a.y + (t3 - 2.0*t2 + t)*h*curve_tangent(index, base, count)
+        + (-2.0*t3 + 3.0*t2)*b.y + (t3 - t2)*h*curve_tangent(index + 1u, base, count), 0.0, 1.0);
 }
 
 fn noise(point: vec2<u32>, seed: u32) -> f32 {
@@ -118,14 +118,20 @@ fn noise(point: vec2<u32>, seed: u32) -> f32 {
     return f32(value) / 4294967295.0 * 2.0 - 1.0;
 }
 
-fn adjust(rgb: vec3<f32>, point: vec2<f32>) -> vec3<f32> {
-    let a = params.first;
-    let b = params.second;
-    switch params.flags.y {
-        case 1u: {
+fn wrap(value: f32) -> f32 { return ((value % 360.0) + 360.0) % 360.0; }
+
+fn channel_level(value: f32, channel: u32) -> f32 {
+    let a = params.points[channel * 2u];
+    let white = params.points[channel * 2u + 1u].x;
+    let input = clamp((value * 255.0 - a.x) / max(a.z - a.x, 1.0), 0.0, 1.0);
+    return (a.w + pow(input, 1.0 / max(a.y, 0.01)) * (white - a.w)) / 255.0;
+}
+
+fn adjust_hsv(rgb: vec3<f32>, a: vec4<f32>) -> vec3<f32> {
+
             let high = max(max(rgb.r, rgb.g), rgb.b);
             let low = min(min(rgb.r, rgb.g), rgb.b);
-            let lightness = (high + low) * 0.5;
+            var lightness = (high + low) * 0.5;
             let delta = high - low;
             var hue = 0.0;
             var saturation = 0.0;
@@ -137,15 +143,25 @@ fn adjust(rgb: vec3<f32>, point: vec2<f32>) -> vec3<f32> {
                 hue *= 60.0;
             }
             hue += a.x;
-            saturation += a.y / 100.0;
+            saturation *= 1.0 + a.y / 100.0;
             if a.w > 0.0 { hue = a.x; saturation = a.y / 100.0; }
-            let result = hue_to_rgb(hue, clamp(saturation, 0.0, 1.0), lightness);
-            let light = a.z / 100.0;
-            return select(result * (1.0 + light), result + (1.0 - result) * light, light >= 0.0);
-        }
+            let light = clamp(a.z / 100.0, -1.0, 1.0);
+            lightness = select(lightness * (1.0 + light), lightness + (1.0 - lightness) * light, light >= 0.0);
+            return hue_to_rgb(hue, clamp(saturation, 0.0, 1.0), lightness);
+}
+
+fn adjust(rgb: vec3<f32>, point: vec2<f32>) -> vec3<f32> {
+    let a = params.first;
+    let b = params.second;
+    switch params.flags.y {
+        case 1u: { return adjust_hsv(rgb, a); }
         case 2u: { let value = pow(clamp((rgb * 255.0 - a.x) / max(a.z - a.x, 1.0), vec3(0.0), vec3(1.0)), vec3(1.0 / max(a.y, 0.01))); return (a.w + value * (b.x - a.w)) / 255.0; }
-        case 3u: { return vec3(curve(rgb.r), curve(rgb.g), curve(rgb.b)); }
-        case 4u: { return pow(max(rgb * exp2(a.x) + a.y, vec3(0.0)), vec3(1.0 / max(a.z, 0.01))); }
+        case 3u: { return vec3(curve(rgb.r, 0u, params.flags.w), curve(rgb.g, 0u, params.flags.w), curve(rgb.b, 0u, params.flags.w)); }
+        case 4u: {
+            let linear = select(pow((rgb + 0.055) / 1.055, vec3(2.4)), rgb / 12.92, rgb <= vec3(0.04045));
+            let result = pow(max(linear * exp2(a.x) + a.y, vec3(0.0)), vec3(1.0 / max(a.z, 0.01)));
+            return select(1.055 * pow(result, vec3(1.0 / 2.4)) - 0.055, result * 12.92, result <= vec3(0.0031308));
+        }
         case 5u: { return mix(a.rgb, b.rgb, dot(rgb, vec3(0.2126, 0.7152, 0.0722))); }
         case 6u: {
             let seed = bitcast<u32>(a.z);
@@ -154,6 +170,38 @@ fn adjust(rgb: vec3<f32>, point: vec2<f32>) -> vec3<f32> {
             return rgb + vec3(noise(p, seed), noise(p, seed + step), noise(p, seed + step * 2u)) * a.x / 100.0;
         }
         case 7u: { return 1.0 - rgb; }
+        case 8u: { return vec3(channel_level(channel_level(rgb.r, 1u), 0u), channel_level(channel_level(rgb.g, 2u), 0u), channel_level(channel_level(rgb.b, 3u), 0u)); }
+        case 9u: { return vec3(curve(curve(rgb.r, 32u, u32(a.y)), 0u, u32(a.x)), curve(curve(rgb.g, 64u, u32(a.z)), 0u, u32(a.x)), curve(curve(rgb.b, 96u, u32(a.w)), 0u, u32(a.x))); }
+        case 10u: {
+            if a.y > 0.0 { let selected = params.points[u32(a.x)]; return adjust_hsv(rgb, vec4(selected.xyz, 1.0)); }
+            let high = max(max(rgb.r, rgb.g), rgb.b);
+            let low = min(min(rgb.r, rgb.g), rgb.b);
+            let delta = high - low;
+            var hue = 0.0;
+            if delta > 0.000001 {
+                if high == rgb.r { hue = (rgb.g - rgb.b) / delta; }
+                else if high == rgb.g { hue = (rgb.b - rgb.r) / delta + 2.0; }
+                else { hue = (rgb.r - rgb.g) / delta + 4.0; }
+                hue = wrap(hue * 60.0);
+            }
+            var response = params.points[0].xyz;
+            for (var i = 1u; i < 7u; i++) {
+                let band = params.points[i + 7u];
+                let span = wrap(band.w - band.x);
+                let position = wrap(hue - band.x);
+                let ramp_in = wrap(band.y - band.x);
+                let plateau_end = wrap(band.z - band.x);
+                var weight = 1.0;
+                if span > 0.0 {
+                    if position > span { weight = 0.0; }
+                    else if position < ramp_in { weight = position / max(ramp_in, 0.0001); }
+                    else if position > plateau_end { weight = (span - position) / max(span - plateau_end, 0.0001); }
+                }
+                if a.z > 0.0 && u32(a.x) == i { weight = 1.0 - weight; }
+                response += params.points[i].xyz * weight;
+            }
+            return adjust_hsv(rgb, vec4(response, 0.0));
+        }
         default: { return rgb; }
     }
 }

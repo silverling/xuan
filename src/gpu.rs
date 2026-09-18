@@ -26,7 +26,7 @@ struct Parameters {
     appearance: [f32; 4],
     first: [f32; 4],
     second: [f32; 4],
-    points: [[f32; 4]; 32],
+    points: [[f32; 4]; 128],
 }
 
 struct Source {
@@ -336,6 +336,40 @@ fn parameters(document: &Document, layer: &Layer, size: [u32; 2]) -> Parameters 
     p.appearance[0] = layer.opacity;
     if let Some(adjustment) = &layer.adjustment {
         match adjustment {
+            Adjustment::LevelsChannels { ranges } => {
+                p.flags[1] = 8;
+                for (i, range) in ranges.iter().enumerate() {
+                    p.points[i * 2] = [range[0], range[1], range[2], range[3]];
+                    p.points[i * 2 + 1][0] = range[4];
+                }
+            }
+            Adjustment::CurvesChannels { channels } => {
+                p.flags[1] = 9;
+                for (i, points) in channels.iter().enumerate() {
+                    p.first[i] = points.len() as f32;
+                    for (j, point) in points.iter().enumerate() {
+                        p.points[i * 32 + j] = [point.x, point.y, 0.0, 0.0];
+                    }
+                }
+            }
+            Adjustment::HueRanges { settings } => {
+                p.flags[1] = 10;
+                p.first = [
+                    settings.range as f32,
+                    if settings.colorize { 1.0 } else { 0.0 },
+                    if settings.invert_range { 1.0 } else { 0.0 },
+                    0.0,
+                ];
+                for i in 0..7 {
+                    p.points[i] = [
+                        settings.adjustments[i][0],
+                        settings.adjustments[i][1],
+                        settings.adjustments[i][2],
+                        0.0,
+                    ];
+                    p.points[i + 7] = settings.bands[i];
+                }
+            }
             Adjustment::HueSaturation {
                 hue,
                 saturation,
@@ -491,6 +525,37 @@ mod tests {
         adjustment.opacity = 0.6;
         document.layers.push(adjustment);
         for effect in [
+            Adjustment::LevelsChannels {
+                ranges: [
+                    crate::color::DEFAULT_LEVELS,
+                    [8.0, 0.9, 243.0, 2.0, 254.0],
+                    [0.0, 1.3, 255.0, 0.0, 255.0],
+                    crate::color::DEFAULT_LEVELS,
+                ],
+            },
+            Adjustment::CurvesChannels {
+                channels: std::array::from_fn(|i| {
+                    vec![
+                        Point::new(0.0, 0.0),
+                        Point::new(0.5, 0.3 + i as f32 * 0.1),
+                        Point::new(1.0, 1.0),
+                    ]
+                }),
+            },
+            Adjustment::HueRanges {
+                settings: Box::new(crate::color::HueSettings {
+                    adjustments: [
+                        [10.0, 5.0, -2.0],
+                        [70.0, -50.0, 8.0],
+                        [0.0; 3],
+                        [0.0; 3],
+                        [0.0; 3],
+                        [-40.0, 20.0, -5.0],
+                        [0.0; 3],
+                    ],
+                    ..Default::default()
+                }),
+            },
             Adjustment::HueSaturation {
                 hue: 30.0,
                 saturation: 15.0,

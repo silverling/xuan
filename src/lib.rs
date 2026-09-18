@@ -1,4 +1,5 @@
 pub mod blend;
+pub mod color;
 pub mod document;
 pub mod effects;
 pub mod gpu;

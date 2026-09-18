@@ -91,32 +91,44 @@ fn noise(x: u32, y: u32, seed: u32) -> f32 {
     value as f32 / u32::MAX as f32 * 2.0 - 1.0
 }
 
+fn hue_saturation(rgb: [f32; 3], adjustment: [f32; 3], colorize: bool) -> [f32; 3] {
+    let [hue, saturation, lightness] = adjustment;
+    let mut hsl = rgb_to_hsl(rgb);
+    hsl[0] = if colorize { hue } else { hsl[0] + hue };
+    hsl[1] = if colorize {
+        saturation / 100.0
+    } else {
+        hsl[1] * (1.0 + saturation / 100.0)
+    }
+    .clamp(0.0, 1.0);
+    let amount = (lightness / 100.0).clamp(-1.0, 1.0);
+    hsl[2] = if amount < 0.0 {
+        hsl[2] * (1.0 + amount)
+    } else {
+        hsl[2] + (1.0 - hsl[2]) * amount
+    };
+    hsl_to_rgb(hsl)
+}
+
 pub fn adjust(pixel: [f32; 4], adjustment: &Adjustment, point: Point) -> [f32; 4] {
     let rgb = [pixel[0], pixel[1], pixel[2]];
     let rgb = match adjustment {
+        Adjustment::HueRanges { settings } => {
+            let response = settings.response(rgb_to_hsl(rgb)[0]);
+            hue_saturation(rgb, response, settings.colorize)
+        }
+        Adjustment::LevelsChannels { ranges } => std::array::from_fn(|i| {
+            crate::color::level(crate::color::level(rgb[i], ranges[i + 1]), ranges[0])
+        }),
+        Adjustment::CurvesChannels { channels } => std::array::from_fn(|i| {
+            curve_value(&channels[0], curve_value(&channels[i + 1], rgb[i]))
+        }),
         Adjustment::HueSaturation {
             hue,
             saturation,
             lightness,
             colorize,
-        } => {
-            let mut hsl = rgb_to_hsl(rgb);
-            hsl[0] = if *colorize { *hue } else { hsl[0] + hue };
-            hsl[1] = if *colorize {
-                saturation / 100.0
-            } else {
-                hsl[1] + saturation / 100.0
-            }
-            .clamp(0.0, 1.0);
-            let amount = lightness / 100.0;
-            hsl_to_rgb(hsl).map(|v| {
-                if amount < 0.0 {
-                    v * (1.0 + amount)
-                } else {
-                    v + (1.0 - v) * amount
-                }
-            })
-        }
+        } => hue_saturation(rgb, [*hue, *saturation, *lightness], *colorize),
         Adjustment::Levels {
             black,
             gamma,
@@ -135,9 +147,11 @@ pub fn adjust(pixel: [f32; 4], adjustment: &Adjustment, point: Point) -> [f32; 4
             offset,
             gamma,
         } => rgb.map(|v| {
-            (v * 2.0_f32.powf(*exposure) + offset)
-                .max(0.0)
-                .powf(1.0 / gamma.max(0.01))
+            crate::color::encode_srgb(
+                (crate::color::decode_srgb(v) * 2.0_f32.powf(*exposure) + offset)
+                    .max(0.0)
+                    .powf(1.0 / gamma.max(0.01)),
+            )
         }),
         Adjustment::GradientMap {
             shadows,
@@ -406,6 +420,23 @@ pub fn auto_levels(image: &RgbaImage) -> Adjustment {
 
 pub fn validate_adjustment(adjustment: &Adjustment) -> Result<()> {
     let valid = match adjustment {
+        Adjustment::HueRanges { settings } => settings.valid(),
+        Adjustment::LevelsChannels { ranges } => ranges.iter().all(|r| {
+            validate_adjustment(&Adjustment::Levels {
+                black: r[0],
+                gamma: r[1],
+                white: r[2],
+                output_black: r[3],
+                output_white: r[4],
+            })
+            .is_ok()
+        }),
+        Adjustment::CurvesChannels { channels } => channels.iter().all(|points| {
+            validate_adjustment(&Adjustment::Curves {
+                points: points.clone(),
+            })
+            .is_ok()
+        }),
         Adjustment::HueSaturation {
             hue,
             saturation,
@@ -467,6 +498,31 @@ pub fn validate_adjustment(adjustment: &Adjustment) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saturation_keeps_grays_neutral_and_exposure_uses_linear_light() {
+        let saturated = adjust(
+            [0.5, 0.5, 0.5, 1.0],
+            &Adjustment::HueSaturation {
+                hue: 60.0,
+                saturation: 100.0,
+                lightness: 0.0,
+                colorize: false,
+            },
+            Point::default(),
+        );
+        assert_eq!(saturated, [0.5, 0.5, 0.5, 1.0]);
+        let exposed = adjust(
+            [0.5, 0.5, 0.5, 1.0],
+            &Adjustment::Exposure {
+                exposure: 1.0,
+                offset: 0.0,
+                gamma: 1.0,
+            },
+            Point::default(),
+        );
+        assert!((exposed[0] - 0.685_836).abs() < 0.00001);
+    }
 
     #[test]
     fn identity_adjustments_and_hue_rotation() {

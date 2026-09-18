@@ -231,72 +231,100 @@ fn comp_transform(value: &Value) -> Result<Transform> {
     Ok(t)
 }
 
+// Swift dictionaries with enum keys are encoded as alternating key/value arrays.
+fn swift_dictionary_get<'a>(value: &'a Value, key: &str) -> &'a Value {
+    if let Some(array) = value.as_array() {
+        for pair in array.as_chunks::<2>().0 {
+            if pair[0].as_str() == Some(key) {
+                return &pair[1];
+            }
+        }
+        &Value::Null
+    } else {
+        &value[key]
+    }
+}
+
 fn comp_adjustment(value: &Value) -> Result<Adjustment> {
     let kind = value["kind"]
         .as_str()
         .context("Adjustment kind is missing")?;
     let result = match kind {
         "Hue/Saturation" => {
-            // Range-specific settings are checked explicitly; silently dropping them would change the image.
-            ensure!(
-                value["hsvSettings"].is_null(),
-                "This Compositor project uses range-specific Hue/Saturation settings; flatten that adjustment before importing"
-            );
-            Adjustment::HueSaturation {
-                hue: number(value, "hue", 0.0),
-                saturation: number(value, "saturation", 0.0),
-                lightness: number(value, "lightness", 0.0),
-                colorize: value["colorize"].as_bool().unwrap_or(false),
+            let hsv = &value["hsvSettings"];
+            if hsv.is_null() {
+                Adjustment::HueSaturation {
+                    hue: number(value, "hue", 0.0),
+                    saturation: number(value, "saturation", 0.0),
+                    lightness: number(value, "lightness", 0.0),
+                    colorize: value["colorize"].as_bool().unwrap_or(false),
+                }
+            } else {
+                let mut settings = crate::color::HueSettings {
+                    range: crate::color::HueSettings::RANGES
+                        .iter()
+                        .position(|name| Some(*name) == hsv["range"].as_str())
+                        .unwrap_or(0),
+                    colorize: hsv["colorize"].as_bool().unwrap_or(false),
+                    invert_range: hsv["invertRange"].as_bool().unwrap_or(false),
+                    ..Default::default()
+                };
+                for (index, name) in crate::color::HueSettings::RANGES.iter().enumerate() {
+                    let adjustment = swift_dictionary_get(&hsv["adjustments"], name);
+                    settings.adjustments[index] = [
+                        number(adjustment, "hue", 0.0),
+                        number(adjustment, "saturation", 0.0),
+                        number(adjustment, "lightness", 0.0),
+                    ];
+                    let band = swift_dictionary_get(&hsv["bands"], name);
+                    if !band.is_null() {
+                        settings.bands[index] = [
+                            number(band, "falloffStart", 0.0),
+                            number(band, "rangeStart", 0.0),
+                            number(band, "rangeEnd", 360.0),
+                            number(band, "falloffEnd", 360.0),
+                        ];
+                    }
+                }
+                Adjustment::HueRanges {
+                    settings: Box::new(settings),
+                }
             }
         }
         "Levels" => {
-            let ranges = value["levels"]["ranges"]
+            let input = value["levels"]["ranges"]
                 .as_array()
                 .context("Missing levels ranges")?;
-            ensure!(ranges.len() == 4, "Invalid levels ranges");
-            for range in &ranges[1..] {
-                ensure!(
-                    number(range, "black", 0.0) == 0.0
-                        && number(range, "white", 255.0) == 255.0
-                        && number(range, "gamma", 1.0) == 1.0
-                        && number(range, "outputBlack", 0.0) == 0.0
-                        && number(range, "outputWhite", 255.0) == 255.0,
-                    "Per-channel Compositor levels are not yet supported; flatten that adjustment before importing"
-                );
-            }
-            let range = &ranges[0];
-            Adjustment::Levels {
-                black: number(range, "black", 0.0),
-                gamma: number(range, "gamma", 1.0),
-                white: number(range, "white", 255.0),
-                output_black: number(range, "outputBlack", 0.0),
-                output_white: number(range, "outputWhite", 255.0),
-            }
+            ensure!(input.len() == 4, "Invalid levels ranges");
+            let ranges = std::array::from_fn(|i| {
+                let r = &input[i];
+                [
+                    number(r, "black", 0.0),
+                    number(r, "gamma", 1.0),
+                    number(r, "white", 255.0),
+                    number(r, "outputBlack", 0.0),
+                    number(r, "outputWhite", 255.0),
+                ]
+            });
+            Adjustment::LevelsChannels { ranges }
         }
         "Curves" => {
-            let channels = value["curves"]["channels"]
+            let input = value["curves"]["channels"]
                 .as_array()
                 .context("Missing curve channels")?;
-            ensure!(channels.len() == 4, "Invalid curve channels");
-            for channel in &channels[1..] {
-                let points = channel.as_array().context("Invalid curve points")?;
-                ensure!(
-                    points.len() == 2
-                        && number(&points[0], "x", -1.0) == 0.0
-                        && number(&points[0], "y", -1.0) == 0.0
-                        && number(&points[1], "x", -1.0) == 255.0
-                        && number(&points[1], "y", -1.0) == 255.0,
-                    "Per-channel Compositor curves are not yet supported; flatten that adjustment before importing"
-                );
-            }
-            Adjustment::Curves {
-                points: channels[0]
+            ensure!(
+                input.len() == 4 && input.iter().all(|c| c.is_array()),
+                "Invalid curve channels"
+            );
+            let channels = std::array::from_fn(|i| {
+                input[i]
                     .as_array()
-                    .context("Invalid curve points")?
+                    .unwrap()
                     .iter()
                     .map(|p| Point::new(number(p, "x", 0.0) / 255.0, number(p, "y", 0.0) / 255.0))
-                    .collect(),
-            }
+                    .collect()
+            });
+            Adjustment::CurvesChannels { channels }
         }
         "Exposure" => {
             let settings = &value["exposureSettings"];
@@ -318,8 +346,26 @@ fn comp_adjustment(value: &Value) -> Result<Adjustment> {
                 .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
             };
             Adjustment::GradientMap {
-                shadows: color("shadows"),
-                highlights: color("highlights"),
+                shadows: color(
+                    if value["gradientMapSettings"]["reversed"]
+                        .as_bool()
+                        .unwrap_or(false)
+                    {
+                        "highlights"
+                    } else {
+                        "shadows"
+                    },
+                ),
+                highlights: color(
+                    if value["gradientMapSettings"]["reversed"]
+                        .as_bool()
+                        .unwrap_or(false)
+                    {
+                        "shadows"
+                    } else {
+                        "highlights"
+                    },
+                ),
             }
         }
         "Grain" => {
@@ -469,6 +515,30 @@ pub fn export(document: &Document, path: &Path, quality: u8) -> Result<()> {
 mod tests {
     use super::*;
     use image::{GrayImage, Luma, Rgba};
+
+    #[test]
+    fn imports_swift_enum_dictionaries_and_individual_color_channels() {
+        let value = serde_json::json!({"kind":"Hue/Saturation", "hsvSettings": {
+            "range":"Reds", "colorize":false, "invertRange":true,
+            "adjustments":["Master", {"hue":5,"saturation":0,"lightness":0}, "Reds", {"hue":40,"saturation":-20,"lightness":3}],
+            "bands":["Reds", {"falloffStart":310,"rangeStart":340,"rangeEnd":20,"falloffEnd":50}]
+        }});
+        let Adjustment::HueRanges { settings } = comp_adjustment(&value).unwrap() else {
+            panic!("expected selective hue settings");
+        };
+        assert_eq!(settings.range, 1);
+        assert_eq!(settings.adjustments[1], [40.0, -20.0, 3.0]);
+        assert_eq!(settings.bands[1], [310.0, 340.0, 20.0, 50.0]);
+        assert!(settings.invert_range);
+        let default =
+            serde_json::json!({"black":0,"gamma":1,"white":255,"outputBlack":0,"outputWhite":255});
+        let mut value = serde_json::json!({"kind":"Levels","levels":{"ranges":[default,default,default,default]}});
+        value["levels"]["ranges"][1]["gamma"] = serde_json::json!(1.5);
+        let Adjustment::LevelsChannels { ranges } = comp_adjustment(&value).unwrap() else {
+            panic!("expected channel levels");
+        };
+        assert_eq!(ranges[1][1], 1.5);
+    }
 
     #[test]
     fn portable_project_round_trip_and_atomic_overwrite() {

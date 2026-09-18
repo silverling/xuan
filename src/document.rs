@@ -135,6 +135,15 @@ impl Mask {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Adjustment {
+    HueRanges {
+        settings: Box<crate::color::HueSettings>,
+    },
+    LevelsChannels {
+        ranges: [[f32; 5]; 4],
+    },
+    CurvesChannels {
+        channels: [Vec<Point>; 4],
+    },
     HueSaturation {
         hue: f32,
         saturation: f32,
@@ -172,6 +181,9 @@ impl Adjustment {
     pub fn name(&self) -> &'static str {
         match self {
             Self::HueSaturation { .. } => "Hue/Saturation",
+            Self::HueRanges { .. } => "Hue/Saturation",
+            Self::LevelsChannels { .. } => "Levels",
+            Self::CurvesChannels { .. } => "Curves",
             Self::Levels { .. } => "Levels",
             Self::Curves { .. } => "Curves",
             Self::Exposure { .. } => "Exposure",
