@@ -3,6 +3,7 @@ mod dialogs;
 mod gpu_preview;
 mod icons;
 mod jobs;
+mod layers;
 mod menus;
 mod panels;
 mod shortcuts;
@@ -166,7 +167,8 @@ struct Session {
 }
 
 impl Session {
-    fn new(document: Document, title: String, path: Option<PathBuf>) -> Self {
+    fn new(mut document: Document, title: String, path: Option<PathBuf>) -> Self {
+        document.id = Uuid::new_v4();
         Self {
             document,
             history: History::default(),
@@ -272,6 +274,12 @@ enum TransformDrag {
     Selection,
     Pixels,
     Distort(usize),
+}
+
+#[derive(Clone, Copy)]
+struct LayerDrag {
+    project: Uuid,
+    layer: Uuid,
 }
 
 struct Gesture {
@@ -545,6 +553,30 @@ impl EditorApp {
         }
     }
 
+    fn copy_layer_to_project(&mut self, drag: LayerDrag, destination: usize) {
+        if self.dialog.is_some() || self.job.is_some() {
+            return;
+        }
+        let Some(source) = self
+            .sessions
+            .iter()
+            .position(|s| s.document.id == drag.project)
+        else {
+            return;
+        };
+        let id = drag.layer;
+        if source == destination {
+            return;
+        }
+        let document = self.sessions[source].document.clone();
+        self.cancel_gesture();
+        self.current = destination;
+        self.edit("Copy Layers from Project", |target| {
+            operations::copy_layers(&document, target, id)
+        });
+        self.mask_target = false;
+    }
+
     fn open_dialog(&mut self, as_layer: bool) {
         if let Some(paths) = rfd::FileDialog::new()
             .add_filter(
@@ -779,6 +811,18 @@ impl EditorApp {
                 operations::group(doc);
                 Ok(())
             }),
+            "move_out" => self.edit("Move Out of Group", |doc| {
+                let parent = doc.active().and_then(|l| l.parent);
+                let outer = parent
+                    .and_then(|id| doc.layers.iter().find(|l| l.id == id))
+                    .and_then(|l| l.parent);
+                for layer in &mut doc.layers {
+                    if doc.selected.contains(&layer.id) && layer.parent == parent {
+                        layer.parent = outer;
+                    }
+                }
+                Ok(())
+            }),
             "ungroup" => self.edit("Ungroup Layers", |doc| {
                 operations::ungroup(doc);
                 Ok(())
@@ -825,11 +869,9 @@ impl EditorApp {
                     && let Some(mask) = &mut layer.mask
                 {
                     mask.linked = !mask.linked;
-                    mask.placement = if mask.linked {
-                        None
-                    } else {
-                        Some(layer.transform)
-                    };
+                    if mask.placement.is_none() {
+                        mask.placement = Some(layer.transform);
+                    }
                 }
                 Ok(())
             }),

@@ -295,6 +295,7 @@ impl EditorApp {
     pub(super) fn tabs(&mut self, ctx: &egui::Context) {
         let mut action = None;
         let mut switch = None;
+        let mut copy = None;
         egui::TopBottomPanel::top("project_tabs")
             .exact_height(43.0)
             .frame(theme::frame())
@@ -325,6 +326,22 @@ impl EditorApp {
                                         );
                                         let response =
                                             ui.selectable_label(self.current == index, label);
+                                        if let Some(layer) =
+                                            response.dnd_release_payload::<super::LayerDrag>()
+                                        {
+                                            copy = Some((*layer, index));
+                                        }
+                                        if response
+                                            .dnd_hover_payload::<super::LayerDrag>()
+                                            .is_some()
+                                        {
+                                            ui.painter().rect_stroke(
+                                                response.rect,
+                                                3.0,
+                                                egui::Stroke::new(1.0_f32, theme::ACCENT),
+                                                egui::StrokeKind::Inside,
+                                            );
+                                        }
                                         if response.clicked() {
                                             switch = Some(index);
                                         }
@@ -364,6 +381,9 @@ impl EditorApp {
                     });
                 });
             });
+        if let Some((layer, destination)) = copy {
+            self.copy_layer_to_project(layer, destination);
+        }
         if let Some(index) = switch
             && self.dialog.is_none()
         {

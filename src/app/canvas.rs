@@ -954,7 +954,9 @@ impl EditorApp {
                                         mask.linked = false;
                                     }
                                 } else {
-                                    layer.transform = transform;
+                                    layer.transform = original.transform;
+                                    layer.mask = original.mask.clone();
+                                    layer.set_transform(transform);
                                 }
                             }
                         }

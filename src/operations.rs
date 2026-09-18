@@ -70,11 +70,12 @@ pub fn apply_transform(document: &mut Document, new: Transform, mask_target: boo
                 mask.linked = false;
             }
         } else {
-            layer.transform = if targets.len() == 1 {
+            let transform = if targets.len() == 1 {
                 new
             } else {
                 layer.transform.following(old, new)
             };
+            layer.set_transform(transform);
         }
     }
     Ok(())
@@ -111,6 +112,56 @@ pub fn duplicate(document: &mut Document) {
         .filter_map(|id| ids.get(id).copied())
         .collect();
     document.layers.splice(index..index, copies);
+}
+
+pub fn copy_layers(source: &Document, destination: &mut Document, root: Uuid) -> Result<()> {
+    let targets = source.descendants(root);
+    let ids: HashMap<_, _> = targets.iter().map(|id| (*id, Uuid::new_v4())).collect();
+    let anchor = source
+        .layers
+        .iter()
+        .find(|l| l.id == root)
+        .ok_or_else(|| anyhow::anyhow!("The dragged layer no longer exists"))?
+        .transform
+        .center();
+    let offset = Point::new(
+        destination.width as f32 * 0.5 - anchor.x,
+        destination.height as f32 * 0.5 - anchor.y,
+    );
+    let mut copies = Vec::new();
+    for layer in source.layers.iter().filter(|l| targets.contains(&l.id)) {
+        let mut copy = layer.clone();
+        if let Some(clip) = layer.clip_to.filter(|id| !targets.contains(id))
+            && let Some(pixels) = &layer.pixels
+        {
+            let base = source.layers.iter().find(|l| l.id == clip).unwrap();
+            let mut baked = (**pixels).clone();
+            let (width, height) = baked.dimensions();
+            for (x, y, pixel) in baked.enumerate_pixels_mut() {
+                let point = layer.transform.point(Point::new(
+                    (x as f32 + 0.5) / width as f32,
+                    (y as f32 + 0.5) / height as f32,
+                ));
+                pixel[3] =
+                    (pixel[3] as f32 * render::layer_alpha(source, base, point, 0)).round() as u8;
+            }
+            copy.pixels = Some(Arc::new(baked));
+            copy.shape = None;
+        }
+        copy.id = ids[&layer.id];
+        copy.parent = layer.parent.and_then(|id| ids.get(&id).copied());
+        copy.clip_to = layer.clip_to.and_then(|id| ids.get(&id).copied());
+        copy.transform.x += offset.x;
+        copy.transform.y += offset.y;
+        if let Some(placement) = copy.mask.as_mut().and_then(|m| m.placement.as_mut()) {
+            placement.x += offset.x;
+            placement.y += offset.y;
+        }
+        copies.push(copy);
+    }
+    destination.layers.extend(copies);
+    destination.select(ids[&root], false);
+    destination.validate()
 }
 
 pub fn group(document: &mut Document) {
@@ -368,6 +419,32 @@ pub fn selection_from_layer(document: &mut Document, mask_target: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linked_placed_masks_follow_transforms_and_unlinked_masks_stay_put() {
+        let mut doc = Document::new(20, 20).unwrap();
+        doc.layers[0].mask = Some(crate::document::Mask {
+            placement: Some(Transform {
+                x: 4.0,
+                ..Transform::new(20, 20)
+            }),
+            ..crate::document::Mask::white()
+        });
+        let mut moved = doc.layers[0].transform;
+        moved.x = 10.0;
+        apply_transform(&mut doc, moved, false).unwrap();
+        assert_eq!(
+            doc.layers[0].mask.as_ref().unwrap().placement.unwrap().x,
+            14.0
+        );
+        doc.layers[0].mask.as_mut().unwrap().linked = false;
+        moved.x = 15.0;
+        apply_transform(&mut doc, moved, false).unwrap();
+        assert_eq!(
+            doc.layers[0].mask.as_ref().unwrap().placement.unwrap().x,
+            14.0
+        );
+    }
 
     #[test]
     fn resizing_rotated_layers_scales_all_corners() {

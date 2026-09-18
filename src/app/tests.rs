@@ -277,3 +277,26 @@ fn background_jobs_commit_once_and_cancel_without_losing_edits() {
     assert_eq!(app.session().unwrap().document.layers.len(), 1);
     assert_eq!(app.session().unwrap().history.revision, revision);
 }
+
+#[test]
+fn copying_layers_between_projects_keeps_source_and_undoes_in_destination() {
+    let (_, mut app) = app();
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("fill_fg");
+    app.command("group");
+    let source = &app.session().unwrap().document;
+    let drag = LayerDrag {
+        project: source.id,
+        layer: source.active.unwrap(),
+    };
+    let source_pixels = render::render(source);
+    app.new_document();
+    app.copy_layer_to_project(drag, 1);
+    assert_eq!(app.sessions[1].document.layers.len(), 3);
+    assert_eq!(render::render(&app.sessions[1].document), source_pixels);
+    assert_eq!(render::render(&app.sessions[0].document), source_pixels);
+    app.command("undo");
+    assert_eq!(app.sessions[1].document.layers.len(), 1);
+    assert_eq!(app.sessions[0].document.layers.len(), 2);
+}

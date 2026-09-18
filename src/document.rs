@@ -291,6 +291,19 @@ impl Layer {
         }
     }
 
+    pub fn set_transform(&mut self, transform: Transform) {
+        if let Some(mask) = &mut self.mask {
+            if mask.linked {
+                mask.placement = mask
+                    .placement
+                    .map(|placement| placement.following(self.transform, transform));
+            } else if mask.placement.is_none() {
+                mask.placement = Some(self.transform);
+            }
+        }
+        self.transform = transform;
+    }
+
     pub fn image(name: impl Into<String>, pixels: RgbaImage) -> Self {
         let mut layer = Self::blank(name, pixels.width(), pixels.height());
         layer.pixels = Some(Arc::new(pixels));
