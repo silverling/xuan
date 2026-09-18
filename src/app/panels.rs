@@ -263,8 +263,12 @@ impl EditorApp {
 
     pub(super) fn status_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("status_bar")
-            .exact_height(30.0)
-            .frame(theme::frame())
+            .exact_height(24.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::PANEL)
+                    .inner_margin(egui::Margin::symmetric(6, 0)),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     if let Some(session) = self.session() {
