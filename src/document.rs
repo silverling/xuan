@@ -126,6 +126,26 @@ impl Transform {
                 .is_none_or(|quad| crate::geometry::Homography::from_quad(quad).is_some())
     }
 
+    /// Enlarge the source grid without moving any of its existing pixels.
+    pub fn expanded(self, left: f32, top: f32, right: f32, bottom: f32) -> Self {
+        let corners = [
+            Point::new(left, top),
+            Point::new(right, top),
+            Point::new(right, bottom),
+            Point::new(left, bottom),
+        ]
+        .map(|p| self.point(p));
+        let center = self.point(Point::new((left + right) * 0.5, (top + bottom) * 0.5));
+        let mut result = self;
+        result.width *= right - left;
+        result.height *= bottom - top;
+        result.x = center.x - result.width * 0.5;
+        result.y = center.y - result.height * 0.5;
+        result.warp = None;
+        result.warp = Some(corners.map(|p| result.inverse(p)));
+        result
+    }
+
     pub fn following(self, old: Self, new: Self) -> Self {
         if old.width == new.width
             && old.height == new.height

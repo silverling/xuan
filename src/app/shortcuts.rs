@@ -33,6 +33,9 @@ impl EditorApp {
             (ctrl, Key::A, "select_all"),
             (ctrl, Key::D, "deselect"),
             (ctrl, Key::I, "invert"),
+            (ctrl, Key::L, "levels"),
+            (ctrl, Key::U, "hue"),
+            (ctrl, Key::M, "curves"),
             (ctrl, Key::C, "copy"),
             (ctrl, Key::X, "cut"),
             (ctrl, Key::V, "paste"),
@@ -193,13 +196,12 @@ impl EditorApp {
             dy += step;
         }
         if dx != 0.0 || dy != 0.0 {
+            let mask_target = self.mask_target;
             self.edit("Nudge", |doc| {
-                let targets = doc.transform_targets();
-                for layer in &mut doc.layers {
-                    if targets.contains(&layer.id) && !layer.locked {
-                        layer.transform.x += dx;
-                        layer.transform.y += dy;
-                    }
+                if let Some(mut transform) = xuan::operations::transform_box(doc, mask_target) {
+                    transform.x += dx;
+                    transform.y += dy;
+                    xuan::operations::apply_transform(doc, transform, mask_target)?;
                 }
                 Ok(())
             });

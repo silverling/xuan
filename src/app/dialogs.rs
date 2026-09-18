@@ -769,7 +769,9 @@ impl EditorApp {
                 if let Some(texture) = &self.export_texture {
                     let size = texture.size_vec2();
                     let factor = (600.0 / size.x).min(350.0 / size.y).min(1.0);
-                    ui.image((texture.id(), size * factor));
+                    ui.vertical_centered(|ui| {
+                        ui.image((texture.id(), size * factor));
+                    });
                 }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {

@@ -346,6 +346,7 @@ pub struct EditorApp {
     export_bytes: usize,
     export_changed: bool,
     screenshot: Option<PathBuf>,
+    screenshot_requested: bool,
     frames: usize,
     canvas_rect: Option<egui::Rect>,
 }
@@ -360,6 +361,15 @@ impl EditorApp {
         let mut app = Self::with_context(&cc.egui_ctx, paths, demo, screenshot);
         app.gpu_state = cc.wgpu_render_state.clone();
         app
+    }
+
+    pub fn preview_panel(&mut self, name: &str) {
+        if self.screenshot.is_some() && matches!(name, "levels" | "hue" | "curves" | "export") {
+            if name == "export" {
+                self.export_format = "jpg".into();
+            }
+            self.command(name);
+        }
     }
 
     fn with_context(
@@ -419,6 +429,7 @@ impl EditorApp {
             export_bytes: 0,
             export_changed: true,
             screenshot,
+            screenshot_requested: false,
             frames: 0,
             canvas_rect: None,
         };
@@ -747,6 +758,26 @@ impl EditorApp {
             return;
         }
         match command {
+            "levels" => self.start_adjustment(
+                Adjustment::LevelsChannels {
+                    ranges: [xuan::color::DEFAULT_LEVELS; 4],
+                },
+                false,
+            ),
+            "hue" => self.start_adjustment(
+                Adjustment::HueRanges {
+                    settings: Box::default(),
+                },
+                false,
+            ),
+            "curves" => self.start_adjustment(
+                Adjustment::CurvesChannels {
+                    channels: std::array::from_fn(|_| {
+                        vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)]
+                    }),
+                },
+                false,
+            ),
             "content_fill" => {
                 self.start_job("Content-Aware Fill", xuan::retouch::content_aware_fill)
             }
@@ -1106,7 +1137,12 @@ impl EditorApp {
             )
         });
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
-        if self.screenshot.is_some() && self.frames == 5 {
+        if self.screenshot.is_some()
+            && !self.screenshot_requested
+            && self.frames >= 5
+            && ctx.input(|i| i.time) >= 0.5
+        {
+            self.screenshot_requested = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         }
         for event in ctx.input(|i| i.events.clone()) {

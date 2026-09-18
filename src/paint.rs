@@ -76,6 +76,47 @@ pub fn prepare_mask(layer: &mut Layer) -> Result<()> {
     Ok(())
 }
 
+fn expand_stroke_bounds(layer: &mut Layer, from: Point, to: Point, radius: f32) -> Result<()> {
+    let image = layer.pixels.as_ref().unwrap();
+    let (width, height) = image.dimensions();
+    let min = Point::new(from.x.min(to.x) - radius, from.y.min(to.y) - radius);
+    let max = Point::new(from.x.max(to.x) + radius, from.y.max(to.y) + radius);
+    let corners = [min, Point::new(max.x, min.y), max, Point::new(min.x, max.y)]
+        .map(|p| layer.transform.inverse(p));
+    let left =
+        (corners.iter().map(|p| p.x).fold(0.0, f32::min) * width as f32 + 0.0001).floor() as i32;
+    let top =
+        (corners.iter().map(|p| p.y).fold(0.0, f32::min) * height as f32 + 0.0001).floor() as i32;
+    let right =
+        (corners.iter().map(|p| p.x).fold(1.0, f32::max) * width as f32 - 0.0001).ceil() as i32;
+    let bottom =
+        (corners.iter().map(|p| p.y).fold(1.0, f32::max) * height as f32 - 0.0001).ceil() as i32;
+    if left == 0 && top == 0 && right == width as i32 && bottom == height as i32 {
+        return Ok(());
+    }
+    let expanded_width = (i64::from(right) - i64::from(left)) as u32;
+    let expanded_height = (i64::from(bottom) - i64::from(top)) as u32;
+    validate_size(expanded_width, expanded_height)?;
+    let transform = layer.transform.expanded(
+        left as f32 / width as f32,
+        top as f32 / height as f32,
+        right as f32 / width as f32,
+        bottom as f32 / height as f32,
+    );
+    ensure!(
+        transform.valid(),
+        "The expanded stroke would exceed the transform limits"
+    );
+    let mut expanded = RgbaImage::new(expanded_width, expanded_height);
+    image::imageops::replace(&mut expanded, &**image, -i64::from(left), -i64::from(top));
+    if let Some(mask) = &mut layer.mask {
+        mask.placement = Some(mask.placement.unwrap_or(layer.transform));
+    }
+    layer.pixels = Some(Arc::new(expanded));
+    layer.transform = transform;
+    Ok(())
+}
+
 /// A segment covers the complete swept brush, preventing gaps at fast pointer speeds.
 /// Optional source pixels are in document coordinates (used by clone and retouch tools).
 pub struct StrokeOptions<'a> {
@@ -106,6 +147,9 @@ pub fn stroke(
         prepare_mask(layer)?;
     } else {
         ensure_pixels(layer)?;
+        if matches!(mode, PaintMode::Paint | PaintMode::Clone) {
+            expand_stroke_bounds(layer, from, to, (brush.diameter * 0.5).max(0.5))?;
+        }
     }
     let transform = if mask_target {
         layer
@@ -456,6 +500,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn brush_extends_an_imported_layer_without_moving_existing_pixels() {
+        let mut doc = Document::new(20, 20).unwrap();
+        let mut layer = Layer::image("small", RgbaImage::from_pixel(4, 4, Rgba([0, 0, 255, 255])));
+        layer.transform.x = 8.0;
+        layer.transform.y = 8.0;
+        doc.insert(layer);
+        stroke(
+            &mut doc,
+            Point::new(13.0, 10.0),
+            Point::new(16.0, 10.0),
+            &Brush {
+                diameter: 2.0,
+                hardness: 1.0,
+                color: [255, 0, 0, 255],
+                ..Brush::default()
+            },
+            StrokeOptions {
+                mode: PaintMode::Paint,
+                mask_target: false,
+                source: None,
+                clone_offset: Point::default(),
+            },
+        )
+        .unwrap();
+        let pixels = render::render(&doc);
+        assert_eq!(pixels.get_pixel(9, 9).0, [0, 0, 255, 255]);
+        assert_eq!(pixels.get_pixel(14, 10).0, [255, 0, 0, 255]);
+        doc.validate().unwrap();
+    }
+
+    #[test]
     fn live_shapes_redraw_at_new_sizes_until_their_pixels_are_edited() {
         let mut doc = Document::new(64, 64).unwrap();
         let layer = shape(
@@ -505,7 +580,7 @@ mod tests {
             },
         )
         .unwrap();
-        let pixels = doc.active().unwrap().pixels.as_ref().unwrap();
+        let pixels = render::render(&doc);
         for x in 1..15 {
             assert_eq!(pixels.get_pixel(x, 5)[3], 255);
         }

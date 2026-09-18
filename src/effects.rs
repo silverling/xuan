@@ -431,34 +431,12 @@ pub fn apply_filter(document: &mut Document, filter: &Filter, mask_target: bool)
         let width = original.width() as f32;
         let height = original.height() as f32;
         let pad = padding as f32;
-        let corners = [
-            Point::new(-pad / width, -pad / height),
-            Point::new(1.0 + pad / width, -pad / height),
-            Point::new(1.0 + pad / width, 1.0 + pad / height),
-            Point::new(-pad / width, 1.0 + pad / height),
-        ]
-        .map(|p| original_transform.point(p));
-        let left = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
-        let top = corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
-        let right = corners
-            .iter()
-            .map(|p| p.x)
-            .fold(f32::NEG_INFINITY, f32::max);
-        let bottom = corners
-            .iter()
-            .map(|p| p.y)
-            .fold(f32::NEG_INFINITY, f32::max);
-        transform = crate::document::Transform::new(1, 1);
-        transform.x = left;
-        transform.y = top;
-        transform.width = right - left;
-        transform.height = bottom - top;
-        transform.warp = Some(corners.map(|p| {
-            Point::new(
-                (p.x - left) / transform.width,
-                (p.y - top) / transform.height,
-            )
-        }));
+        transform = original_transform.expanded(
+            -pad / width,
+            -pad / height,
+            1.0 + pad / width,
+            1.0 + pad / height,
+        );
     }
     let mut result = filtered(&expanded, filter);
     if selection.is_some() {

@@ -347,12 +347,13 @@ impl EditorApp {
                                         }
                                         if response.clicked_by(egui::PointerButton::Middle)
                                             && self.job.is_none()
+                                            && self.dialog.is_none()
                                         {
                                             self.close_tab = Some(index);
                                         }
                                         if ui
                                             .add_enabled(
-                                                self.job.is_none(),
+                                                self.job.is_none() && self.dialog.is_none(),
                                                 egui::Button::new("×").small(),
                                             )
                                             .on_hover_text("Close project")
