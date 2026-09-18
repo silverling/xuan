@@ -11,6 +11,22 @@ use super::{Dialog, EditorApp, theme};
 
 impl EditorApp {
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
+        if let Some(job) = &self.job {
+            egui::Window::new(&job.name)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Working…");
+                    });
+                    if ui.button("Cancel").clicked() {
+                        job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                });
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         if let Some(dialog) = self.dialog {
             match dialog {
                 Dialog::New | Dialog::CanvasSize | Dialog::ImageSize => {
@@ -793,6 +809,9 @@ impl EditorApp {
     }
 
     fn close_dialog(&mut self, ctx: &egui::Context) {
+        if self.job.is_some() {
+            return;
+        }
         if let Some(index) = self.close_tab {
             if index >= self.sessions.len() {
                 self.close_tab = None;

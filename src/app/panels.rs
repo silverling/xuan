@@ -61,7 +61,7 @@ impl EditorApp {
             .exact_height(42.0)
             .frame(theme::frame())
             .show(ctx, |ui| {
-                ui.add_enabled_ui(self.dialog.is_none(), |ui| {
+                ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none(), |ui| {
                     egui::ScrollArea::horizontal()
                         .id_salt("options_scroll")
                         .show(ui, |ui| {
@@ -349,7 +349,7 @@ impl EditorApp {
                     .inner_margin(egui::Margin::symmetric(10, 12)),
             )
             .show(ctx, |ui| {
-                ui.add_enabled_ui(self.dialog.is_none(), |ui| {
+                ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none(), |ui| {
                     egui::ScrollArea::vertical()
                         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                         .show(ui, |ui| {
@@ -393,7 +393,7 @@ impl EditorApp {
         let mut edit_adjustment = None;
         egui::SidePanel::right("layers_panel").default_width(252.0).width_range(202.0..=352.0).resizable(true)
             .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::same(0))).show(ctx,|ui|{
-            ui.add_enabled_ui(self.dialog.is_none(),|ui|{
+            ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none(),|ui|{
                 egui::Frame::new().inner_margin(egui::Margin::symmetric(17,15)).show(ui,|ui|{ui.horizontal(|ui|{
                     ui.label(RichText::new("Layers").strong());ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{ui.label(RichText::new(self.session().map_or(0,|s|s.document.layers.len()).to_string()).color(theme::MUTED).small());});
                 });});

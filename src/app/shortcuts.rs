@@ -59,6 +59,9 @@ impl EditorApp {
             }
             return;
         }
+        if modifiers.shift && pressed(Key::F5) {
+            self.command("content_fill");
+        }
         if pressed(Key::F1) {
             self.command("shortcuts");
         }

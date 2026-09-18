@@ -363,7 +363,7 @@ impl EditorApp {
                             );
                         }
                     }
-                    if self.tool == Tool::Lasso && gesture.points.len() > 1 {
+                    if matches!(self.tool, Tool::Lasso | Tool::Heal) && gesture.points.len() > 1 {
                         painter.add(egui::Shape::line(
                             gesture.points.iter().copied().map(map).collect(),
                             Stroke::new(1.0_f32, Color32::WHITE),
@@ -399,7 +399,8 @@ impl EditorApp {
                         Stroke::new(1.0_f32, Color32::WHITE),
                     );
                 }
-                let blocked = self.dialog.is_some()
+                let blocked = self.job.is_some()
+                    || self.dialog.is_some()
                     || self.error.is_some()
                     || self.close_app
                     || self.close_tab.is_some()
@@ -738,7 +739,7 @@ impl EditorApp {
                 kind = TransformDrag::Selection;
             }
         }
-        let source = if matches!(self.tool, Tool::Clone | Tool::Heal | Tool::Blur) {
+        let source = if matches!(self.tool, Tool::Clone | Tool::Blur) {
             if self.tool == Tool::Clone && self.clone_all {
                 Some(Arc::new(render::render(&session.document)))
             } else {
@@ -811,6 +812,10 @@ impl EditorApp {
             Ok(())
         } else {
             match self.tool {
+                Tool::Heal => {
+                    gesture.points.push(point);
+                    Ok(())
+                }
                 tool if tool.is_brush() => {
                     let mode = match self.tool {
                         Tool::Erase => PaintMode::Erase,
@@ -984,6 +989,14 @@ impl EditorApp {
         let Some(gesture) = self.gesture.take() else {
             return;
         };
+        if self.tool == Tool::Heal && !gesture.panning {
+            let points = gesture.points;
+            let brush = self.brush.clone();
+            self.start_job("Spot Healing", move |document, cancel| {
+                xuan::retouch::heal_path(document, &points, &brush, cancel)
+            });
+            return;
+        }
         let mode = self.selection_mode(modifiers);
         let session = &mut self.sessions[self.current];
         if gesture.panning {

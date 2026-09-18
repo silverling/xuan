@@ -2,6 +2,7 @@ mod canvas;
 mod dialogs;
 mod gpu_preview;
 mod icons;
+mod jobs;
 mod menus;
 mod panels;
 mod shortcuts;
@@ -288,6 +289,8 @@ struct Gesture {
 }
 
 pub struct EditorApp {
+    context: egui::Context,
+    job: Option<jobs::Job>,
     gpu_state: Option<eframe::egui_wgpu::RenderState>,
     sessions: Vec<Session>,
     current: usize,
@@ -359,6 +362,8 @@ impl EditorApp {
     ) -> Self {
         theme::apply(ctx);
         let mut app = Self {
+            context: ctx.clone(),
+            job: None,
             gpu_state: None,
             sessions: Vec::new(),
             current: 0,
@@ -687,7 +692,19 @@ impl EditorApp {
     }
 
     fn command(&mut self, command: &str) {
+        if self.job.is_some() {
+            return;
+        }
         match command {
+            "content_fill" => {
+                self.start_job("Content-Aware Fill", xuan::retouch::content_aware_fill)
+            }
+            "remove_background" => {
+                let tolerance = self.tolerance;
+                self.start_job("Remove Background", move |document, cancel| {
+                    xuan::retouch::remove_background(document, tolerance, cancel)
+                });
+            }
             "new" => self.dialog = Some(Dialog::New),
             "open" => self.open_dialog(false),
             "import" => self.open_dialog(true),
@@ -976,15 +993,20 @@ impl eframe::App for EditorApp {
 
 impl EditorApp {
     fn show(&mut self, ctx: &egui::Context) {
+        self.poll_job();
         self.frames += 1;
         if ctx.input(|i| i.viewport().close_requested())
             && !self.allow_close
             && self.sessions.iter().any(|s| s.history.dirty())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            if let Some(job) = &self.job {
+                job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
             self.close_app = true;
         }
         if self.dialog.is_none()
+            && self.job.is_none()
             && self.error.is_none()
             && self.close_tab.is_none()
             && !self.close_app

@@ -9,4 +9,5 @@ pub mod io;
 pub mod operations;
 pub mod paint;
 pub mod render;
+pub mod retouch;
 pub mod selection;

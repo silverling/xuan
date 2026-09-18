@@ -230,3 +230,50 @@ fn live_adjustment_cancel_restores_original_and_export_renders() {
     frame(&context, &mut app);
     assert!(app.export_texture.is_some());
 }
+
+#[test]
+fn background_jobs_commit_once_and_cancel_without_losing_edits() {
+    use std::sync::atomic::Ordering;
+    let (_, mut app) = app();
+    app.dimensions = [8, 8];
+    app.new_document();
+    app.command("fill_fg");
+    let revision = app.session().unwrap().history.revision;
+    app.start_job("Worker edit", |document, _| {
+        document.layers[0].name = "Worker result".into();
+        Ok(())
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.job.is_some() {
+        app.poll_job();
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        app.session().unwrap().document.layers[0].name,
+        "Worker result"
+    );
+    assert_eq!(app.session().unwrap().history.revision, revision + 1);
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers[0].name, "Layer 1");
+
+    app.start_job("Cancelled edit", |document, cancel| {
+        while !cancel.load(Ordering::Relaxed) {
+            std::thread::yield_now();
+        }
+        document.layers.clear();
+        Ok(())
+    });
+    app.job
+        .as_ref()
+        .unwrap()
+        .cancel
+        .store(true, Ordering::Relaxed);
+    while app.job.is_some() {
+        app.poll_job();
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+    assert_eq!(app.session().unwrap().history.revision, revision);
+}

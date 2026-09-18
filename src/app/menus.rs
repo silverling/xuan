@@ -61,7 +61,10 @@ impl EditorApp {
         let mut filter = None;
         let mut adjustment_layer = false;
         let has_doc = self.session().is_some();
-        let blocked = self.dialog.is_some() || self.close_app || self.close_tab.is_some();
+        let blocked = self.job.is_some()
+            || self.dialog.is_some()
+            || self.close_app
+            || self.close_tab.is_some();
         egui::TopBottomPanel::top("menubar")
             .exact_height(29.0)
             .frame(
@@ -151,6 +154,13 @@ impl EditorApp {
                                     &mut action,
                                 );
                                 item(ui, "Clear Pixels", "Delete", "clear", &mut action);
+                                item(
+                                    ui,
+                                    "Content-Aware Fill",
+                                    "Shift+F5",
+                                    "content_fill",
+                                    &mut action,
+                                );
                             });
                         });
                         ui.menu_button("Image", |ui| {
@@ -224,6 +234,14 @@ impl EditorApp {
                         });
                         ui.menu_button("Filter", |ui| {
                             ui.add_enabled_ui(has_doc, |ui| {
+                                item(
+                                    ui,
+                                    "Remove Background (edge colors)",
+                                    "",
+                                    "remove_background",
+                                    &mut action,
+                                );
+                                ui.separator();
                                 for f in [
                                     Filter::GaussianBlur { radius: 4.0 },
                                     Filter::MotionBlur {
@@ -309,11 +327,16 @@ impl EditorApp {
                                         if response.clicked() {
                                             switch = Some(index);
                                         }
-                                        if response.clicked_by(egui::PointerButton::Middle) {
+                                        if response.clicked_by(egui::PointerButton::Middle)
+                                            && self.job.is_none()
+                                        {
                                             self.close_tab = Some(index);
                                         }
                                         if ui
-                                            .small_button("×")
+                                            .add_enabled(
+                                                self.job.is_none(),
+                                                egui::Button::new("×").small(),
+                                            )
                                             .on_hover_text("Close project")
                                             .clicked()
                                         {
