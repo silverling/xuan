@@ -118,6 +118,29 @@ fn noise(point: vec2<u32>, seed: u32) -> f32 {
     return f32(value) / 4294967295.0 * 2.0 - 1.0;
 }
 
+fn mix32(input: u32) -> u32 {
+    var value = (input ^ (input >> 16u)) * 0x7feb352du;
+    value = (value ^ (value >> 15u)) * 0x846ca68bu;
+    return value ^ (value >> 16u);
+}
+
+fn lattice(point: vec2<i32>, seed: u32) -> f32 {
+    let h = mix32(bitcast<u32>(point.x) * 0x9e3779b1u ^ mix32(bitcast<u32>(point.y) * 0x85ebca77u ^ seed));
+    return f32(h & 65535u) / 65535.0 + f32(h >> 16u) / 65535.0 - 1.0;
+}
+
+fn film_grain(point: vec2<f32>, settings: vec4<f32>) -> f32 {
+    let seed = bitcast<u32>(settings.w);
+    let cell = point / settings.y;
+    let origin = vec2<i32>(floor(cell));
+    let t = fract(cell) * fract(cell) * (3.0 - 2.0 * fract(cell));
+    let top = mix(lattice(origin, seed), lattice(origin + vec2(1, 0), seed), t.x);
+    let bottom = mix(lattice(origin + vec2(0, 1), seed), lattice(origin + vec2(1, 1), seed), t.x);
+    let coarse = mix(top, bottom, t.y) * 1.6;
+    let fine = lattice(vec2<i32>(floor(point)), mix32(seed ^ 0xa511e9b3u));
+    return mix(coarse, fine, settings.z / 100.0);
+}
+
 fn wrap(value: f32) -> f32 { return ((value % 360.0) + 360.0) % 360.0; }
 
 fn channel_level(value: f32, channel: u32) -> f32 {
@@ -201,6 +224,11 @@ fn adjust(rgb: vec3<f32>, point: vec2<f32>) -> vec3<f32> {
                 response += params.points[i].xyz * weight;
             }
             return adjust_hsv(rgb, vec4(response, 0.0));
+        }
+        case 11u: {
+            let level = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+            let delta = film_grain(point, a) * a.x / 100.0 * 0.35 * (0.4 + 2.4 * level * (1.0 - level));
+            return rgb + delta;
         }
         default: { return rgb; }
     }

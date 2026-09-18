@@ -213,6 +213,12 @@ pub enum Adjustment {
         shadows: [u8; 4],
         highlights: [u8; 4],
     },
+    FilmGrain {
+        amount: f32,
+        size: f32,
+        roughness: f32,
+        seed: u32,
+    },
     Grain {
         amount: f32,
         monochrome: bool,
@@ -232,7 +238,7 @@ impl Adjustment {
             Self::Curves { .. } => "Curves",
             Self::Exposure { .. } => "Exposure",
             Self::GradientMap { .. } => "Gradient Map",
-            Self::Grain { .. } => "Grain",
+            Self::Grain { .. } | Self::FilmGrain { .. } => "Grain",
             Self::Invert => "Invert",
         }
     }

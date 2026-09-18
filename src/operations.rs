@@ -170,10 +170,30 @@ pub fn merge_selected(document: &mut Document, down: bool) -> Result<()> {
         targets.len() >= 2 || document.active().is_some_and(|l| l.group),
         "Select at least two layers, or a layer above another"
     );
+    let parents: std::collections::HashSet<_> = document
+        .layers
+        .iter()
+        .filter(|layer| {
+            targets.contains(&layer.id) && !layer.parent.is_some_and(|id| targets.contains(&id))
+        })
+        .map(|layer| layer.parent)
+        .collect();
+    let parent = if parents.len() == 1 {
+        *parents.iter().next().unwrap()
+    } else {
+        None
+    };
     let mut isolated = document.clone();
     for layer in &mut isolated.layers {
-        if !targets.contains(&layer.id) && !layer.group {
-            layer.visible = false;
+        if !targets.contains(&layer.id) {
+            if layer.group && parent.is_some() {
+                // The merged layer inherits these ancestors after rasterization.
+                layer.visible = true;
+                layer.opacity = 1.0;
+                layer.mask = None;
+            } else if !layer.group {
+                layer.visible = false;
+            }
         }
     }
     let pixels = render::render(&isolated);
@@ -183,10 +203,7 @@ pub fn merge_selected(document: &mut Document, down: bool) -> Result<()> {
             .map_or("Merged".into(), |l| l.name.clone()),
         pixels,
     );
-    merged.parent = document
-        .active()
-        .and_then(|l| l.parent)
-        .filter(|p| !targets.contains(p));
+    merged.parent = parent;
     let insert = document
         .layers
         .iter()
@@ -254,14 +271,9 @@ pub fn crop(document: &mut Document, start: Point, end: Point) -> Result<()> {
 
 pub fn image_size(document: &mut Document, width: u32, height: u32) -> Result<()> {
     validate_size(width, height)?;
-    let sx = width as f32 / document.width as f32;
-    let sy = height as f32 / document.height as f32;
-    let scale = |t: &mut Transform| {
-        t.x *= sx;
-        t.y *= sy;
-        t.width *= sx;
-        t.height *= sy;
-    };
+    let old = Transform::new(document.width, document.height);
+    let new = Transform::new(width, height);
+    let scale = |t: &mut Transform| *t = t.following(old, new);
     for layer in &mut document.layers {
         scale(&mut layer.transform);
         if let Some(placement) = layer.mask.as_mut().and_then(|m| m.placement.as_mut()) {
@@ -356,6 +368,43 @@ pub fn selection_from_layer(document: &mut Document, mask_target: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resizing_rotated_layers_scales_all_corners() {
+        let mut doc = Document::new(100, 100).unwrap();
+        doc.layers[0].transform.rotation = 35.0;
+        let corners = doc.layers[0].transform.corners();
+        image_size(&mut doc, 200, 50).unwrap();
+        for (old, new) in corners.into_iter().zip(doc.layers[0].transform.corners()) {
+            assert!(new.distance(Point::new(old.x * 2.0, old.y * 0.5)) < 0.001);
+        }
+    }
+
+    #[test]
+    fn merging_inside_a_masked_folder_applies_ancestor_coverage_once() {
+        let mut doc = Document::new(4, 4).unwrap();
+        doc.layers.clear();
+        let mut folder = Layer::blank("folder", 4, 4);
+        folder.group = true;
+        folder.opacity = 0.5;
+        let mut a = Layer::image(
+            "a",
+            RgbaImage::from_pixel(4, 4, image::Rgba([255, 0, 0, 255])),
+        );
+        a.parent = Some(folder.id);
+        let mut b = Layer::image(
+            "b",
+            RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 255, 0])),
+        );
+        b.parent = Some(folder.id);
+        doc.layers = vec![a.clone(), b.clone(), folder];
+        doc.active = Some(b.id);
+        doc.selected = [a.id, b.id].into_iter().collect();
+        let before = render::render(&doc);
+        merge_selected(&mut doc, false).unwrap();
+        assert_eq!(render::render(&doc), before);
+        doc.validate().unwrap();
+    }
 
     #[test]
     fn group_rotation_moves_children_about_a_shared_center() {

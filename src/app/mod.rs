@@ -906,6 +906,10 @@ impl EditorApp {
                         data.height as u32,
                         data.bytes.into_owned(),
                     )
+                    && !self
+                        .clipboard
+                        .as_ref()
+                        .is_some_and(|(cached, _)| cached == &pixels)
                 {
                     self.clipboard = Some((pixels, Point::default()));
                 }
@@ -924,15 +928,13 @@ impl EditorApp {
                 }
             }
             "flip_h" | "flip_v" => self.edit("Flip Layer", |doc| {
-                let targets = doc.transform_targets();
-                for layer in &mut doc.layers {
-                    if targets.contains(&layer.id) {
-                        if command == "flip_h" {
-                            layer.transform.flip_x = !layer.transform.flip_x;
-                        } else {
-                            layer.transform.flip_y = !layer.transform.flip_y;
-                        }
+                if let Some(mut transform) = operations::transform_box(doc, false) {
+                    if command == "flip_h" {
+                        transform.flip_x = !transform.flip_x;
+                    } else {
+                        transform.flip_y = !transform.flip_y;
                     }
+                    operations::apply_transform(doc, transform, false)?;
                 }
                 Ok(())
             }),

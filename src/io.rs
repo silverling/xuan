@@ -371,9 +371,10 @@ fn comp_adjustment(value: &Value) -> Result<Adjustment> {
         }
         "Grain" => {
             let settings = &value["grainSettings"];
-            Adjustment::Grain {
+            Adjustment::FilmGrain {
                 amount: number(settings, "amount", 0.0),
-                monochrome: settings["monochrome"].as_bool().unwrap_or(true),
+                size: number(settings, "size", 1.0),
+                roughness: number(settings, "roughness", 50.0),
                 seed: settings["seed"].as_u64().unwrap_or(1) as u32,
             }
         }

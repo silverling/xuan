@@ -110,6 +110,38 @@ fn hue_saturation(rgb: [f32; 3], adjustment: [f32; 3], colorize: bool) -> [f32; 
     hsl_to_rgb(hsl)
 }
 
+fn mix32(mut value: u32) -> u32 {
+    value = (value ^ (value >> 16)).wrapping_mul(0x7feb352d);
+    value = (value ^ (value >> 15)).wrapping_mul(0x846ca68b);
+    value ^ (value >> 16)
+}
+
+fn lattice(x: i32, y: i32, seed: u32) -> f32 {
+    let hash = mix32(
+        (x as u32).wrapping_mul(0x9e3779b1) ^ mix32((y as u32).wrapping_mul(0x85ebca77) ^ seed),
+    );
+    (hash & 65535) as f32 / 65535.0 + (hash >> 16) as f32 / 65535.0 - 1.0
+}
+
+fn film_grain(point: Point, size: f32, roughness: f32, seed: u32) -> f32 {
+    let x = point.x / size;
+    let y = point.y / size;
+    let ix = x.floor() as i32;
+    let iy = y.floor() as i32;
+    let smoothstep = |v: f32| v * v * (3.0 - 2.0 * v);
+    let tx = smoothstep(x - x.floor());
+    let ty = smoothstep(y - y.floor());
+    let top = lattice(ix, iy, seed) * (1.0 - tx) + lattice(ix + 1, iy, seed) * tx;
+    let bottom = lattice(ix, iy + 1, seed) * (1.0 - tx) + lattice(ix + 1, iy + 1, seed) * tx;
+    let smooth = (top * (1.0 - ty) + bottom * ty) * 1.6;
+    let fine = lattice(
+        point.x.floor() as i32,
+        point.y.floor() as i32,
+        mix32(seed ^ 0xa511e9b3),
+    );
+    smooth + (fine - smooth) * roughness / 100.0
+}
+
 pub fn adjust(pixel: [f32; 4], adjustment: &Adjustment, point: Point) -> [f32; 4] {
     let rgb = [pixel[0], pixel[1], pixel[2]];
     let rgb = match adjustment {
@@ -161,6 +193,18 @@ pub fn adjust(pixel: [f32; 4], adjustment: &Adjustment, point: Point) -> [f32; 4
             std::array::from_fn(|i| {
                 (shadows[i] as f32 * (1.0 - luma) + highlights[i] as f32 * luma) / 255.0
             })
+        }
+        Adjustment::FilmGrain {
+            amount,
+            size,
+            roughness,
+            seed,
+        } => {
+            let level = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+            let delta = film_grain(point, *size, *roughness, *seed) * amount / 100.0
+                * 0.35
+                * (0.4 + 2.4 * level * (1.0 - level));
+            rgb.map(|v| v + delta)
         }
         Adjustment::Grain {
             amount,
@@ -287,7 +331,7 @@ pub fn filtered(image: &RgbaImage, filter: &Filter) -> RgbaImage {
             RgbaImage::from_fn(w, h, |x, y| {
                 let mut sum = [0.0; 4];
                 for i in 0..steps {
-                    let offset = (i as f32 / steps.max(2) as f32 - 0.5) * distance;
+                    let offset = ((i as f32 + 0.5) / steps as f32 - 0.5) * distance;
                     let p = render::sample(
                         image,
                         Point::new(
@@ -349,16 +393,74 @@ pub fn apply_filter(document: &mut Document, filter: &Filter, mask_target: bool)
         crate::paint::prepare_mask(layer)?;
         let mask = layer.mask.as_mut().unwrap();
         if let Filter::GaussianBlur { radius } = filter {
-            mask.pixels = Arc::new(image::imageops::blur(&*mask.pixels, radius.max(0.01)));
+            let mut result = image::imageops::blur(&*mask.pixels, radius.max(0.01));
+            let transform = mask.placement.unwrap_or(layer.transform);
+            let (width, height) = result.dimensions();
+            for (x, y, pixel) in result.enumerate_pixels_mut() {
+                let point = transform.point(Point::new(
+                    (x as f32 + 0.5) / width as f32,
+                    (y as f32 + 0.5) / height as f32,
+                ));
+                let amount = selection::coverage(selection.as_deref(), point);
+                pixel[0] = (mask.pixels.get_pixel(x, y)[0] as f32 * (1.0 - amount)
+                    + pixel[0] as f32 * amount)
+                    .round() as u8;
+            }
+            mask.pixels = Arc::new(result);
             return Ok(());
         }
         anyhow::bail!("Use Gaussian Blur on a mask");
     }
     ensure_pixels(layer)?;
-    let transform = layer.transform;
+    let original_transform = layer.transform;
     let original = layer.pixels.as_ref().unwrap();
-    let mut result = filtered(original, filter);
-    let (w, h) = result.dimensions();
+    let padding = match filter {
+        Filter::GaussianBlur { radius } => (radius * 3.0).ceil() as u32,
+        Filter::MotionBlur { distance, .. } => (distance * 0.5).ceil() as u32 + 1,
+        _ => 0,
+    };
+    let (w, h) = (
+        original.width() + padding * 2,
+        original.height() + padding * 2,
+    );
+    crate::document::validate_size(w, h)?;
+    let mut expanded = RgbaImage::new(w, h);
+    image::imageops::replace(&mut expanded, &**original, padding as i64, padding as i64);
+    let mut transform = original_transform;
+    if padding > 0 {
+        let width = original.width() as f32;
+        let height = original.height() as f32;
+        let pad = padding as f32;
+        let corners = [
+            Point::new(-pad / width, -pad / height),
+            Point::new(1.0 + pad / width, -pad / height),
+            Point::new(1.0 + pad / width, 1.0 + pad / height),
+            Point::new(-pad / width, 1.0 + pad / height),
+        ]
+        .map(|p| original_transform.point(p));
+        let left = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+        let top = corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+        let right = corners
+            .iter()
+            .map(|p| p.x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let bottom = corners
+            .iter()
+            .map(|p| p.y)
+            .fold(f32::NEG_INFINITY, f32::max);
+        transform = crate::document::Transform::new(1, 1);
+        transform.x = left;
+        transform.y = top;
+        transform.width = right - left;
+        transform.height = bottom - top;
+        transform.warp = Some(corners.map(|p| {
+            Point::new(
+                (p.x - left) / transform.width,
+                (p.y - top) / transform.height,
+            )
+        }));
+    }
+    let mut result = filtered(&expanded, filter);
     if selection.is_some() {
         for (x, y, pixel) in result.enumerate_pixels_mut() {
             let point = transform.point(Point::new(
@@ -366,13 +468,19 @@ pub fn apply_filter(document: &mut Document, filter: &Filter, mask_target: bool)
                 (y as f32 + 0.5) / h as f32,
             ));
             let amount = selection::coverage(selection.as_deref(), point);
-            let old = original.get_pixel(x, y);
+            let old = expanded.get_pixel(x, y);
             for i in 0..4 {
                 pixel[i] =
                     (old[i] as f32 * (1.0 - amount) + pixel[i] as f32 * amount).round() as u8;
             }
         }
     }
+    if padding > 0
+        && let Some(mask) = &mut layer.mask
+    {
+        mask.placement = Some(mask.placement.unwrap_or(original_transform));
+    }
+    layer.transform = transform;
     layer.pixels = Some(Arc::new(result));
     Ok(())
 }
@@ -488,6 +596,19 @@ pub fn validate_adjustment(adjustment: &Adjustment) -> Result<()> {
                 && gamma.is_finite()
                 && (0.01..=10.0).contains(gamma)
         }
+        Adjustment::FilmGrain {
+            amount,
+            size,
+            roughness,
+            ..
+        } => {
+            amount.is_finite()
+                && (0.0..=100.0).contains(amount)
+                && size.is_finite()
+                && (0.1..=100.0).contains(size)
+                && roughness.is_finite()
+                && (0.0..=100.0).contains(roughness)
+        }
         Adjustment::Grain { amount, .. } => amount.is_finite() && (0.0..=100.0).contains(amount),
         Adjustment::GradientMap { .. } | Adjustment::Invert => true,
     };
@@ -498,6 +619,24 @@ pub fn validate_adjustment(adjustment: &Adjustment) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blur_spreads_beyond_bounds_and_preserves_color() {
+        let mut doc = Document::new(20, 20).unwrap();
+        let mut layer = crate::document::Layer::image(
+            "red",
+            RgbaImage::from_pixel(4, 4, Rgba([255, 0, 0, 255])),
+        );
+        layer.transform.x = 8.0;
+        layer.transform.y = 8.0;
+        doc.insert(layer);
+        apply_filter(&mut doc, &Filter::GaussianBlur { radius: 1.0 }, false).unwrap();
+        let image = render::render(&doc);
+        assert!(image.get_pixel(7, 9)[3] > 0);
+        assert_eq!(image.get_pixel(7, 9)[0], 255);
+        assert!(image.get_pixel(9, 9)[3] < 255);
+        doc.validate().unwrap();
+    }
 
     #[test]
     fn saturation_keeps_grays_neutral_and_exposure_uses_linear_light() {

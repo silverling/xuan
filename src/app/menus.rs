@@ -40,9 +40,10 @@ pub(super) fn adjustment_menu(ui: &mut egui::Ui) -> Option<Adjustment> {
             shadows: [0, 0, 0, 255],
             highlights: [255; 4],
         },
-        Adjustment::Grain {
+        Adjustment::FilmGrain {
             amount: 10.0,
-            monochrome: true,
+            size: 1.0,
+            roughness: 50.0,
             seed: 1,
         },
     ] {

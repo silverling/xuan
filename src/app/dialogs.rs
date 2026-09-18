@@ -537,6 +537,30 @@ impl EditorApp {
                                     .changed();
                             });
                         }
+                        Adjustment::FilmGrain {
+                            amount,
+                            size,
+                            roughness,
+                            seed,
+                        } => {
+                            changed |= ui
+                                .add(egui::Slider::new(amount, 0.0..=100.0).text("Amount"))
+                                .changed();
+                            changed |= ui
+                                .add(
+                                    egui::Slider::new(size, 0.1..=100.0)
+                                        .logarithmic(true)
+                                        .text("Size"),
+                                )
+                                .changed();
+                            changed |= ui
+                                .add(egui::Slider::new(roughness, 0.0..=100.0).text("Roughness"))
+                                .changed();
+                            if ui.button("New pattern").clicked() {
+                                *seed = seed.wrapping_add(1);
+                                changed = true;
+                            }
+                        }
                         Adjustment::Grain {
                             amount, monochrome, ..
                         } => {

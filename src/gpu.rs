@@ -428,6 +428,15 @@ fn parameters(document: &Document, layer: &Layer, size: [u32; 2]) -> Parameters 
                 p.first = shadows.map(|v| v as f32 / 255.0);
                 p.second = highlights.map(|v| v as f32 / 255.0);
             }
+            Adjustment::FilmGrain {
+                amount,
+                size,
+                roughness,
+                seed,
+            } => {
+                p.flags[1] = 11;
+                p.first = [*amount, *size, *roughness, f32::from_bits(*seed)];
+            }
             Adjustment::Grain {
                 amount,
                 monochrome,
@@ -600,6 +609,12 @@ mod tests {
             Adjustment::GradientMap {
                 shadows: [20, 40, 70, 255],
                 highlights: [200, 220, 150, 255],
+            },
+            Adjustment::FilmGrain {
+                amount: 60.0,
+                size: 2.7,
+                roughness: 35.0,
+                seed: 419,
             },
             Adjustment::Grain {
                 amount: 15.0,
