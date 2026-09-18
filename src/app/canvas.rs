@@ -22,6 +22,87 @@ const HANDLES: [Point; 8] = [
     Point::new(0.0, 0.5),
 ];
 
+fn drag_transform(
+    old: xuan::document::Transform,
+    start: Point,
+    point: Point,
+    kind: TransformDrag,
+    lock_ratio: bool,
+    shift: bool,
+) -> xuan::document::Transform {
+    let mut t = old;
+    match kind {
+        TransformDrag::Move | TransformDrag::Pixels => {
+            t.x += point.x - start.x;
+            t.y += point.y - start.y;
+        }
+        TransformDrag::Rotate => {
+            let center = old.center();
+            let a = (start.y - center.y).atan2(start.x - center.x);
+            let b = (point.y - center.y).atan2(point.x - center.x);
+            let angle = (b - a).to_degrees();
+            t.rotation += if shift {
+                (angle / 15.0).round() * 15.0
+            } else {
+                angle
+            };
+        }
+        TransformDrag::Scale(index) => {
+            let handle = HANDLES[index];
+            let anchor = Point::new(1.0 - handle.x, 1.0 - handle.y);
+            let unit = old.inverse(point);
+            let anchor_point = old.point(anchor);
+            let mut sx = if handle.x == 0.5 {
+                1.0
+            } else {
+                ((unit.x - anchor.x) / (handle.x - anchor.x)).max(1.0 / old.width)
+            };
+            let mut sy = if handle.y == 0.5 {
+                1.0
+            } else {
+                ((unit.y - anchor.y) / (handle.y - anchor.y)).max(1.0 / old.height)
+            };
+            if lock_ratio != shift {
+                let factor = if handle.x == 0.5 {
+                    sy
+                } else if handle.y == 0.5 {
+                    sx
+                } else {
+                    sx.max(sy)
+                };
+                sx = factor;
+                sy = factor;
+            }
+            t.width = (old.width * sx).clamp(1.0, 300_000.0);
+            t.height = (old.height * sy).clamp(1.0, 300_000.0);
+            let moved_anchor = t.point(anchor);
+            t.x += anchor_point.x - moved_anchor.x;
+            t.y += anchor_point.y - moved_anchor.y;
+        }
+        TransformDrag::Distort(index) => {
+            let mut affine = old;
+            affine.warp = None;
+            let mut quad = old
+                .warp
+                .unwrap_or([HANDLES[0], HANDLES[2], HANDLES[4], HANDLES[6]]);
+            let mut moved = point;
+            if shift {
+                if (point.x - start.x).abs() > (point.y - start.y).abs() {
+                    moved.y = start.y;
+                } else {
+                    moved.x = start.x;
+                }
+            }
+            quad[index] = affine.inverse(moved);
+            if xuan::geometry::Homography::from_quad(quad).is_some() {
+                t.warp = Some(quad);
+            }
+        }
+        TransformDrag::Selection => {}
+    }
+    t
+}
+
 impl EditorApp {
     pub(super) fn canvas(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
@@ -49,6 +130,7 @@ impl EditorApp {
                 ) * zoom;
                 let origin = viewport.center() - size * 0.5 + session.pan;
                 let canvas = Rect::from_min_size(origin, size);
+                self.canvas_rect = Some(canvas);
                 let visible = canvas.intersect(viewport);
                 let painter = ui.painter().with_clip_rect(viewport);
                 painter.rect_filled(canvas.expand(3.0), 0.0, Color32::from_black_alpha(60));
@@ -183,17 +265,8 @@ impl EditorApp {
                 let mut hover_handle = None;
                 if self.tool == Tool::Move
                     && self.show_controls
-                    && let Some(layer) = session.document.active()
+                    && let Some(t) = operations::transform_box(&session.document, self.mask_target)
                 {
-                    let t = if self.mask_target {
-                        layer
-                            .mask
-                            .as_ref()
-                            .and_then(|m| m.placement)
-                            .unwrap_or(layer.transform)
-                    } else {
-                        layer.transform
-                    };
                     let corners = t.corners().map(map);
                     painter.add(egui::Shape::closed_line(
                         corners.to_vec(),
@@ -581,7 +654,7 @@ impl EditorApp {
         point: Point,
         screen: Pos2,
         panning: bool,
-        handle: Option<TransformDrag>,
+        mut handle: Option<TransformDrag>,
         modifiers: egui::Modifiers,
     ) {
         if self.gesture.is_some() || self.sessions.is_empty() {
@@ -595,6 +668,32 @@ impl EditorApp {
         if self.tool == Tool::Clone && self.clone_source.is_none() {
             self.status = "Alt-click on the canvas to set a clone source".into();
             return;
+        }
+        if self.tool == Tool::Move && self.show_controls {
+            let session = &self.sessions[self.current];
+            if let Some(t) = operations::transform_box(&session.document, self.mask_target) {
+                if let Some(index) = HANDLES
+                    .iter()
+                    .position(|unit| t.point(*unit).distance(point) * session.zoom < 9.0)
+                {
+                    handle = Some(if modifiers.ctrl && index % 2 == 0 {
+                        TransformDrag::Distort(index / 2)
+                    } else {
+                        TransformDrag::Scale(index)
+                    });
+                } else {
+                    let top = t.point(Point::new(0.5, 0.0));
+                    let center = t.center();
+                    let distance = top.distance(center).max(0.01);
+                    let rotate = Point::new(
+                        top.x + (top.x - center.x) / distance * 23.0 / session.zoom,
+                        top.y + (top.y - center.y) / distance * 23.0 / session.zoom,
+                    );
+                    if rotate.distance(point) * session.zoom < 9.0 {
+                        handle = Some(TransformDrag::Rotate);
+                    }
+                }
+            }
         }
         let mut kind = handle.unwrap_or(TransformDrag::Move);
         let session = &mut self.sessions[self.current];
@@ -612,14 +711,32 @@ impl EditorApp {
         }
         if self.tool.is_selection()
             && !modifiers.shift
-            && !modifiers.alt
+            && (!modifiers.alt || modifiers.ctrl)
             && session
                 .document
                 .selection
                 .as_ref()
                 .is_some_and(|m| selection::coverage(Some(m), point) > 0.0)
         {
-            kind = TransformDrag::Selection;
+            if modifiers.ctrl {
+                if let Some((pixels, origin)) = operations::copy_pixels(&session.document, false) {
+                    if !modifiers.alt
+                        && let Err(error) = paint::fill(&mut session.document, [0; 4], true, false)
+                    {
+                        session.history.cancel(&mut session.document);
+                        self.error = Some(error.to_string());
+                        return;
+                    }
+                    let mut layer = xuan::document::Layer::image("Selection", pixels);
+                    layer.transform.x = origin.x;
+                    layer.transform.y = origin.y;
+                    session.document.insert(layer);
+                    session.document.selection = None;
+                    kind = TransformDrag::Pixels;
+                }
+            } else {
+                kind = TransformDrag::Selection;
+            }
         }
         let source = if matches!(self.tool, Tool::Clone | Tool::Heal | Tool::Blur) {
             if self.tool == Tool::Clone && self.clone_all {
@@ -659,6 +776,7 @@ impl EditorApp {
             panning,
             clone_offset: offset,
             source,
+            reference: operations::transform_box(&session.document, self.mask_target),
         });
     }
 
@@ -719,7 +837,7 @@ impl EditorApp {
                         },
                     )
                 }
-                Tool::Move => {
+                _ if self.tool == Tool::Move || matches!(gesture.kind, TransformDrag::Pixels) => {
                     let mut dx = point.x - gesture.start.x;
                     let mut dy = point.y - gesture.start.y;
                     if modifiers.shift && matches!(gesture.kind, TransformDrag::Move) {
@@ -733,9 +851,8 @@ impl EditorApp {
                     if self.snap
                         && !modifiers.ctrl
                         && matches!(gesture.kind, TransformDrag::Move)
-                        && let Some(active) = gesture.original.active()
+                        && let Some(t) = gesture.reference
                     {
-                        let t = active.transform;
                         let mut xs = vec![
                             0.0,
                             session.document.width as f32 * 0.5,
@@ -787,94 +904,53 @@ impl EditorApp {
                             self.guides.push((false, y));
                         }
                     }
-                    let targets = gesture.original.transform_targets();
-                    let reference = gesture.original.active().map(|l| l.transform);
-                    for layer in &mut session.document.layers {
-                        if !targets.contains(&layer.id) || layer.locked {
-                            continue;
-                        }
-                        let Some(original) =
-                            gesture.original.layers.iter().find(|l| l.id == layer.id)
-                        else {
-                            continue;
-                        };
-                        let old = if self.mask_target {
-                            original
-                                .mask
-                                .as_ref()
-                                .and_then(|m| m.placement)
-                                .unwrap_or(original.transform)
-                        } else {
-                            original.transform
-                        };
-                        let mut t = old;
-                        match gesture.kind {
-                            TransformDrag::Move => {
-                                t.x += dx;
-                                t.y += dy;
-                            }
-                            TransformDrag::Rotate => {
-                                let center = reference.unwrap_or(old).center();
-                                let a =
-                                    (gesture.start.y - center.y).atan2(gesture.start.x - center.x);
-                                let b = (point.y - center.y).atan2(point.x - center.x);
-                                let angle = (b - a).to_degrees();
-                                t.rotation = old.rotation
-                                    + if modifiers.shift {
-                                        (angle / 15.0).round() * 15.0
-                                    } else {
-                                        angle
-                                    };
-                            }
-                            TransformDrag::Scale(index) => {
-                                let handle = HANDLES[index];
-                                let anchor = Point::new(1.0 - handle.x, 1.0 - handle.y);
-                                let unit = old.inverse(point);
-                                let anchor_point = old.point(anchor);
-                                let mut sx = if handle.x == 0.5 {
-                                    1.0
-                                } else {
-                                    ((unit.x - anchor.x) / (handle.x - anchor.x))
-                                        .abs()
-                                        .max(1.0 / old.width)
-                                };
-                                let mut sy = if handle.y == 0.5 {
-                                    1.0
-                                } else {
-                                    ((unit.y - anchor.y) / (handle.y - anchor.y))
-                                        .abs()
-                                        .max(1.0 / old.height)
-                                };
-                                if self.lock_ratio != modifiers.shift {
-                                    let factor = if handle.x == 0.5 {
-                                        sy
-                                    } else if handle.y == 0.5 {
-                                        sx
-                                    } else {
-                                        sx.max(sy)
-                                    };
-                                    sx = factor;
-                                    sy = factor;
+                    let targets = if self.mask_target {
+                        gesture.original.active.into_iter().collect()
+                    } else {
+                        gesture.original.transform_targets()
+                    };
+                    if let Some(reference) = gesture.reference {
+                        let moved = Point::new(gesture.start.x + dx, gesture.start.y + dy);
+                        let transformed = drag_transform(
+                            reference,
+                            gesture.start,
+                            moved,
+                            gesture.kind,
+                            self.lock_ratio,
+                            modifiers.shift,
+                        );
+                        if transformed.valid() {
+                            for layer in &mut session.document.layers {
+                                if !targets.contains(&layer.id) || layer.locked {
+                                    continue;
                                 }
-                                t.width = (old.width * sx).clamp(1.0, 300_000.0);
-                                t.height = (old.height * sy).clamp(1.0, 300_000.0);
-                                let moved_anchor = t.point(anchor);
-                                t.x += anchor_point.x - moved_anchor.x;
-                                t.y += anchor_point.y - moved_anchor.y;
-                            }
-                            TransformDrag::Selection => {}
-                        }
-                        if self.mask_target {
-                            if let Some(mask) = &mut layer.mask {
-                                mask.placement = Some(t);
-                                mask.linked = false;
-                            }
-                        } else {
-                            layer.transform = t;
-                            if let (Some(mask), Some(old_mask)) = (&mut layer.mask, &original.mask)
-                                && old_mask.linked
-                            {
-                                mask.placement = None;
+                                let Some(original) =
+                                    gesture.original.layers.iter().find(|l| l.id == layer.id)
+                                else {
+                                    continue;
+                                };
+                                let old = if self.mask_target {
+                                    original
+                                        .mask
+                                        .as_ref()
+                                        .and_then(|m| m.placement)
+                                        .unwrap_or(original.transform)
+                                } else {
+                                    original.transform
+                                };
+                                let transform = if targets.len() == 1 {
+                                    transformed
+                                } else {
+                                    old.following(reference, transformed)
+                                };
+                                if self.mask_target {
+                                    if let Some(mask) = &mut layer.mask {
+                                        mask.placement = Some(transform);
+                                        mask.linked = false;
+                                    }
+                                } else {
+                                    layer.transform = transform;
+                                }
                             }
                         }
                     }
@@ -916,7 +992,10 @@ impl EditorApp {
         }
         let start = gesture.start;
         let end = gesture.last;
-        let result = if matches!(gesture.kind, TransformDrag::Selection) && self.tool.is_selection()
+        let result = if matches!(
+            gesture.kind,
+            TransformDrag::Selection | TransformDrag::Pixels
+        ) && self.tool.is_selection()
         {
             Ok(())
         } else {

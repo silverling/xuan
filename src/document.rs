@@ -48,6 +48,8 @@ pub struct Transform {
     pub rotation: f32,
     pub flip_x: bool,
     pub flip_y: bool,
+    #[serde(default)]
+    pub warp: Option<[Point; 4]>,
 }
 
 impl Transform {
@@ -60,6 +62,7 @@ impl Transform {
             rotation: 0.0,
             flip_x: false,
             flip_y: false,
+            warp: None,
         }
     }
 
@@ -69,6 +72,10 @@ impl Transform {
 
     /// Map normalized source coordinates to document coordinates.
     pub fn point(self, unit: Point) -> Point {
+        let unit = self
+            .warp
+            .and_then(crate::geometry::Homography::from_quad)
+            .map_or(unit, |h| h.map(unit));
         let x = (if self.flip_x { 1.0 - unit.x } else { unit.x } - 0.5) * self.width;
         let y = (if self.flip_y { 1.0 - unit.y } else { unit.y } - 0.5) * self.height;
         let (sin, cos) = self.rotation.to_radians().sin_cos();
@@ -89,7 +96,11 @@ impl Transform {
         if self.flip_y {
             v = 1.0 - v;
         }
-        Point::new(u, v)
+        let unit = Point::new(u, v);
+        self.warp
+            .and_then(crate::geometry::Homography::from_quad)
+            .and_then(|h| h.inverse())
+            .map_or(unit, |h| h.map(unit))
     }
 
     pub fn corners(self) -> [Point; 4] {
@@ -110,6 +121,39 @@ impl Transform {
             && (1.0..=300_000.0).contains(&self.height)
             && self.x.abs() <= 1_000_000.0
             && self.y.abs() <= 1_000_000.0
+            && self
+                .warp
+                .is_none_or(|quad| crate::geometry::Homography::from_quad(quad).is_some())
+    }
+
+    pub fn following(self, old: Self, new: Self) -> Self {
+        if old.width == new.width
+            && old.height == new.height
+            && old.rotation == new.rotation
+            && old.flip_x == new.flip_x
+            && old.flip_y == new.flip_y
+            && old.warp == new.warp
+        {
+            return Self {
+                x: self.x + new.x - old.x,
+                y: self.y + new.y - old.y,
+                ..self
+            };
+        }
+        let map = |point| new.point(old.inverse(point));
+        let center = map(self.center());
+        let mut result = self;
+        result.width = (self.width * new.width / old.width).max(1.0);
+        result.height = (self.height * new.height / old.height).max(1.0);
+        result.x = center.x - result.width * 0.5;
+        result.y = center.y - result.height * 0.5;
+        result.rotation += new.rotation - old.rotation;
+        result.warp = None;
+        let quad = self.corners().map(|p| result.inverse(map(p)));
+        if crate::geometry::Homography::from_quad(quad).is_some() {
+            result.warp = Some(quad);
+        }
+        result
     }
 }
 
@@ -438,6 +482,7 @@ mod tests {
                 rotation: 37.0,
                 flip_x,
                 flip_y: true,
+                warp: None,
             };
             let p = Point::new(0.17, 0.89);
             assert!(t.inverse(t.point(p)).distance(p) < 0.00001);

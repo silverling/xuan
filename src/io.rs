@@ -226,6 +226,7 @@ fn comp_transform(value: &Value) -> Result<Transform> {
         rotation: number(value, "rotation", 0.0),
         flip_x: value["flipX"].as_bool().unwrap_or(false),
         flip_y: value["flipY"].as_bool().unwrap_or(false),
+        warp: None,
     };
     ensure!(t.valid(), "Invalid Compositor layer transform");
     Ok(t)

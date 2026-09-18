@@ -53,16 +53,9 @@ fn layer_rows(
 
 impl EditorApp {
     pub(super) fn tool_options(&mut self, ctx: &egui::Context) {
-        let mut transform = self.session().and_then(|s| s.document.active()).map(|l| {
-            if self.mask_target {
-                l.mask
-                    .as_ref()
-                    .and_then(|m| m.placement)
-                    .unwrap_or(l.transform)
-            } else {
-                l.transform
-            }
-        });
+        let mut transform = self
+            .session()
+            .and_then(|s| xuan::operations::transform_box(&s.document, self.mask_target));
         let mut changed = false;
         egui::TopBottomPanel::top("tool_options")
             .exact_height(42.0)
@@ -292,19 +285,7 @@ impl EditorApp {
         if changed && let Some(transform) = transform {
             let mask_target = self.mask_target;
             self.edit("Transform", |doc| {
-                if let Some(layer) = doc.active_mut()
-                    && !layer.locked
-                {
-                    if mask_target {
-                        if let Some(mask) = &mut layer.mask {
-                            mask.placement = Some(transform);
-                            mask.linked = false;
-                        }
-                    } else {
-                        layer.transform = transform;
-                    }
-                }
-                Ok(())
+                xuan::operations::apply_transform(doc, transform, mask_target)
             });
         }
     }
@@ -427,7 +408,7 @@ impl EditorApp {
                             egui::ComboBox::from_id_salt("blend_mode").width(ui.available_width()-38.0).selected_text(blend.name()).show_ui(ui,|ui|{for b in BlendMode::ALL{changed|=ui.selectable_value(&mut blend,b,b.name()).changed();}});
                             if let Some(active)=&active {let mut locked=active.locked;if ui.checkbox(&mut locked,"").on_hover_text("Lock layer").changed(){appearance=Some((blend,opacity,locked));}}
                         });
-                        ui.horizontal(|ui|{ui.label(RichText::new("Opacity").color(theme::MUTED));ui.spacing_mut().slider_width=(ui.available_width()-47.0).max(45.0);changed|=ui.add(egui::Slider::new(&mut opacity,0.0..=1.0).custom_formatter(|v,_|format!("{:.0}%",v*100.0))).changed();});
+                        ui.horizontal(|ui|{ui.label(RichText::new("Opacity").color(theme::MUTED));ui.spacing_mut().slider_width=(ui.available_width()-72.0).max(40.0);changed|=ui.add(egui::Slider::new(&mut opacity,0.0..=1.0).custom_formatter(|v,_|format!("{:.0}%",v*100.0))).changed();});
                         if changed {appearance=Some((blend,opacity,active.as_ref().is_some_and(|l|l.locked)));}
                     });
                 });

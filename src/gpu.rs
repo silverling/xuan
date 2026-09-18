@@ -334,6 +334,16 @@ fn parameters(document: &Document, layer: &Layer, size: [u32; 2]) -> Parameters 
         .position(|b| *b == layer.blend)
         .unwrap_or(0) as u32;
     p.appearance[0] = layer.opacity;
+    if let Some(inverse) = t
+        .warp
+        .and_then(crate::geometry::Homography::from_quad)
+        .and_then(|h| h.inverse())
+    {
+        p.flags[3] = 1;
+        for (index, row) in inverse.0.iter().enumerate() {
+            p.points[index] = [row[0], row[1], row[2], 0.0];
+        }
+    }
     if let Some(adjustment) = &layer.adjustment {
         match adjustment {
             Adjustment::LevelsChannels { ranges } => {
@@ -511,6 +521,12 @@ mod tests {
             ),
         ];
         document.layers[1].transform.rotation = 17.0;
+        document.layers[1].transform.warp = Some([
+            Point::new(0.1, 0.1),
+            Point::new(0.95, 0.0),
+            Point::new(1.0, 0.85),
+            Point::new(0.0, 1.0),
+        ]);
         document.layers[1].opacity = 0.73;
         for mode in BlendMode::ALL {
             document.layers[1].blend = mode;

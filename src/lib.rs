@@ -2,6 +2,7 @@ pub mod blend;
 pub mod color;
 pub mod document;
 pub mod effects;
+pub mod geometry;
 pub mod gpu;
 pub mod history;
 pub mod io;

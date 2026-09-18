@@ -9,6 +9,77 @@ use crate::{
     render, selection,
 };
 
+pub fn transform_box(document: &Document, mask_target: bool) -> Option<Transform> {
+    let active = document.active()?;
+    if mask_target {
+        return Some(
+            active
+                .mask
+                .as_ref()
+                .and_then(|m| m.placement)
+                .unwrap_or(active.transform),
+        );
+    }
+    if document.selected.len() <= 1 && !active.group {
+        return Some(active.transform);
+    }
+    let targets = document.transform_targets();
+    let mut min = Point::new(f32::MAX, f32::MAX);
+    let mut max = Point::new(f32::MIN, f32::MIN);
+    for layer in document
+        .layers
+        .iter()
+        .filter(|l| targets.contains(&l.id) && !l.group)
+    {
+        for point in layer.transform.corners() {
+            min.x = min.x.min(point.x);
+            min.y = min.y.min(point.y);
+            max.x = max.x.max(point.x);
+            max.y = max.y.max(point.y);
+        }
+    }
+    if min.x > max.x {
+        return Some(active.transform);
+    }
+    Some(Transform {
+        x: min.x,
+        y: min.y,
+        width: (max.x - min.x).max(1.0),
+        height: (max.y - min.y).max(1.0),
+        ..Transform::new(1, 1)
+    })
+}
+
+pub fn apply_transform(document: &mut Document, new: Transform, mask_target: bool) -> Result<()> {
+    ensure!(new.valid(), "Invalid transform");
+    let Some(old) = transform_box(document, mask_target) else {
+        return Ok(());
+    };
+    let targets = if mask_target {
+        document.active.into_iter().collect()
+    } else {
+        document.transform_targets()
+    };
+    for layer in &mut document.layers {
+        if !targets.contains(&layer.id) || layer.locked {
+            continue;
+        }
+        if mask_target {
+            if let Some(mask) = &mut layer.mask {
+                mask.placement = Some(new);
+                mask.linked = false;
+            }
+        } else {
+            layer.transform = if targets.len() == 1 {
+                new
+            } else {
+                layer.transform.following(old, new)
+            };
+        }
+    }
+    Ok(())
+}
+
 pub fn duplicate(document: &mut Document) {
     let targets = document.transform_targets();
     let ids: HashMap<_, _> = targets.iter().map(|id| (*id, Uuid::new_v4())).collect();
@@ -285,6 +356,36 @@ pub fn selection_from_layer(document: &mut Document, mask_target: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_rotation_moves_children_about_a_shared_center() {
+        let mut doc = Document::new(100, 100).unwrap();
+        doc.layers.clear();
+        let mut left = Layer::blank("Left", 10, 10);
+        left.transform.x = 10.0;
+        left.transform.y = 20.0;
+        let mut right = Layer::blank("Right", 10, 10);
+        right.transform.x = 70.0;
+        right.transform.y = 20.0;
+        doc.selected = [left.id, right.id].into_iter().collect();
+        doc.active = Some(left.id);
+        doc.layers = vec![left, right];
+        let old = transform_box(&doc, false).unwrap();
+        let before = doc
+            .layers
+            .iter()
+            .map(|l| l.transform.corners())
+            .collect::<Vec<_>>();
+        let mut new = old;
+        new.rotation = 90.0;
+        apply_transform(&mut doc, new, false).unwrap();
+        for (layer, corners) in doc.layers.iter().zip(before) {
+            for (before, after) in corners.into_iter().zip(layer.transform.corners()) {
+                assert!(new.point(old.inverse(before)).distance(after) < 0.001);
+            }
+        }
+        doc.validate().unwrap();
+    }
 
     #[test]
     fn resize_and_crop_preserve_source_resolution_and_undo_assets() {

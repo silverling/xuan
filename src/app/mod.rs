@@ -20,7 +20,7 @@ use egui::{Pos2, TextureHandle, Vec2};
 use image::{GrayImage, RgbaImage};
 use uuid::Uuid;
 use xuan::{
-    document::{Adjustment, Document, Layer, Mask, Point},
+    document::{Adjustment, Document, Layer, Mask, Point, Transform},
     effects::Filter,
     history::History,
     io, operations,
@@ -269,6 +269,8 @@ enum TransformDrag {
     Scale(usize),
     Rotate,
     Selection,
+    Pixels,
+    Distort(usize),
 }
 
 struct Gesture {
@@ -282,6 +284,7 @@ struct Gesture {
     panning: bool,
     clone_offset: Point,
     source: Option<Arc<RgbaImage>>,
+    reference: Option<Transform>,
 }
 
 pub struct EditorApp {
@@ -333,6 +336,7 @@ pub struct EditorApp {
     export_changed: bool,
     screenshot: Option<PathBuf>,
     frames: usize,
+    canvas_rect: Option<egui::Rect>,
 }
 
 impl EditorApp {
@@ -403,6 +407,7 @@ impl EditorApp {
             export_changed: true,
             screenshot,
             frames: 0,
+            canvas_rect: None,
         };
         if demo {
             app.add_demo();

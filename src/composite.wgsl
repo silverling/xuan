@@ -226,6 +226,11 @@ fn composite(@builtin(global_invocation_id) id: vec3<u32>) {
     var uv = vec2(local.x * params.rotation.x + local.y * params.rotation.y,
         -local.x * params.rotation.y + local.y * params.rotation.x) / params.bounds.zw;
     uv = uv * params.rotation.zw + 0.5;
+    if params.flags.w != 0u {
+        let homogeneous = vec3(uv, 1.0);
+        let divisor = dot(params.points[2].xyz, homogeneous);
+        uv = vec2(dot(params.points[0].xyz, homogeneous), dot(params.points[1].xyz, homogeneous)) / divisor;
+    }
     var src = sample_source(uv);
     src.a *= amount;
     let alpha = src.a + dst.a * (1.0 - src.a);
