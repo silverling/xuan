@@ -145,6 +145,20 @@ pub fn render_scaled(document: &Document, width: u32, height: u32) -> RgbaImage 
                 if coverage == 0.0 {
                     continue;
                 }
+                if let Some(adjustment) = &layer.adjustment {
+                    let adjusted = crate::effects::adjust(pixel, adjustment, point);
+                    let mut amount = coverage * layer.opacity * own_mask(layer, point);
+                    if let Some(source) = layer
+                        .clip_to
+                        .and_then(|id| document.layers.iter().find(|l| l.id == id))
+                    {
+                        amount *= layer_alpha(document, source, point, 0);
+                    }
+                    for i in 0..3 {
+                        pixel[i] += (adjusted[i] - pixel[i]) * amount;
+                    }
+                    continue;
+                }
                 if let Some(image) = &layer.pixels {
                     let mut source = sample(image, layer.transform.inverse(point));
                     source[3] = layer_alpha(document, layer, point, 0) * coverage;

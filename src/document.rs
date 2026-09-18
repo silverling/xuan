@@ -352,6 +352,9 @@ impl Document {
         let mut pixels = 0_u64;
         let mut mask_pixels = 0_u64;
         for layer in &self.layers {
+            if let Some(adjustment) = &layer.adjustment {
+                crate::effects::validate_adjustment(adjustment)?;
+            }
             ensure!(
                 !layer.name.trim().is_empty() && layer.name.len() <= 16_384,
                 "Invalid layer name"
