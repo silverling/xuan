@@ -193,8 +193,8 @@ impl Session {
         let max_side = state.map_or(1600, |s| {
             s.device.limits().max_texture_dimension_2d.min(4096)
         });
-        let factor =
-            (max_side as f32 / self.document.width.max(self.document.height) as f32).min(1.0);
+        let factor = (max_side as f32 / self.document.width.max(self.document.height) as f32)
+            .min((self.zoom * ctx.pixels_per_point()).clamp(0.01, 1.0));
         let size = [
             (self.document.width as f32 * factor).round().max(1.0) as u32,
             (self.document.height as f32 * factor).round().max(1.0) as u32,
@@ -435,7 +435,9 @@ impl EditorApp {
             return;
         };
         session.history.begin(name, &session.document);
-        match operation(&mut session.document) {
+        match operation(&mut session.document)
+            .and_then(|()| paint::refresh_shapes(&mut session.document))
+        {
             Ok(()) => {
                 session.history.commit();
                 session.invalidate();
@@ -446,6 +448,22 @@ impl EditorApp {
                 session.invalidate();
                 self.error = Some(error.to_string());
             }
+        }
+    }
+
+    fn edit_continuous(&mut self, name: &str, operation: impl FnOnce(&mut Document) -> Result<()>) {
+        let Some(session) = self.session_mut() else {
+            return;
+        };
+        session.history.begin(name, &session.document);
+        if let Err(error) = operation(&mut session.document)
+            .and_then(|()| paint::refresh_shapes(&mut session.document))
+        {
+            session.history.cancel(&mut session.document);
+            self.error = Some(error.to_string());
+        }
+        if let Some(session) = self.session_mut() {
+            session.invalidate();
         }
     }
 
@@ -532,7 +550,8 @@ impl EditorApp {
             .add_filter(
                 "Images and xuan projects",
                 &[
-                    "xuan", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif",
+                    "xuan", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "heic",
+                    "heif",
                 ],
             )
             .pick_files()
@@ -1029,6 +1048,14 @@ impl EditorApp {
         self.layers_panel(ctx);
         self.canvas(ctx);
         self.dialogs(ctx);
+        if self.gesture.is_none()
+            && self.effect.is_none()
+            && self.job.is_none()
+            && !ctx.input(|i| i.pointer.any_down())
+            && let Some(session) = self.session_mut()
+        {
+            session.history.commit();
+        }
         let title = self.session().map_or("xuan".to_owned(), |s| {
             format!(
                 "{}{} — xuan",

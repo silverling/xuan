@@ -43,6 +43,7 @@ pub fn ensure_pixels(layer: &mut Layer) -> Result<()> {
         !layer.locked && !layer.group && layer.adjustment.is_none(),
         "Select an unlocked pixel layer to paint"
     );
+    layer.shape = None;
     if layer.pixels.is_none() {
         let width = layer.transform.width.round() as u32;
         let height = layer.transform.height.round() as u32;
@@ -342,7 +343,7 @@ pub fn gradient(
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ShapeKind {
     Rectangle,
     Ellipse,
@@ -400,9 +401,40 @@ pub fn shape(
         },
         image,
     );
+    layer.shape = Some(crate::document::ShapeStyle {
+        kind,
+        color,
+        corner_radius,
+    });
     layer.transform.x = start.x.min(end.x);
     layer.transform.y = start.y.min(end.y);
     Ok(layer)
+}
+
+pub fn refresh_shapes(document: &mut Document) -> Result<()> {
+    for layer in &mut document.layers {
+        let Some(style) = &layer.shape else { continue };
+        let corners = layer.transform.corners();
+        let width = corners[0].distance(corners[1]).round().max(1.0) as u32;
+        let height = corners[0].distance(corners[3]).round().max(1.0) as u32;
+        if layer
+            .pixels
+            .as_ref()
+            .is_some_and(|p| p.dimensions() == (width, height))
+        {
+            continue;
+        }
+        validate_size(width, height)?;
+        let redrawn = shape(
+            Point::default(),
+            Point::new(width as f32, height as f32),
+            style.kind,
+            style.color,
+            style.corner_radius,
+        )?;
+        layer.pixels = redrawn.pixels;
+    }
+    Ok(())
 }
 
 pub fn mask_from_selection(document: &Document, layer: &Layer) -> GrayImage {
@@ -422,6 +454,27 @@ pub fn mask_from_selection(document: &Document, layer: &Layer) -> GrayImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_shapes_redraw_at_new_sizes_until_their_pixels_are_edited() {
+        let mut doc = Document::new(64, 64).unwrap();
+        let layer = shape(
+            Point::default(),
+            Point::new(20.0, 20.0),
+            ShapeKind::RoundedRectangle,
+            [255, 0, 0, 255],
+            5.0,
+        )
+        .unwrap();
+        doc.insert(layer);
+        doc.active_mut().unwrap().transform.width = 40.0;
+        refresh_shapes(&mut doc).unwrap();
+        let layer = doc.active().unwrap();
+        assert_eq!(layer.pixels.as_ref().unwrap().dimensions(), (40, 20));
+        assert_eq!(layer.pixels.as_ref().unwrap().get_pixel(6, 0)[3], 255);
+        fill(&mut doc, [0, 0, 255, 255], false, false).unwrap();
+        assert!(doc.active().unwrap().shape.is_none());
+    }
 
     #[test]
     fn fast_stroke_has_no_gaps_and_respects_selection() {

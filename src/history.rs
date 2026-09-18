@@ -1,6 +1,7 @@
 use crate::document::Document;
 
 const MAX_STEPS: usize = 64;
+const MAX_HISTORY_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Clone)]
 struct Entry {
@@ -34,13 +35,40 @@ impl History {
     pub fn commit(&mut self) {
         if let Some(entry) = self.pending.take() {
             self.undo.push(entry);
-            if self.undo.len() > MAX_STEPS {
+            while self.undo.len() > 1
+                && (self.undo.len() > MAX_STEPS || self.retained_bytes() > MAX_HISTORY_BYTES)
+            {
                 self.undo.remove(0);
             }
             self.redo.clear();
             self.next_revision += 1;
             self.revision = self.next_revision;
         }
+    }
+
+    fn retained_bytes(&self) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        let mut bytes = 0;
+        for entry in &self.undo {
+            for layer in &entry.document.layers {
+                if let Some(pixels) = &layer.pixels
+                    && seen.insert(std::sync::Arc::as_ptr(pixels) as usize)
+                {
+                    bytes += pixels.as_raw().len();
+                }
+                if let Some(mask) = &layer.mask
+                    && seen.insert(std::sync::Arc::as_ptr(&mask.pixels) as usize)
+                {
+                    bytes += mask.pixels.as_raw().len();
+                }
+            }
+            if let Some(selection) = &entry.document.selection
+                && seen.insert(std::sync::Arc::as_ptr(selection) as usize)
+            {
+                bytes += selection.as_raw().len();
+            }
+        }
+        bytes
     }
 
     pub fn cancel(&mut self, document: &mut Document) {

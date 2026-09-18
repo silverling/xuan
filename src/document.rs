@@ -245,6 +245,13 @@ impl Adjustment {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ShapeStyle {
+    pub kind: crate::paint::ShapeKind,
+    pub color: [u8; 4],
+    pub corner_radius: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Layer {
     pub id: Uuid,
     pub name: String,
@@ -258,6 +265,8 @@ pub struct Layer {
     pub clip_to: Option<Uuid>,
     pub mask: Option<Mask>,
     pub adjustment: Option<Adjustment>,
+    #[serde(default)]
+    pub shape: Option<ShapeStyle>,
     #[serde(skip)]
     pub pixels: Option<Arc<RgbaImage>>,
 }
@@ -277,6 +286,7 @@ impl Layer {
             clip_to: None,
             mask: None,
             adjustment: None,
+            shape: None,
             pixels: None,
         }
     }
@@ -414,6 +424,14 @@ impl Document {
         let mut pixels = 0_u64;
         let mut mask_pixels = 0_u64;
         for layer in &self.layers {
+            if let Some(shape) = &layer.shape {
+                ensure!(
+                    shape.corner_radius.is_finite()
+                        && shape.corner_radius >= 0.0
+                        && layer.pixels.is_some(),
+                    "Invalid live shape"
+                );
+            }
             if let Some(adjustment) = &layer.adjustment {
                 crate::effects::validate_adjustment(adjustment)?;
             }

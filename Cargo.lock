@@ -3802,6 +3802,7 @@ dependencies = [
  "eframe",
  "egui",
  "image",
+ "png",
  "pollster",
  "rayon",
  "rfd",

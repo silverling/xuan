@@ -121,11 +121,75 @@ pub fn paint_order(document: &Document) -> Vec<&Layer> {
     result
 }
 
+/// Filter premultiplied colors so transparent edges never acquire dark halos.
+pub fn resize_quality(image: &RgbaImage, width: u32, height: u32) -> RgbaImage {
+    let premultiplied = image::ImageBuffer::from_fn(image.width(), image.height(), |x, y| {
+        let p = image.get_pixel(x, y).0.map(|v| v as f32 / 255.0);
+        Rgba([p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]])
+    });
+    let filtered = image::imageops::resize(
+        &premultiplied,
+        width,
+        height,
+        image::imageops::FilterType::Lanczos3,
+    );
+    RgbaImage::from_fn(width, height, |x, y| {
+        let p = filtered.get_pixel(x, y).0;
+        let alpha = p[3].clamp(0.0, 1.0);
+        Rgba([
+            (p[0] / alpha.max(0.00001) * 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8,
+            (p[1] / alpha.max(0.00001) * 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8,
+            (p[2] / alpha.max(0.00001) * 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8,
+            (alpha * 255.0).round() as u8,
+        ])
+    })
+}
+
+pub fn source_size(document: &Document, layer: &Layer, size: [u32; 2]) -> [u32; 2] {
+    let Some(image) = &layer.pixels else {
+        return [1, 1];
+    };
+    let corners = layer.transform.corners().map(|p| {
+        Point::new(
+            p.x * size[0] as f32 / document.width as f32,
+            p.y * size[1] as f32 / document.height as f32,
+        )
+    });
+    let width = corners[0]
+        .distance(corners[1])
+        .max(corners[3].distance(corners[2]));
+    let height = corners[0]
+        .distance(corners[3])
+        .max(corners[1].distance(corners[2]));
+    let target = |length: f32, original: u32| {
+        // Quantization keeps cached textures stable during small transform changes.
+        let factor = (original as f32 / length.max(1.0)).log2().floor().max(0.0);
+        ((original as f32 / 2.0_f32.powf(factor)) as u32).max(1)
+    };
+    [target(width, image.width()), target(height, image.height())]
+}
+
 pub fn render(document: &Document) -> RgbaImage {
     render_scaled(document, document.width, document.height)
 }
 
 pub fn render_scaled(document: &Document, width: u32, height: u32) -> RgbaImage {
+    let mut filtered = document.clone();
+    for layer in &mut filtered.layers {
+        if let Some(pixels) = &layer.pixels {
+            let [w, h] = source_size(document, layer, [width, height]);
+            if (w, h) != pixels.dimensions() {
+                layer.pixels = Some(std::sync::Arc::new(resize_quality(pixels, w, h)));
+            }
+        }
+    }
+    let document = &filtered;
     let mut output = RgbaImage::new(width, height);
     let layers = paint_order(document);
     output
@@ -207,6 +271,30 @@ mod tests {
     use super::*;
     use crate::document::Mask;
     use std::sync::Arc;
+
+    #[test]
+    fn downsampling_filters_fine_detail_and_preserves_transparent_edge_color() {
+        let checker = RgbaImage::from_fn(64, 64, |x, y| {
+            let value = if (x + y) % 2 == 0 { 0 } else { 255 };
+            Rgba([value, value, value, 255])
+        });
+        let mut doc = Document::new(4, 4).unwrap();
+        let mut layer = Layer::image("checker", checker);
+        layer.transform = crate::document::Transform::new(4, 4);
+        doc.insert(layer);
+        assert!(render(&doc).pixels().all(|p| (125..=130).contains(&p[0])));
+        let edge = RgbaImage::from_fn(16, 16, |x, _| {
+            if x < 8 {
+                Rgba([255, 0, 0, 255])
+            } else {
+                Rgba([0; 4])
+            }
+        });
+        let resized = resize_quality(&edge, 4, 4);
+        for pixel in resized.pixels().filter(|p| p[3] > 0) {
+            assert_eq!(pixel[0], 255);
+        }
+    }
 
     #[test]
     fn folder_visibility_mask_and_clipping_compose() {

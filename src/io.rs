@@ -62,6 +62,37 @@ fn decode_image(bytes: Vec<u8>, used: &mut u64) -> Result<DynamicImage> {
 pub fn import_image(path: &Path) -> Result<RgbaImage> {
     let metadata = fs::metadata(path).with_context(|| format!("Cannot read {}", path.display()))?;
     ensure!(metadata.len() <= MAX_ASSET, "Image exceeds 512 MiB");
+    let extension = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(extension.as_str(), "heic" | "heif" | "hif") {
+        let temporary = tempfile::tempdir()?;
+        let output = temporary.path().join("image.png");
+        let result = std::process::Command::new("heif-convert")
+            .arg(path.canonicalize()?)
+            .arg(&output)
+            .output()
+            .context("HEIC import requires heif-convert (install the libheif-examples package)")?;
+        ensure!(
+            result.status.success(),
+            "HEIC conversion failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        // Collections may be emitted as image-1.png, image-2.png, and so on.
+        let mut files: Vec<_> = fs::read_dir(temporary.path())?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|e| e == "png"))
+            .collect();
+        files.sort();
+        let decoded = if output.exists() {
+            &output
+        } else {
+            files.first().context("HEIC decoder produced no image")?
+        };
+        return import_image(decoded);
+    }
     Ok(decode_image(fs::read(path)?, &mut 0)?.to_rgba8())
 }
 
@@ -463,6 +494,27 @@ pub fn load_compositor(path: &Path) -> Result<Document> {
                 },
             });
         }
+        if let Some(shape) = record["shape"].as_object() {
+            let radius = shape
+                .get("cornerRadius")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0) as f32;
+            ensure!(radius.is_finite() && radius >= 0.0, "Invalid shape radius");
+            let kind = if record["shape"]["kind"] == "Ellipse" {
+                crate::paint::ShapeKind::Ellipse
+            } else if radius > 0.0 {
+                crate::paint::ShapeKind::RoundedRectangle
+            } else {
+                crate::paint::ShapeKind::Rectangle
+            };
+            let color =
+                |key| (number(&record["shape"], key, 0.0).clamp(0.0, 1.0) * 255.0).round() as u8;
+            layer.shape = Some(crate::document::ShapeStyle {
+                kind,
+                color: [color("red"), color("green"), color("blue"), 255],
+                corner_radius: radius,
+            });
+        }
         if !record["adjustment"].is_null() {
             layer.adjustment = Some(comp_adjustment(&record["adjustment"])?);
         }
@@ -498,7 +550,17 @@ pub fn export(document: &Document, path: &Path, quality: u8) -> Result<()> {
             encoder.encode_image(&render::flatten_white(&image))?;
         }
         "png" => {
-            DynamicImage::ImageRgba8(image).write_to(temporary.as_file_mut(), ImageFormat::Png)?
+            let mut encoder =
+                png::Encoder::new(temporary.as_file_mut(), image.width(), image.height());
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let pixels_per_meter = (document.resolution / 0.0254).round() as u32;
+            encoder.set_pixel_dims(Some(png::PixelDimensions {
+                xppu: pixels_per_meter,
+                yppu: pixels_per_meter,
+                unit: png::Unit::Meter,
+            }));
+            encoder.write_header()?.write_image_data(image.as_raw())?;
         }
         "tif" | "tiff" => {
             DynamicImage::ImageRgba8(image).write_to(temporary.as_file_mut(), ImageFormat::Tiff)?
@@ -517,6 +579,36 @@ pub fn export(document: &Document, path: &Path, quality: u8) -> Result<()> {
 mod tests {
     use super::*;
     use image::{GrayImage, Luma, Rgba};
+
+    #[test]
+    fn exports_all_formats_and_png_print_resolution() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut doc = Document::new(12, 8).unwrap();
+        doc.resolution = 300.0;
+        doc.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+            12,
+            8,
+            Rgba([180, 90, 30, 128]),
+        )));
+        for extension in ["png", "jpg", "tiff", "webp"] {
+            let path = temporary.path().join(format!("image.{extension}"));
+            export(&doc, &path, 95).unwrap();
+            let image = import_image(&path).unwrap();
+            assert_eq!(image.dimensions(), (12, 8));
+            if extension == "jpg" {
+                assert_eq!(image.get_pixel(0, 0)[3], 255);
+            } else {
+                assert_eq!(image.get_pixel(0, 0)[3], 128);
+            }
+        }
+        let decoder = png::Decoder::new(std::io::BufReader::new(
+            File::open(temporary.path().join("image.png")).unwrap(),
+        ));
+        let reader = decoder.read_info().unwrap();
+        let density = reader.info().pixel_dims.unwrap();
+        assert_eq!(density.xppu, 11811);
+        assert_eq!(density.unit, png::Unit::Meter);
+    }
 
     #[test]
     fn imports_swift_enum_dictionaries_and_individual_color_channels() {

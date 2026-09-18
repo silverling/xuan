@@ -39,7 +39,7 @@ pub struct GpuCompositor {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
-    sources: HashMap<usize, Source>,
+    sources: HashMap<(usize, [u32; 2]), Source>,
     size: [u32; 2],
     buffers: [wgpu::Texture; 2],
     display: wgpu::Texture,
@@ -121,16 +121,20 @@ impl GpuCompositor {
                 continue;
             }
             if let Some(pixels) = &layer.pixels {
-                let key = Arc::as_ptr(pixels) as usize;
+                let source_size = render::source_size(document, layer, size);
+                let key = (Arc::as_ptr(pixels) as usize, source_size);
                 retained.insert(key);
                 self.sources.entry(key).or_insert_with(|| {
+                    let scaled = ((source_size[0], source_size[1]) != pixels.dimensions())
+                        .then(|| render::resize_quality(pixels, source_size[0], source_size[1]));
+                    let uploaded = scaled.as_ref().unwrap_or(pixels);
                     let texture = self.device.create_texture_with_data(
                         &self.queue,
                         &wgpu::TextureDescriptor {
                             label: Some("xuan layer source"),
                             size: wgpu::Extent3d {
-                                width: pixels.width(),
-                                height: pixels.height(),
+                                width: uploaded.width(),
+                                height: uploaded.height(),
                                 depth_or_array_layers: 1,
                             },
                             mip_level_count: 1,
@@ -141,7 +145,7 @@ impl GpuCompositor {
                             view_formats: &[],
                         },
                         wgpu::util::TextureDataOrder::LayerMajor,
-                        pixels.as_raw(),
+                        uploaded.as_raw(),
                     );
                     Source {
                         pixels: Arc::downgrade(pixels),
@@ -203,7 +207,13 @@ impl GpuCompositor {
             let source = layer
                 .pixels
                 .as_ref()
-                .map(|pixels| &self.sources[&(Arc::as_ptr(pixels) as usize)].texture)
+                .map(|pixels| {
+                    &self.sources[&(
+                        Arc::as_ptr(pixels) as usize,
+                        render::source_size(document, layer, size),
+                    )]
+                        .texture
+                })
                 .unwrap_or(&self.blank);
             self.dispatch(
                 &mut encoder,

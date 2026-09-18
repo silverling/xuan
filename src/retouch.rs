@@ -204,6 +204,7 @@ fn replace_raster(document: &mut Document, pixels: RgbaImage) {
             mask.placement = Some(mask.placement.unwrap_or(layer.transform));
             mask.linked = false;
         }
+        layer.shape = None;
         layer.pixels = Some(Arc::new(pixels));
         layer.transform = transform;
     }

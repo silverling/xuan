@@ -1071,7 +1071,13 @@ impl EditorApp {
             }
         };
         match result {
-            Ok(()) => session.history.commit(),
+            Ok(()) => match paint::refresh_shapes(&mut session.document) {
+                Ok(()) => session.history.commit(),
+                Err(error) => {
+                    session.history.cancel(&mut session.document);
+                    self.error = Some(error.to_string());
+                }
+            },
             Err(error) => {
                 session.history.cancel(&mut session.document);
                 self.error = Some(error.to_string());

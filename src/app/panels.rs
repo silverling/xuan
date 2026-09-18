@@ -284,7 +284,7 @@ impl EditorApp {
             });
         if changed && let Some(transform) = transform {
             let mask_target = self.mask_target;
-            self.edit("Transform", |doc| {
+            self.edit_continuous("Transform", |doc| {
                 xuan::operations::apply_transform(doc, transform, mask_target)
             });
         }
@@ -514,7 +514,7 @@ impl EditorApp {
             s.collapsed.insert(id);
         }
         if let Some((blend, opacity, locked)) = appearance {
-            self.edit("Layer Appearance", |doc| {
+            self.edit_continuous("Layer Appearance", |doc| {
                 if let Some(l) = doc.active_mut() {
                     l.blend = blend;
                     l.opacity = opacity;
