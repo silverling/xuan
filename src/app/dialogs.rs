@@ -85,13 +85,13 @@ impl EditorApp {
                 }
                 Dialog::About => {
                     let mut open = true;
-                    egui::Window::new("About xuan")
+                    egui::Window::new("About Xuan")
                         .open(&mut open)
                         .resizable(false)
                         .collapsible(false)
                         .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                         .show(ctx, |ui| {
-                            ui.heading("xuan");
+                            ui.heading("Xuan");
                             ui.label("A space for your next composition.");
                             ui.add_space(12.0);
                             ui.label("Native Linux image editor · Rust + egui + wgpu");

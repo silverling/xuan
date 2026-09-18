@@ -19,7 +19,7 @@ fn main() -> eframe::Result {
             }
             "--help" | "-h" => {
                 println!(
-                    "xuan — native Linux image compositor\n\nUsage: xuan [IMAGE|PROJECT ...] [--demo] [--screenshot PATH] [--screenshot-panel levels|hue|curves|export]\n\nProjects use .xuan; original .comp directory packages can also be opened."
+                    "xuan —  native Linux image compositor\n\nUsage: xuan [IMAGE|PROJECT ...] [--demo] [--screenshot PATH] [--screenshot-panel levels|hue|curves|export]\n\nProjects use .xuan; original .comp directory packages can also be opened."
                 );
                 return Ok(());
             }
@@ -36,7 +36,7 @@ fn main() -> eframe::Result {
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("xuan")
+            .with_title("Xuan")
             .with_icon(icon)
             .with_app_id("org.xuan.Editor")
             .with_inner_size([1280.0, 860.0])
@@ -45,7 +45,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "xuan",
+        "Xuan",
         options,
         Box::new(move |cc| {
             let mut app = app::EditorApp::new(cc, paths, demo, screenshot);

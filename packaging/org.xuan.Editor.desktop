@@ -1,7 +1,7 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=xuan
+Name=Xuan
 GenericName=Image Editor
 Comment=Compose and edit images with layers, masks, and adjustments
 Exec=xuan %F

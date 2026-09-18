@@ -76,7 +76,7 @@ impl EditorApp {
             .show(ctx, |ui| {
                 ui.add_enabled_ui(!blocked, |ui| {
                     egui::MenuBar::new().ui(ui, |ui| {
-                        ui.label(RichText::new("xuan").strong().size(13.0));
+                        ui.label(RichText::new("Xuan").strong().size(13.0));
                         ui.add_space(10.0);
                         ui.menu_button("File", |ui| {
                             item(ui, "New Canvas…", "Ctrl+N", "new", &mut action);
@@ -276,7 +276,7 @@ impl EditorApp {
                         });
                         ui.menu_button("Help", |ui| {
                             item(ui, "Keyboard Shortcuts", "F1", "shortcuts", &mut action);
-                            item(ui, "About xuan", "", "about", &mut action);
+                            item(ui, "About Xuan", "", "about", &mut action);
                         });
                     });
                 });

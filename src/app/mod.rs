@@ -591,7 +591,7 @@ impl EditorApp {
     fn open_dialog(&mut self, as_layer: bool) {
         if let Some(paths) = rfd::FileDialog::new()
             .add_filter(
-                "Images and xuan projects",
+                "Images and Xuan projects",
                 &[
                     "xuan", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "heic",
                     "heif",
@@ -1129,9 +1129,9 @@ impl EditorApp {
         {
             session.history.commit();
         }
-        let title = self.session().map_or("xuan".to_owned(), |s| {
+        let title = self.session().map_or("Xuan".to_owned(), |s| {
             format!(
-                "{}{} — xuan",
+                "{}{} —  Xuan",
                 s.title,
                 if s.history.dirty() { " •" } else { "" }
             )

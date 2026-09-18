@@ -1,4 +1,4 @@
-# xuan
+# Xuan
 
 A native Linux image editor, ported from Compositor and rewritten in Rust with **egui** and **wgpu**. It retains the original charcoal theme, compact contextual controls, vertical tool rail, tabbed workspace, and Layers panel.
 
@@ -63,7 +63,7 @@ The screenshot helper also supports `hue`, `curves`, and `export` panels. It cap
 
 ## Port differences
 
-The editor uses an 8-bit sRGB raster pipeline. Embedded ICC profiles are not converted or preserved. `.comp` versions 1–7 can be imported; xuan does not write the original macOS format. Selections and undo history are session state and are not saved in project archives.
+The editor uses an 8-bit sRGB raster pipeline. Embedded ICC profiles are not converted or preserved. `.comp` versions 1–7 can be imported; Xuan does not write the original macOS format. Selections and undo history are session state and are not saved in project archives.
 
 Remove Background uses a border-color matte, intended for simple backgrounds, instead of Apple's foreground-recognition service. Content-aware fill and healing use a portable texture-matching implementation, so results differ from Compositor. The canvas preview is capped at 4096 pixels per side; export uses full document dimensions. Large synchronous filters, imports, and saves can temporarily occupy the UI thread. Vulkan is the verified rendering path; OpenGL surface availability depends on the driver.
 
