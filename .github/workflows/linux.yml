@@ -1,0 +1,37 @@
+name: Linux
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install Linux libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libvulkan1 mesa-vulkan-drivers libheif-examples desktop-file-utils xvfb
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+      - name: Check and test
+        run: scripts/check.sh --gpu
+      - name: Validate desktop integration
+        run: desktop-file-validate packaging/org.xuan.Editor.desktop
+      - name: Package
+        run: scripts/package.sh
+      - name: Native X11 smoke test
+        run: xvfb-run -a target/release/xuan --demo --screenshot /tmp/xuan.png
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: xuan-linux-x86_64
+          path: dist/*.tar.gz*
+          if-no-files-found: error

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=xuan
+GenericName=Image Editor
+Comment=Compose and edit images with layers, masks, and adjustments
+Exec=xuan %F
+Icon=org.xuan.Editor
+Terminal=false
+Categories=Graphics;2DGraphics;RasterGraphics;
+MimeType=application/x-xuan-project;image/png;image/jpeg;image/tiff;image/webp;image/bmp;image/gif;image/heic;image/heif;
+StartupNotify=true
+StartupWMClass=org.xuan.Editor
+Keywords=image;photo;layer;compositor;graphics;
