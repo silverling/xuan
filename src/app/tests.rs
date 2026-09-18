@@ -210,6 +210,7 @@ fn live_adjustment_cancel_restores_original_and_export_renders() {
     let (context, mut app) = app();
     app.dimensions = [16, 16];
     app.new_document();
+    app.brush.color = [180, 140, 100, 255];
     app.command("fill_fg");
     let original = render::render(&app.session().unwrap().document);
     app.start_adjustment(

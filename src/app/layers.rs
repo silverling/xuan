@@ -102,7 +102,7 @@ impl EditorApp {
         egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(12, 7))
             .show(ui, |ui| {
-                ui.add_enabled_ui(active.is_some(), |ui| {
+                ui.add_enabled_ui(active.is_some_and(|layer| !layer.group), |ui| {
                     let mut blend = active.map_or(BlendMode::Normal, |l| l.blend);
                     let mut opacity = active.map_or(1.0, |l| l.opacity);
                     let mut locked = active.is_some_and(|l| l.locked);

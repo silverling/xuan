@@ -33,7 +33,7 @@ impl Default for Brush {
             diameter: 40.0,
             hardness: 0.8,
             opacity: 1.0,
-            color: [235, 235, 235, 255],
+            color: [0, 0, 0, 255],
         }
     }
 }

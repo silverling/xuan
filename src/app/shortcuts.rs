@@ -171,7 +171,7 @@ impl EditorApp {
                     self.edit("Layer Opacity", |doc| {
                         let selected = doc.selected.clone();
                         for l in &mut doc.layers {
-                            if selected.contains(&l.id) {
+                            if selected.contains(&l.id) && !l.group {
                                 l.opacity = opacity;
                             }
                         }
