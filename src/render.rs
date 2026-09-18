@@ -139,35 +139,44 @@ pub fn render_scaled(document: &Document, width: u32, height: u32) -> RgbaImage 
                 (x as f32 + 0.5) * document.width as f32 / width as f32,
                 (y as f32 + 0.5) * document.height as f32 / height as f32,
             );
-            let mut pixel = [0.0; 4];
-            for layer in &layers {
-                let coverage = inherited_coverage(document, layer, point);
-                if coverage == 0.0 {
-                    continue;
-                }
-                if let Some(adjustment) = &layer.adjustment {
-                    let adjusted = crate::effects::adjust(pixel, adjustment, point);
-                    let mut amount = coverage * layer.opacity * own_mask(layer, point);
-                    if let Some(source) = layer
-                        .clip_to
-                        .and_then(|id| document.layers.iter().find(|l| l.id == id))
-                    {
-                        amount *= layer_alpha(document, source, point, 0);
-                    }
-                    for i in 0..3 {
-                        pixel[i] += (adjusted[i] - pixel[i]) * amount;
-                    }
-                    continue;
-                }
-                if let Some(image) = &layer.pixels {
-                    let mut source = sample(image, layer.transform.inverse(point));
-                    source[3] = layer_alpha(document, layer, point, 0) * coverage;
-                    pixel = composite(pixel, source, layer.blend);
-                }
-            }
+            let pixel = composite_at(document, &layers, point);
             target.copy_from_slice(&pixel.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
         });
     output
+}
+
+pub fn pixel_at(document: &Document, point: Point) -> [f32; 4] {
+    composite_at(document, &paint_order(document), point)
+}
+
+fn composite_at(document: &Document, layers: &[&Layer], point: Point) -> [f32; 4] {
+    let mut pixel = [0.0; 4];
+    for layer in layers {
+        let coverage = inherited_coverage(document, layer, point);
+        if coverage == 0.0 {
+            continue;
+        }
+        if let Some(adjustment) = &layer.adjustment {
+            let adjusted = crate::effects::adjust(pixel, adjustment, point);
+            let mut amount = coverage * layer.opacity * own_mask(layer, point);
+            if let Some(source) = layer
+                .clip_to
+                .and_then(|id| document.layers.iter().find(|l| l.id == id))
+            {
+                amount *= layer_alpha(document, source, point, 0);
+            }
+            for i in 0..3 {
+                pixel[i] += (adjusted[i] - pixel[i]) * amount;
+            }
+            continue;
+        }
+        if let Some(image) = &layer.pixels {
+            let mut source = sample(image, layer.transform.inverse(point));
+            source[3] = layer_alpha(document, layer, point, 0) * coverage;
+            pixel = composite(pixel, source, layer.blend);
+        }
+    }
+    pixel
 }
 
 pub fn hit_test(document: &Document, point: Point) -> Option<uuid::Uuid> {

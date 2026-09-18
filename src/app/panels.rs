@@ -431,7 +431,7 @@ impl EditorApp {
                     });
                 });
                 ui.separator();
-                let list_height=(ui.available_height()-52.0).max(100.0);
+                let list_height=(ui.available_height()-76.0).max(40.0);
                 egui::ScrollArea::vertical().id_salt("layers_scroll").max_height(list_height).min_scrolled_height(list_height).auto_shrink([false,false]).show(ui,|ui|{
                     if self.sessions.is_empty(){
                         ui.add_space((list_height*0.5-48.0).max(10.0));

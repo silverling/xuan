@@ -41,7 +41,7 @@ impl EditorApp {
                     session.pan = Vec2::ZERO;
                     session.fit = false;
                 }
-                session.refresh(ctx);
+                session.refresh(ctx, self.gpu_state.as_ref());
                 let zoom = session.zoom;
                 let size = vec2(
                     session.document.width as f32,
@@ -71,9 +71,14 @@ impl EditorApp {
                             );
                         }
                     }
-                    if let Some(texture) = &session.texture {
+                    if let Some(texture) = session
+                        .gpu
+                        .as_ref()
+                        .and_then(|g| g.texture)
+                        .or_else(|| session.texture.as_ref().map(|t| t.id()))
+                    {
                         painter.image(
-                            texture.id(),
+                            texture,
                             canvas,
                             Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)),
                             Color32::WHITE,
@@ -508,16 +513,8 @@ impl EditorApp {
                 });
             }
             Tool::Dropper => {
-                if let Some(session) = self.session()
-                    && let Some(image) = &session.composite
-                {
-                    let pixel = render::sample(
-                        image,
-                        Point::new(
-                            point.x / session.document.width as f32,
-                            point.y / session.document.height as f32,
-                        ),
-                    );
+                if let Some(session) = self.session() {
+                    let pixel = render::pixel_at(&session.document, point);
                     self.brush.color = pixel.map(|v| (v * 255.0).round() as u8);
                 }
             }

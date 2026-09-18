@@ -9,6 +9,7 @@ license = "MIT"
 [dependencies]
 anyhow = "1.0"
 arboard = "3.6"
+bytemuck = { version = "1.25", features = ["derive"] }
 eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland", "persistence"] }
 egui = "0.33.3"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "tiff", "webp", "bmp", "gif"] }
@@ -20,6 +21,9 @@ tempfile = "3"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 wgpu = { version = "27.0.1", default-features = false, features = ["vulkan", "gles", "wgsl"] }
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+pollster = "0.4"
 
 [profile.dev]
 opt-level = 1

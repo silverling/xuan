@@ -3798,9 +3798,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "bytemuck",
  "eframe",
  "egui",
  "image",
+ "pollster",
  "rayon",
  "rfd",
  "serde",

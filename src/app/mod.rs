@@ -1,5 +1,6 @@
 mod canvas;
 mod dialogs;
+mod gpu_preview;
 mod icons;
 mod menus;
 mod panels;
@@ -156,6 +157,8 @@ struct Session {
     fit: bool,
     dirty_preview: bool,
     texture: Option<TextureHandle>,
+    gpu: Option<gpu_preview::GpuPreview>,
+    preview_size: [u32; 2],
     composite: Option<Arc<RgbaImage>>,
     thumbnails: HashMap<(Uuid, bool), TextureHandle>,
     collapsed: HashSet<Uuid>,
@@ -173,6 +176,8 @@ impl Session {
             fit: true,
             dirty_preview: true,
             texture: None,
+            gpu: None,
+            preview_size: [0, 0],
             composite: None,
             thumbnails: HashMap::new(),
             collapsed: HashSet::new(),
@@ -183,16 +188,40 @@ impl Session {
         self.dirty_preview = true;
     }
 
-    fn refresh(&mut self, ctx: &egui::Context) {
-        if !self.dirty_preview {
-            return;
-        }
-        let factor = (1600.0 / self.document.width.max(self.document.height) as f32).min(1.0);
-        let image = render::render_scaled(
-            &self.document,
+    fn refresh(&mut self, ctx: &egui::Context, state: Option<&eframe::egui_wgpu::RenderState>) {
+        let max_side = state.map_or(1600, |s| {
+            s.device.limits().max_texture_dimension_2d.min(4096)
+        });
+        let factor =
+            (max_side as f32 / self.document.width.max(self.document.height) as f32).min(1.0);
+        let size = [
             (self.document.width as f32 * factor).round().max(1.0) as u32,
             (self.document.height as f32 * factor).round().max(1.0) as u32,
-        );
+        ];
+        if !self.dirty_preview && size == self.preview_size {
+            return;
+        }
+        self.preview_size = size;
+        if let Some(state) = state.filter(|s| {
+            s.device.limits().max_compute_workgroups_per_dimension > 0
+                && self.document.layers.iter().all(|l| {
+                    l.pixels.as_ref().is_none_or(|p| {
+                        p.width().max(p.height()) <= s.device.limits().max_texture_dimension_2d
+                    })
+                })
+        }) {
+            let preview = self
+                .gpu
+                .get_or_insert_with(|| gpu_preview::GpuPreview::new(state));
+            preview.render(&self.document, size, self.zoom >= 1.0);
+            self.texture = None;
+            self.composite = None;
+            self.thumbnails.clear();
+            self.dirty_preview = false;
+            return;
+        }
+        self.gpu = None;
+        let image = render::render_scaled(&self.document, size[0], size[1]);
         let color = egui::ColorImage::from_rgba_unmultiplied(
             [image.width() as usize, image.height() as usize],
             image.as_raw(),
@@ -254,6 +283,7 @@ struct Gesture {
 }
 
 pub struct EditorApp {
+    gpu_state: Option<eframe::egui_wgpu::RenderState>,
     sessions: Vec<Session>,
     current: usize,
     tool: Tool,
@@ -310,7 +340,9 @@ impl EditorApp {
         demo: bool,
         screenshot: Option<PathBuf>,
     ) -> Self {
-        Self::with_context(&cc.egui_ctx, paths, demo, screenshot)
+        let mut app = Self::with_context(&cc.egui_ctx, paths, demo, screenshot);
+        app.gpu_state = cc.wgpu_render_state.clone();
+        app
     }
 
     fn with_context(
@@ -321,6 +353,7 @@ impl EditorApp {
     ) -> Self {
         theme::apply(ctx);
         let mut app = Self {
+            gpu_state: None,
             sessions: Vec::new(),
             current: 0,
             tool: Tool::Move,
