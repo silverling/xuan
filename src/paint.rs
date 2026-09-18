@@ -77,16 +77,26 @@ pub fn prepare_mask(layer: &mut Layer) -> Result<()> {
 
 /// A segment covers the complete swept brush, preventing gaps at fast pointer speeds.
 /// Optional source pixels are in document coordinates (used by clone and retouch tools).
+pub struct StrokeOptions<'a> {
+    pub mode: PaintMode,
+    pub mask_target: bool,
+    pub source: Option<&'a RgbaImage>,
+    pub clone_offset: Point,
+}
+
 pub fn stroke(
     document: &mut Document,
     from: Point,
     to: Point,
     brush: &Brush,
-    mode: PaintMode,
-    mask_target: bool,
-    source: Option<&RgbaImage>,
-    clone_offset: Point,
+    options: StrokeOptions<'_>,
 ) -> Result<()> {
+    let StrokeOptions {
+        mode,
+        mask_target,
+        source,
+        clone_offset,
+    } = options;
     let selection = document.selection.clone();
     let Some(layer) = document.active_mut() else {
         bail!("Select a layer first");
@@ -434,10 +444,12 @@ mod tests {
             Point::new(1.0, 5.0),
             Point::new(28.0, 5.0),
             &brush,
-            PaintMode::Paint,
-            false,
-            None,
-            Point::default(),
+            StrokeOptions {
+                mode: PaintMode::Paint,
+                mask_target: false,
+                source: None,
+                clone_offset: Point::default(),
+            },
         )
         .unwrap();
         let pixels = doc.active().unwrap().pixels.as_ref().unwrap();
