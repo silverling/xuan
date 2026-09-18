@@ -1,0 +1,34 @@
+[package]
+name = "xuan"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A native Linux image compositor, built with Rust, wgpu and egui"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+arboard = "3.6"
+eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland", "persistence"] }
+egui = "0.33.3"
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "tiff", "webp", "bmp", "gif"] }
+rayon = "1.11"
+rfd = "0.15.4"
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = "1.0"
+uuid = { version = "1.18", features = ["v4", "serde"] }
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
