@@ -26,33 +26,54 @@ mkdir -p dist
 xuan_temporary=$(mktemp -d "$xuan_root/dist/.package.XXXXXX")
 trap 'rm -rf -- "$xuan_temporary"' EXIT
 xuan_stage="$xuan_temporary/$xuan_name"
-mkdir -p "$xuan_stage"/{bin,assets,packaging,scripts,docs}
+mkdir -p "$xuan_stage"/{bin,share,scripts}
 install -m755 target/release/xuan "$xuan_stage/bin/xuan"
 strip "$xuan_stage/bin/xuan"
-install -m644 LICENSE README.md "$xuan_stage/"
-install -m644 THIRD_PARTY.md "$xuan_stage/"
-mkdir -p "$xuan_stage/licenses"
-install -m644 licenses/* "$xuan_stage/licenses/"
-cp -R assets/icons "$xuan_stage/assets/"
-install -m644 assets/Xuan.png "$xuan_stage/assets/"
-install -Dm644 assets/fonts/Inter-LICENSE.txt "$xuan_stage/assets/fonts/Inter-LICENSE.txt"
-mkdir -p "$xuan_stage/vendor/egui-winit"
-install -m644 vendor/egui-winit/{LICENSE-MIT,LICENSE-APACHE,PATCH.md} "$xuan_stage/vendor/egui-winit/"
-install -m644 packaging/*.desktop packaging/*.xml "$xuan_stage/packaging/"
-install -m644 docs/*.md "$xuan_stage/docs/"
-cp -R docs/screenshots "$xuan_stage/docs/"
-cp -R .github "$xuan_stage/"
+cp -R assets/icons "$xuan_stage/share/"
+install -Dm644 packaging/me.silverl.xuan.desktop "$xuan_stage/share/applications/me.silverl.xuan.desktop"
+install -Dm644 packaging/me.silverl.xuan.xml "$xuan_stage/share/mime/packages/me.silverl.xuan.xml"
+xuan_licenses="$xuan_stage/share/licenses/xuan"
+install -Dm644 LICENSE "$xuan_licenses/LICENSE"
+install -m644 licenses/rawler-LGPL-2.1.txt "$xuan_licenses/"
+install -m644 assets/fonts/Inter-LICENSE.txt "$xuan_licenses/"
+for xuan_license in LICENSE-MIT LICENSE-APACHE; do
+    install -Dm644 "vendor/egui-winit/$xuan_license" "$xuan_licenses/egui-winit/$xuan_license"
+done
+python3 scripts/package-docs.py "$xuan_stage/share/doc/xuan" "$xuan_version"
 install -m755 scripts/install.sh "$xuan_stage/scripts/"
-# Include the application and exact LGPL decoder sources so recipients can
-# rebuild/relink the executable after modifying Rawler.
-mkdir -p "$xuan_stage/source"
-cp -R src assets vendor licenses scripts packaging docs .github "$xuan_stage/source/"
-install -m644 Cargo.lock LICENSE README.md THIRD_PARTY.md "$xuan_stage/source/"
+chmod -R u=rwX,go=rX "$xuan_stage"
+
+# Distribute matching rebuildable sources alongside every binary format.
+xuan_source_name="xuan-${xuan_version}-source"
+xuan_source="$xuan_temporary/$xuan_source_name"
+mkdir -p "$xuan_source"
+tar --exclude='*.env' --exclude='__pycache__' --exclude='*.pyc' --exclude='.git' \
+    -cf - src assets vendor licenses scripts packaging docs .github |
+    tar -xf - -C "$xuan_source"
+install -m644 Cargo.toml Cargo.lock LICENSE README.md THIRD_PARTY.md "$xuan_source/"
 xuan_host=$(rustc -vV | sed -n 's/^host: //p')
 xuan_rawler_manifest=$(cargo metadata --locked --format-version 1 --filter-platform "$xuan_host" |
     python3 -c 'import json, sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "rawler"))')
-cp -R "$(dirname -- "$xuan_rawler_manifest")" "$xuan_stage/source/vendor/rawler"
-sed '/^\[patch.crates-io\]$/a rawler = { path = "vendor/rawler" }' Cargo.toml > "$xuan_stage/source/Cargo.toml"
+mkdir -p "$xuan_source/vendor/rawler"
+cp -R "$(dirname -- "$xuan_rawler_manifest")/." "$xuan_source/vendor/rawler/"
+python3 - "$xuan_source/Cargo.toml" <<'PYTHON'
+import sys
+import tomllib
+from pathlib import Path
+
+manifest = Path(sys.argv[1])
+text = manifest.read_text()
+if "rawler" not in tomllib.loads(text).get("patch", {}).get("crates-io", {}):
+    text = text.replace('[patch.crates-io]\n', '[patch.crates-io]\nrawler = { path = "vendor/rawler" }\n', 1)
+manifest.write_text(text)
+PYTHON
+# Resolve the path patch now so recipients can rebuild with --locked.
+cargo metadata --offline --format-version 1 --filter-platform "$xuan_host" \
+    --manifest-path "$xuan_source/Cargo.toml" > /dev/null
+tar -C "$xuan_temporary" -czf "dist/$xuan_source_name.tar.gz" "$xuan_source_name"
+chmod 644 "dist/$xuan_source_name.tar.gz"
+(cd dist && sha256sum "$xuan_source_name.tar.gz" > "$xuan_source_name.tar.gz.sha256")
+printf 'Created %s/dist/%s.tar.gz\n' "$xuan_root" "$xuan_source_name"
 if [[ "$xuan_format" == archive || "$xuan_format" == all ]]; then
     tar -C "$xuan_temporary" -czf "dist/$xuan_name.tar.gz" "$xuan_name"
     chmod 644 "dist/$xuan_name.tar.gz"

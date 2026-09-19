@@ -32,14 +32,3 @@ Decoding, previews, full-resolution development, and TIFF encoding run in backgr
 This implements the Develop → embedded RAW layer → Develop workflow and the controls listed above. It is not full Affinity feature parity. Camera support follows Rawler 0.7.2's NEF/NRW decoder and requires an RGB Bayer sensor. Unsupported/damaged files produce an error. The camera's embedded JPEG is not used as the development source.
 
 Lens correction is manual; there is no automatic lens-profile database. Noise reduction is a conventional local filter, not a learned denoiser. Defringing suppresses purple excess and can affect purple objects. There is no reconstruction of saturated sensor channels, dual-illuminant profile interpolation, custom camera/ICC output profiles, wide-gamut/HDR compositor, RAW spot-healing tool, automatic subject masks, or batch preset development. Use the photo editor's healing tools after developing/rasterizing. RAW metadata remains in the project; the TIFF export currently includes the output color profile but does not copy shooting EXIF.
-
-## Verification with a local NEF
-
-The regular test suite uses synthetic camera-linear data and small embedded-asset fixtures. Camera files are not committed to the repository. Optional tests use a local NEF:
-
-```sh
-XUAN_TEST_NEF=/path/to/photo.NEF cargo test --locked sample_nef -- --ignored --nocapture
-cargo run --locked -- /path/to/photo.NEF --screenshot /tmp/develop.png
-```
-
-`XUAN_TEST_RAW_PREVIEW=/tmp/preview.png` optionally writes the engine test's default preview. The provided Nikon Z6 III sample was verified at 4032 × 6048 after orientation, including full-resolution rendering, project save/load, reopening Develop and cancellation.

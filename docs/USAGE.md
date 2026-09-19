@@ -20,7 +20,7 @@ sudo dnf install ./xuan-*-linux-x86_64.rpm
 
 Install one version at a time. These packages add Xuan to the application menu and provide the `xuan` command. Remove them with `sudo apt remove xuan` or `sudo dnf remove xuan`.
 
-For a portable `.tar.gz` archive, extract it and run:
+For a portable `xuan-<version>-linux-<architecture>.tar.gz` archive, extract it and run:
 
 ```sh
 scripts/install.sh                 # installs under ~/.local
@@ -30,6 +30,8 @@ scripts/install.sh                 # installs under ~/.local
 The installer adds a desktop launcher, icons, and the `.xuan` file association. Use `scripts/install.sh /custom/prefix` to choose another location, and add the installation prefix's `bin` directory to `PATH`. You can also run `bin/xuan` directly from the extracted archive.
 
 Each download has a matching `.sha256` file. From the download directory, verify it with `sha256sum --check <package-file>.sha256`.
+
+The separate `xuan-<version>-source.tar.gz` download is for rebuilding the application. The binary packages include a `SOURCES.md` notice under `share/doc/xuan` (`/usr/share/doc/xuan` for Debian/RPM installations) with a link to the matching source release.
 
 Once `xuan` is on `PATH`:
 

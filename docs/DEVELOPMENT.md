@@ -39,13 +39,15 @@ The installer adds a desktop launcher, icons, and the `.xuan` file association. 
 scripts/package.sh                 # portable archive (default)
 scripts/package.sh deb             # Debian/Ubuntu package
 scripts/package.sh rpm             # RPM package
-scripts/package.sh all             # all three formats
-python3 scripts/check-packages.py  # inspect and extract all three packages
+scripts/package.sh all             # all three binary formats and matching sources
+python3 scripts/check-packages.py  # inspect binary packages and source archive
 ```
 
-Outputs and individual SHA-256 checksums are written to `dist/`. Packaging requires Python **3.11+**, binutils, and the normal build prerequisites. Debian packaging additionally needs `dpkg-deb`; RPM packaging needs `rpmbuild`. On Debian/Ubuntu, install the packaging and inspection tools with `sudo apt install dpkg rpm cpio binutils desktop-file-utils`. Native x86_64 and aarch64 builds are supported; cross-compilation is not supported by these scripts.
+Outputs and individual SHA-256 checksums are written to `dist/`. Every format also produces `xuan-<version>-source.tar.gz`; distribute that matching source archive alongside the binaries. Packaging requires Python **3.11+**, binutils, and the normal build prerequisites. Debian packaging additionally needs `dpkg-deb`; RPM packaging needs `rpmbuild`. On Debian/Ubuntu, install the packaging and inspection tools with `sudo apt install dpkg rpm cpio binutils desktop-file-utils`. Native x86_64 and aarch64 builds are supported; cross-compilation is not supported by these scripts.
 
-A portable archive includes `bin/xuan`, `scripts/install.sh`, and rebuildable sources, including the LGPL RAW decoder. It can run directly after extraction. Native packages install under `/usr` and include `/usr/share/doc/xuan/source.tar.gz` for rebuilding or relinking. Both formats preserve the patched egui-winit sources and the exact Rawler sources. See [third-party notices](../THIRD_PARTY.md).
+A portable archive includes `bin/xuan`, `scripts/install.sh`, and a `share/` directory for desktop integration, icons, licenses, and user guides. It can run directly after extraction. Debian and RPM packages install the same application files under `/usr`. Binary packages omit source code, CI workflows, original artwork, development guides, and screenshots. Their `share/doc/xuan/SOURCES.md` notice points to the exact source download; links to development documentation point to the release's repository tag.
+
+The separate source archive contains the application and build assets, the patched egui-winit sources, and the exact Rawler sources. Its manifest and lockfile use the bundled Rawler directory so `cargo build --release --locked` works after extraction. Other dependencies are downloaded from the Cargo registry. See [third-party notices](../THIRD_PARTY.md).
 
 Package versions come from `Cargo.toml`. Prerelease versions such as `0.2.0-rc.1` become `0.2.0~rc.1` in Debian/RPM metadata so they sort before the final release. Build metadata (`+...`) is not supported. The Debian package records the executable's required glibc version; RPM derives ELF library requirements automatically. Both declare desktop libraries that are loaded at runtime.
 
@@ -53,7 +55,7 @@ Build on the oldest distribution you intend to support. The locally produced arc
 
 ## GitHub releases
 
-The [release workflow](../.github/workflows/release.yml) runs when a `v*` tag is pushed. It rejects tags that do not match the package version in `Cargo.toml`, then runs the shared Linux checks, builds all three x86_64 packages on Ubuntu 24.04, verifies their contents and checksums, and tests Debian installation, native startup, and removal.
+The [release workflow](../.github/workflows/release.yml) runs when a `v*` tag is pushed. It rejects tags that do not match the package version in `Cargo.toml`, then runs the shared Linux checks, builds all three x86_64 packages and the matching source archive on Ubuntu 24.04, verifies their contents and checksums, and tests Debian installation, native startup, and removal. Package checks reject development files in binary payloads and verify the source archive's vendored dependencies and resolved lockfile.
 
 To release, update the version in `Cargo.toml` and the `xuan` entry in `Cargo.lock`, commit the changes, then create and push the matching tag. For example, for version `0.2.0`:
 
@@ -62,7 +64,7 @@ git tag -a v0.2.0 -m 'Release v0.2.0'
 git push origin v0.2.0
 ```
 
-After validation succeeds, [changelogithub](https://github.com/antfu-collective/changelogithub) generates release notes from conventional commits. The GitHub CLI uploads the `.tar.gz`, `.deb`, `.rpm`, and their checksums, replacing matching assets on retries and failing the workflow if an upload fails. The workflow fetches the full Git history and uses pinned changelogithub **15.0.5** with Node.js 24. Only the publishing job receives `contents: write`; it uses the built-in `GITHUB_TOKEN` and needs no separate release secret. Prerelease tags such as `v0.2.0-rc.1` are marked as GitHub prereleases.
+After validation succeeds, [changelogithub](https://github.com/antfu-collective/changelogithub) generates release notes from conventional commits. The GitHub CLI uploads the three binary packages, matching source archive, and all four checksums. Missing artifacts fail the workflow before publication; retries replace matching assets and upload failures fail the workflow. The workflow fetches the full Git history and uses pinned changelogithub **15.0.5** with Node.js 24. Only the publishing job receives `contents: write`; it uses the built-in `GITHUB_TOKEN` and needs no separate release secret. Prerelease tags such as `v0.2.0-rc.1` are marked as GitHub prereleases.
 
 Preview release notes locally without publishing:
 
@@ -90,6 +92,17 @@ scripts/check.sh --gpu    # also compares wgpu output against the CPU reference
 ```
 
 The GPU checks require a working graphics environment. CI also validates the desktop entry, builds the release archive, and runs native screenshot and clipboard checks under Xvfb. See [implementation and verification notes](PORTING.md) for the architecture and recorded results.
+
+## RAW sample checks
+
+The regular test suite uses synthetic camera-linear data and small embedded-asset fixtures. Camera files are not committed to the repository. Optional tests use a local NEF:
+
+```sh
+XUAN_TEST_NEF=/path/to/photo.NEF cargo test --locked sample_nef -- --ignored --nocapture
+cargo run --locked -- /path/to/photo.NEF --screenshot /tmp/develop.png
+```
+
+`XUAN_TEST_RAW_PREVIEW=/tmp/preview.png` optionally writes the engine test's default preview. The provided Nikon Z6 III sample was verified at 4032 × 6048 after orientation, including full-resolution rendering, project save/load, reopening Develop and cancellation.
 
 ## Screenshots
 

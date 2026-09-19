@@ -52,12 +52,26 @@ jobs:
           name: xuan-linux-x86_64
           path: dist
       - name: Verify release checksums
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         working-directory: dist
-        run: sha256sum --check *.sha256
+        run: |
+          version="${RELEASE_TAG#v}"
+          for artifact in "xuan-$version-linux-x86_64.tar.gz" \
+                          "xuan-$version-linux-x86_64.deb" \
+                          "xuan-$version-linux-x86_64.rpm" \
+                          "xuan-$version-source.tar.gz"; do
+            test -f "$artifact"
+            sha256sum --check "$artifact.sha256"
+          done
       - name: Publish release notes and packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           npx --yes changelogithub@15.0.5 --to "$RELEASE_TAG" --github "$GITHUB_REPOSITORY"
-          gh release upload "$RELEASE_TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          version="${RELEASE_TAG#v}"
+          gh release upload "$RELEASE_TAG" \
+            dist/xuan-"$version"-linux-x86_64.{tar.gz,deb,rpm}{,.sha256} \
+            dist/xuan-"$version"-source.tar.gz{,.sha256} \
+            --clobber --repo "$GITHUB_REPOSITORY"

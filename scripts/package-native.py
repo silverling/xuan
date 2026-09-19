@@ -9,7 +9,6 @@ import re
 import shutil
 import struct
 import subprocess
-import tarfile
 import tempfile
 from pathlib import Path
 
@@ -86,43 +85,8 @@ def glibc_requirement(binary, architecture):
 
 def stage_payload(stage, payload):
     prefix = payload / "usr"
-    (prefix / "bin").mkdir(parents=True)
-    shutil.copy2(stage / "bin/xuan", prefix / "bin/xuan")
-    shutil.copytree(stage / "assets/icons", prefix / "share/icons")
-    for source, destination in [
-        (
-            "packaging/me.silverl.xuan.desktop",
-            "share/applications/me.silverl.xuan.desktop",
-        ),
-        ("packaging/me.silverl.xuan.xml", "share/mime/packages/me.silverl.xuan.xml"),
-    ]:
-        target = prefix / destination
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(stage / source, target)
-
-    documentation = prefix / "share/doc/xuan"
-    shutil.copytree(stage / "docs", documentation / "docs")
-    for name in ("README.md", "THIRD_PARTY.md", "LICENSE"):
-        shutil.copy2(stage / name, documentation / name)
-    (documentation / "copyright").write_text(
-        (stage / "LICENSE").read_text()
-        + "\nDependency license texts are installed under /usr/share/licenses/xuan.\n\n"
-        + (stage / "THIRD_PARTY.md").read_text()
-    )
-    shutil.copytree(stage / "licenses", documentation / "licenses")
-    shutil.copytree(stage / "vendor", documentation / "vendor")
-    shutil.copytree(stage / ".github", documentation / ".github")
-    (documentation / "assets").mkdir()
-    shutil.copy2(stage / "assets/Xuan.png", documentation / "assets/Xuan.png")
-    licenses = prefix / "share/licenses/xuan"
-    shutil.copytree(stage / "licenses", licenses)
-    shutil.copy2(stage / "LICENSE", licenses / "LICENSE")
-    shutil.copy2(
-        stage / "assets/fonts/Inter-LICENSE.txt", licenses / "Inter-LICENSE.txt"
-    )
-    shutil.copytree(stage / "vendor/egui-winit", licenses / "egui-winit")
-    with tarfile.open(documentation / "source.tar.gz", "w:gz") as archive:
-        archive.add(stage / "source", arcname="source")
+    shutil.copytree(stage / "bin", prefix / "bin")
+    shutil.copytree(stage / "share", prefix / "share")
     # Package files must stay readable even when the builder has a private umask.
     payload.chmod(0o755)
     for path in payload.rglob("*"):
