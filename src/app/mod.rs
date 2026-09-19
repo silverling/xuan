@@ -1,5 +1,6 @@
 mod canvas;
 mod chrome;
+mod clipboard;
 mod dialogs;
 mod gpu_preview;
 mod icons;
@@ -366,6 +367,7 @@ pub struct EditorApp {
     close_app: bool,
     allow_close: bool,
     clipboard: Option<(RgbaImage, Point)>,
+    system_clipboard: Option<arboard::Clipboard>,
     jpeg_quality: u8,
     export_format: String,
     export_texture: Option<TextureHandle>,
@@ -458,6 +460,7 @@ impl EditorApp {
             close_app: false,
             allow_close: false,
             clipboard: None,
+            system_clipboard: None,
             jpeg_quality: 90,
             export_format: "png".into(),
             export_texture: None,
@@ -1017,8 +1020,9 @@ impl EditorApp {
                     self.clipboard =
                         operations::copy_pixels(&session.document, command == "copy_merged");
                 }
+                self.connect_clipboard();
                 if let Some((pixels, _)) = &self.clipboard
-                    && let Ok(mut clipboard) = arboard::Clipboard::new()
+                    && let Some(clipboard) = &mut self.system_clipboard
                 {
                     let _ = clipboard.set_image(arboard::ImageData {
                         width: pixels.width() as usize,
@@ -1030,35 +1034,7 @@ impl EditorApp {
                     self.command("clear");
                 }
             }
-            "paste" => {
-                if let Ok(mut clipboard) = arboard::Clipboard::new()
-                    && let Ok(data) = clipboard.get_image()
-                    && let Some(pixels) = RgbaImage::from_raw(
-                        data.width as u32,
-                        data.height as u32,
-                        data.bytes.into_owned(),
-                    )
-                    && !self
-                        .clipboard
-                        .as_ref()
-                        .is_some_and(|(cached, _)| cached == &pixels)
-                {
-                    self.clipboard = Some((pixels, Point::default()));
-                }
-                if let Some((pixels, point)) = self.clipboard.clone() {
-                    if self.sessions.is_empty() {
-                        self.dimensions = [pixels.width(), pixels.height()];
-                        self.new_document();
-                    }
-                    self.edit("Paste", |doc| {
-                        let mut layer = Layer::image("Pasted image", pixels);
-                        layer.transform.x = point.x;
-                        layer.transform.y = point.y;
-                        doc.insert(layer);
-                        Ok(())
-                    });
-                }
-            }
+            "paste" => self.paste_clipboard(None),
             "flip_h" | "flip_v" => self.edit("Flip Layer", |doc| {
                 if let Some(mut transform) = operations::transform_box(doc, false) {
                     if command == "flip_h" {

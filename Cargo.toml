@@ -8,7 +8,7 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0"
-arboard = "3.6"
+arboard = { version = "3.6", features = ["wayland-data-control"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 eframe = { version = "0.33.3", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland", "persistence"] }
 egui = "0.33.3"
@@ -19,6 +19,7 @@ rfd = "0.15.4"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
 tempfile = "3"
+url = "2.5"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 wgpu = { version = "27.0.1", default-features = false, features = ["vulkan", "gles", "wgsl"] }
 zip = { version = "2.4", default-features = false, features = ["deflate"] }

@@ -30,6 +30,8 @@ jobs:
         run: scripts/package.sh
       - name: Native X11 smoke test
         run: xvfb-run -a target/release/xuan --demo --screenshot /tmp/xuan.png
+      - name: Native clipboard test
+        run: xvfb-run -a env -u WAYLAND_DISPLAY cargo test --locked --bin xuan system_clipboard_images_and_files_paste_from_another_process -- --ignored --test-threads=1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: xuan-linux-x86_64

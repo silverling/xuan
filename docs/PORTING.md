@@ -22,6 +22,10 @@ Selection gestures update the overlay without recompositing image pixels. Lasso 
 
 Clipboard shortcuts use egui's native Copy/Cut/Paste events and leave focused text fields in control of text editing. A small [egui-winit patch](../vendor/egui-winit/PATCH.md) preserves paste events for image-only clipboards; upstream 0.33.3 otherwise drops the keypress when no text is available.
 
+External paste reads native image pixels or file lists through arboard, with Wayland data-control support and an X11 fallback. Text representations of local file URLs and paths are also accepted. File imports preserve names and form one undo step; unsupported clipboard contents never reuse an older cached image. The clipboard connection remains alive to serve copied images without requiring a clipboard manager. CI runs the separate-process clipboard regression under Xvfb.
+
+The external clipboard regression was also verified locally with isolated Xephyr (X11) and KWin virtual (Wayland) sessions, transferring both pixels and file lists from a separate process and checking that later text copies do not paste stale images.
+
 ## UI preservation
 
 The port uses the source's neutral 0.14-gray panels, darker canvas, 56 px tool rail, 36 px rounded tool buttons, 42 px contextual header, 252 px Layers panel (202–352 px resize range), 30 px status bar, restrained 11–13 px type, subtle dividers, and compact rounded controls. Icons are drawn as vectors. A new layered Xuan icon replaces the application identity. A client-side titlebar integrates the menu bar and traffic-light window controls; it supports window-manager dragging, all eight resize directions, minimize, maximize/restore, and the existing save-on-close flow. File dialogs continue to use the desktop portal.

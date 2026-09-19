@@ -31,7 +31,7 @@ HEIC/HEIF import uses the optional `heif-convert` executable from `libheif-examp
 - **Paint:** brush, eraser, aligned/unaligned clone stamp with layer/all-layer sampling, spot healing, blur/smudge, gradients, rectangles, rounded rectangles, ellipses, and eyedropper. Live shapes redraw at the new size until their pixels are edited.
 - **Adjustments:** editable Hue/Saturation color ranges, per-channel Levels and Curves, Exposure, Gradient Map, Grain, and Invert. Apply directly or add an adjustment layer, with live preview and selection coverage.
 - **Filters:** Gaussian and Motion Blur with expanded bounds, Add Noise, Lens Correction, content-aware fill, and edge-color background removal. Healing, filling, and background removal run in cancellable workers.
-- **Documents:** independent tab histories, crop, canvas/image size, high-quality downsampling, pixel grid, image clipboard, Copy Merged, and save-on-close prompts. Undo retains up to 64 steps with a 512 MiB asset budget, keeping at least one step.
+- **Documents:** independent tab histories, crop, canvas/image size, high-quality downsampling, pixel grid, pasting copied images or image files as layers, Copy Merged, and save-on-close prompts. Undo retains up to 64 steps with a 512 MiB asset budget, keeping at least one step.
 
 Use **File → Open Compositor Project…** to import an original `.comp` folder package. Save it as `.xuan` to keep editing on Linux. Image export supports PNG, JPEG, TIFF, and WebP; JPEG has a quality preview and PNG/JPEG carry print resolution.
 

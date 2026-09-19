@@ -489,6 +489,235 @@ fn native_clipboard_shortcuts_leave_text_editing_to_the_focused_field() {
     }
 }
 
+#[test]
+fn clipboard_image_pixels_create_a_centered_layer_and_undo() {
+    use super::clipboard::ClipboardContent;
+
+    let (_, mut app) = app();
+    app.dimensions = [20, 16];
+    app.new_document();
+    app.clipboard = Some((RgbaImage::new(1, 1), Point::new(7.0, 9.0)));
+    app.mask_target = true;
+    let pixels = RgbaImage::from_pixel(6, 4, image::Rgba([21, 87, 163, 127]));
+    app.paste_content(ClipboardContent::Image(pixels.clone()));
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 2);
+    let layer = document.active().unwrap();
+    assert_eq!(layer.pixels.as_deref(), Some(&pixels));
+    assert_eq!((layer.transform.x, layer.transform.y), (7.0, 6.0));
+    assert!(!app.mask_target);
+    assert!(app.clipboard.is_none());
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+    app.command("redo");
+    assert_eq!(
+        app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .pixels
+            .as_deref(),
+        Some(&pixels)
+    );
+}
+
+#[test]
+fn clipboard_file_paste_imports_multiple_images_in_one_undo_step() {
+    let temporary = tempfile::tempdir().unwrap();
+    let files = [
+        temporary.path().join("image one.png"),
+        temporary.path().join("图片 #2.png"),
+    ];
+    let images = [
+        RgbaImage::from_pixel(6, 4, image::Rgba([255, 0, 0, 255])),
+        RgbaImage::from_pixel(4, 8, image::Rgba([0, 0, 255, 128])),
+    ];
+    for (path, pixels) in files.iter().zip(&images) {
+        pixels.save(path).unwrap();
+    }
+    let original_bytes: Vec<_> = files
+        .iter()
+        .map(|path| std::fs::read(path).unwrap())
+        .collect();
+    let payload = format!(
+        "cut\r\n{}\r\n{}\r\n",
+        url::Url::from_file_path(&files[0]).unwrap(),
+        url::Url::from_file_path(&files[1]).unwrap()
+    );
+    let (context, mut app) = app();
+    app.dimensions = [20, 16];
+    app.new_document();
+    app.clipboard = Some((RgbaImage::new(1, 1), Point::default()));
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Paste(payload)],
+        egui::Modifiers::CTRL,
+    );
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 3);
+    for (layer, pixels) in document.layers[1..].iter().zip(&images) {
+        assert_eq!(layer.pixels.as_deref(), Some(pixels));
+        assert_eq!(layer.transform.x, (20.0 - pixels.width() as f32) * 0.5);
+        assert_eq!(layer.transform.y, (16.0 - pixels.height() as f32) * 0.5);
+    }
+    assert_eq!(document.layers[1].name, "image one");
+    assert_eq!(document.layers[2].name, "图片 #2");
+    assert!(app.clipboard.is_none());
+    for (path, bytes) in files.iter().zip(&original_bytes) {
+        assert_eq!(&std::fs::read(path).unwrap(), bytes);
+    }
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+    app.command("redo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 3);
+}
+
+#[test]
+fn clipboard_paste_creates_a_document_when_none_is_open() {
+    use super::clipboard::ClipboardContent;
+
+    let (_, mut app) = app();
+    let pixels = RgbaImage::from_pixel(6, 4, image::Rgba([42, 69, 128, 255]));
+    app.paste_content(ClipboardContent::Image(pixels.clone()));
+    let document = &app.session().unwrap().document;
+    assert_eq!((document.width, document.height), (6, 4));
+    assert_eq!(document.active().unwrap().pixels.as_deref(), Some(&pixels));
+}
+
+#[test]
+fn clipboard_invalid_files_do_not_partially_paste_or_reuse_cached_pixels() {
+    use super::clipboard::ClipboardContent;
+
+    let (_, mut app) = app();
+    app.dimensions = [20, 16];
+    app.new_document();
+    let temporary = tempfile::tempdir().unwrap();
+    let good = temporary.path().join("valid.png");
+    let bad = temporary.path().join("invalid.png");
+    RgbaImage::new(6, 4).save(&good).unwrap();
+    std::fs::write(&bad, "Not an image").unwrap();
+    app.clipboard = Some((RgbaImage::new(1, 1), Point::default()));
+    app.paste_content(ClipboardContent::Files(vec![good, bad]));
+    assert!(app.error.as_ref().unwrap().contains("invalid.png"));
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+    assert!(app.clipboard.is_none());
+    assert!(!app.session().unwrap().history.dirty());
+
+    app.clipboard = Some((RgbaImage::new(1, 1), Point::default()));
+    app.paste_content(ClipboardContent::Empty);
+    app.paste_content(ClipboardContent::Unavailable);
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+    assert!(app.clipboard.is_none());
+}
+
+#[test]
+#[ignore = "requires an isolated desktop clipboard; run under Xvfb or Xephyr"]
+fn system_clipboard_images_and_files_paste_from_another_process() {
+    use std::io::{BufRead, Write};
+    use std::process::{Command, Stdio};
+
+    let pixels = RgbaImage::from_pixel(6, 4, image::Rgba([20, 80, 150, 127]));
+    if let Some(path) = std::env::var_os("XUAN_CLIPBOARD_TEST_IMAGE") {
+        let mut clipboard = arboard::Clipboard::new().unwrap();
+        for line in std::io::stdin().lock().lines() {
+            match line.unwrap().as_str() {
+                "image" => clipboard
+                    .set_image(arboard::ImageData {
+                        width: pixels.width() as usize,
+                        height: pixels.height() as usize,
+                        bytes: std::borrow::Cow::Borrowed(pixels.as_raw()),
+                    })
+                    .unwrap(),
+                "file" => clipboard.set().file_list(&[PathBuf::from(&path)]).unwrap(),
+                "text" => clipboard.set_text("unrelated text").unwrap(),
+                _ => panic!("unexpected clipboard test command"),
+            }
+            println!("clipboard ready");
+            std::io::stdout().flush().unwrap();
+        }
+        return;
+    }
+
+    struct Producer(std::process::Child);
+    impl Drop for Producer {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("external 图片.png");
+    pixels.save(&path).unwrap();
+    let mut producer = Producer(
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "app::tests::system_clipboard_images_and_files_paste_from_another_process",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("XUAN_CLIPBOARD_TEST_IMAGE", &path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let mut input = producer.0.stdin.take().unwrap();
+    let mut output = std::io::BufReader::new(producer.0.stdout.take().unwrap());
+    let mut copy = |kind: &str| {
+        writeln!(input, "{kind}").unwrap();
+        input.flush().unwrap();
+        loop {
+            let mut line = String::new();
+            assert!(
+                output.read_line(&mut line).unwrap() > 0,
+                "clipboard producer exited"
+            );
+            if line.trim() == "clipboard ready" {
+                break;
+            }
+        }
+    };
+
+    let (context, mut app) = app();
+    app.dimensions = [20, 16];
+    app.new_document();
+    for kind in ["image", "file"] {
+        copy(kind);
+        keyboard_frame(
+            &context,
+            &mut app,
+            vec![egui::Event::Paste(String::new())],
+            egui::Modifiers::CTRL,
+        );
+        assert!(app.error.is_none(), "{:?}", app.error);
+        let layer = app.session().unwrap().document.active().unwrap();
+        assert_eq!(layer.pixels.as_deref(), Some(&pixels));
+        assert_eq!((layer.transform.x, layer.transform.y), (7.0, 6.0));
+    }
+    assert_eq!(app.session().unwrap().document.layers.len(), 3);
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().name,
+        "external 图片"
+    );
+    app.command("paste");
+    assert_eq!(app.session().unwrap().document.layers.len(), 4);
+    app.command("copy");
+    copy("text");
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Paste("unrelated text".into())],
+        egui::Modifiers::CTRL,
+    );
+    assert_eq!(app.session().unwrap().document.layers.len(), 4);
+    assert!(app.clipboard.is_none());
+}
+
 fn frame(context: &egui::Context, app: &mut EditorApp) -> egui::FullOutput {
     let output = context.run(
         egui::RawInput {

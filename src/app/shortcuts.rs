@@ -16,17 +16,24 @@ impl EditorApp {
                     Event::Copy if input.modifiers.shift => "copy_merged",
                     Event::Copy => "copy",
                     Event::Cut => "cut",
-                    Event::Paste(_) => "paste",
+                    Event::Paste(text) => {
+                        commands.push(("paste", Some(text.clone())));
+                        return false;
+                    }
                     _ => return true,
                 };
-                commands.push(command);
+                commands.push((command, None));
                 false
             });
             commands
         });
         if !clipboard_commands.is_empty() {
-            for command in clipboard_commands {
-                self.command(command);
+            for (command, text) in clipboard_commands {
+                if command == "paste" {
+                    self.paste_clipboard(text.as_deref());
+                } else {
+                    self.command(command);
+                }
             }
             return;
         }
