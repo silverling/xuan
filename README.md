@@ -2,6 +2,8 @@
 
 A native Linux image editor for layered compositions, photo retouching, and Nikon RAW development.
 
+This project is inspired by [Compositor](https://github.com/robbietilton/Compositor) and is a Rust port of its core features for supporting Linux. It is a work in progress, and the current release is a demo with basic functionality.
+
 ![Xuan editing a layered composition](docs/screenshots/editor.png)
 
 ## Features
@@ -26,4 +28,4 @@ Xuan supports Wayland and X11 and requires working Vulkan drivers. See the [user
 
 ## License
 
-A Rust port of Compositor. Source code is [MIT licensed](LICENSE); original Compositor copyright © 2026 Wonder Assembly LLC. Dependency licenses and rebuild instructions are in [third-party notices](THIRD_PARTY.md).
+A Rust port of [Compositor](https://github.com/robbietilton/Compositor). Source code is [MIT licensed](LICENSE); original Compositor copyright © 2026 Wonder Assembly LLC. Dependency licenses and rebuild instructions are in [third-party notices](THIRD_PARTY.md).
