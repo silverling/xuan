@@ -40,6 +40,10 @@ impl Default for Brush {
 
 pub fn ensure_pixels(layer: &mut Layer) -> Result<()> {
     ensure!(
+        layer.raw.is_none(),
+        "This is a RAW layer. Paint on a new pixel layer, use an adjustment layer, or rasterize it from the Layers menu."
+    );
+    ensure!(
         !layer.locked && !layer.group && layer.adjustment.is_none(),
         "Select an unlocked pixel layer to paint"
     );

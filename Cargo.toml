@@ -15,6 +15,7 @@ eframe = { version = "0.33.3", default-features = false, features = ["default_fo
 egui = "0.33.3"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "tiff", "webp", "bmp", "gif"] }
 png = "0.18"
+rawler = "=0.7.2"
 rayon = "1.11"
 rfd = "0.15.4"
 serde = { version = "1.0", features = ["derive", "rc"] }

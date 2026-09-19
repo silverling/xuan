@@ -8,6 +8,7 @@ pub mod history;
 pub mod io;
 pub mod operations;
 pub mod paint;
+pub mod raw;
 pub mod render;
 pub mod retouch;
 pub mod selection;

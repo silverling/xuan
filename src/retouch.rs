@@ -181,6 +181,10 @@ fn raster_layer(document: &Document) -> Result<RgbaImage> {
         .active()
         .ok_or_else(|| anyhow::anyhow!("Select a pixel layer"))?;
     ensure!(
+        layer.raw.is_none(),
+        "Rasterize the RAW layer before applying a pixel retouch operation"
+    );
+    ensure!(
         !layer.locked && !layer.group && layer.adjustment.is_none(),
         "Select an unlocked pixel layer"
     );

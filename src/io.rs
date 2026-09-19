@@ -110,7 +110,11 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         let manifest = Manifest {
             format: "org.xuan.project".into(),
-            version: 1,
+            version: if document.layers.iter().any(|l| l.raw.is_some()) {
+                2
+            } else {
+                1
+            },
             document: document.clone(),
             pixel_layers: document
                 .layers
@@ -127,6 +131,10 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
         archive.start_file("manifest.json", options)?;
         archive.write_all(&json)?;
         for layer in &document.layers {
+            if let Some(raw) = &layer.raw {
+                archive.start_file(format!("raw/{}.nef", layer.id), options)?;
+                archive.write_all(&raw.bytes)?;
+            }
             if let Some(pixels) = &layer.pixels {
                 archive.start_file(format!("images/{}.png", layer.id), options)?;
                 archive.write_all(&encode_png(&DynamicImage::ImageRgba8((**pixels).clone()))?)?;
@@ -165,18 +173,29 @@ pub fn load(path: &Path) -> Result<Document> {
         return load_compositor(path);
     }
     let mut archive = ZipArchive::new(File::open(path)?)?;
-    ensure!(archive.len() <= 20_001, "Too many project assets");
+    ensure!(archive.len() <= 30_001, "Too many project assets");
     let mut manifest: Manifest =
         serde_json::from_slice(&zip_read(&mut archive, "manifest.json", MAX_MANIFEST)?)?;
     ensure!(
-        manifest.format == "org.xuan.project" && manifest.version == 1,
+        manifest.format == "org.xuan.project" && (1..=2).contains(&manifest.version),
         "Unsupported xuan project version"
     );
     let mut used_pixels = 0;
     let mut used_masks = 0;
+    let mut used_raw = 0;
     ensure!(manifest.document.layers.len() <= 10_000, "Too many layers");
     validate_size(manifest.document.width, manifest.document.height)?;
     for layer in &mut manifest.document.layers {
+        if let Some(raw) = &mut layer.raw {
+            let bytes = zip_read(&mut archive, &format!("raw/{}.nef", layer.id), MAX_ASSET)?;
+            used_raw += bytes.len() as u64;
+            ensure!(
+                used_raw <= crate::raw::MAX_RAW_BYTES,
+                "Project exceeds 512 MiB of RAW assets"
+            );
+            raw.bytes = Arc::new(bytes);
+            raw.validate()?;
+        }
         if manifest.pixel_layers.contains(&layer.id) {
             let bytes = zip_read(&mut archive, &format!("images/{}.png", layer.id), MAX_ASSET)?;
             layer.pixels = Some(Arc::new(decode_image(bytes, &mut used_pixels)?.to_rgba8()));

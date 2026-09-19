@@ -289,6 +289,8 @@ pub struct Layer {
     pub shape: Option<ShapeStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<crate::text::TextStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw: Option<crate::raw::RawAsset>,
     #[serde(skip)]
     pub pixels: Option<Arc<RgbaImage>>,
 }
@@ -310,6 +312,7 @@ impl Layer {
             adjustment: None,
             shape: None,
             text: None,
+            raw: None,
             pixels: None,
         }
     }
@@ -467,7 +470,16 @@ impl Document {
         );
         let mut pixels = 0_u64;
         let mut mask_pixels = 0_u64;
+        let mut raw_bytes = 0_u64;
         for layer in &self.layers {
+            if let Some(raw) = &layer.raw {
+                raw.validate()?;
+                raw_bytes += raw.bytes.len() as u64;
+                ensure!(
+                    layer.pixels.is_some() && layer.text.is_none() && layer.shape.is_none(),
+                    "Invalid RAW layer"
+                );
+            }
             if let Some(text) = &layer.text {
                 text.validate()?;
                 ensure!(
@@ -537,6 +549,10 @@ impl Document {
         ensure!(
             pixels <= MAX_PIXELS && mask_pixels <= MAX_PIXELS,
             "Project exceeds the 100 megapixel asset limit"
+        );
+        ensure!(
+            raw_bytes <= crate::raw::MAX_RAW_BYTES,
+            "Project exceeds 512 MiB of RAW assets"
         );
         Ok(())
     }

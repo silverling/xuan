@@ -53,6 +53,10 @@ impl EditorApp {
                 let stroke = Stroke::new(1.0_f32, Color32::from_black_alpha(170));
                 match index {
                     0 => {
+                        if self.develop.is_some() {
+                            self.develop_close_requested = true;
+                            continue;
+                        }
                         ui.painter().line_segment(
                             [center - vec2(2.3, 2.3), center + vec2(2.3, 2.3)],
                             stroke,

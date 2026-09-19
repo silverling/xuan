@@ -48,6 +48,7 @@ struct Actions {
     rename: Option<(Uuid, String)>,
     edit_adjustment: Option<Uuid>,
     edit_text: Option<Uuid>,
+    edit_raw: Option<Uuid>,
 }
 
 #[derive(Clone, Copy)]
@@ -258,6 +259,8 @@ impl EditorApp {
                                     "Folder".to_owned()
                                 } else if let Some(adjustment) = &layer.adjustment {
                                     adjustment.name().to_owned()
+                                } else if layer.raw.is_some() {
+                                    "RAW · Embedded · Double-click to develop".to_owned()
                                 } else if let Some(text) = &layer.text {
                                     format!("Text · {} · {:.0} px", text.family, text.size)
                                 } else {
@@ -288,7 +291,9 @@ impl EditorApp {
             actions.select = Some((layer.id, false));
         }
         if response.double_clicked() {
-            if layer.adjustment.is_some() {
+            if layer.raw.is_some() {
+                actions.edit_raw = Some(layer.id);
+            } else if layer.adjustment.is_some() {
                 actions.edit_adjustment = Some(layer.id);
             } else if layer.text.is_some() {
                 actions.edit_text = Some(layer.id);
@@ -301,6 +306,24 @@ impl EditorApp {
             Stroke::new(0.5_f32, Color32::from_white_alpha(14)),
         );
         response.context_menu(|ui| {
+            if layer.raw.is_some() {
+                if ui
+                    .add_enabled(!layer.locked, egui::Button::new("Develop RAW…"))
+                    .clicked()
+                {
+                    actions.edit_raw = Some(layer.id);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(!layer.locked, egui::Button::new("Rasterize RAW Layer"))
+                    .clicked()
+                {
+                    actions.select = Some((layer.id, false));
+                    actions.command = Some("rasterize_raw");
+                    ui.close();
+                }
+                ui.separator();
+            }
             if layer.text.is_some() && ui.button("Edit text…").clicked() {
                 actions.edit_text = Some(layer.id);
                 ui.close();
@@ -476,6 +499,9 @@ impl EditorApp {
         if response.clicked() {
             actions.select = Some((layer.id, mask));
         }
+        if response.double_clicked() && !mask && layer.raw.is_some() {
+            actions.edit_raw = Some(layer.id);
+        }
         if selected && mask == self.mask_target {
             ui.painter().rect_stroke(
                 rect.expand(2.0),
@@ -593,6 +619,9 @@ impl EditorApp {
         }
         if let Some(id) = actions.edit_text {
             self.start_text(Some(id), xuan::document::Point::default());
+        }
+        if let Some(id) = actions.edit_raw {
+            self.start_develop_layer(id);
         }
         if let Some(rename) = actions.rename {
             self.rename = Some(rename);

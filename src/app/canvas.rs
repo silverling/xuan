@@ -401,6 +401,7 @@ impl EditorApp {
                     );
                 }
                 let blocked = self.job.is_some()
+                    || self.develop.is_some()
                     || self.dialog.is_some()
                     || self.error.is_some()
                     || self.close_app
@@ -490,6 +491,20 @@ impl EditorApp {
                 }
                 if response.double_clicked() && self.tool == Tool::Lasso && self.polygonal {
                     self.finish_polygon();
+                }
+                if response.double_clicked()
+                    && self.tool == Tool::Move
+                    && !panning
+                    && let Some(point) = doc_point
+                    && let Some(id) =
+                        render::hit_test_bounds(&self.sessions[self.current].document, point)
+                    && self.sessions[self.current]
+                        .document
+                        .layers
+                        .iter()
+                        .any(|l| l.id == id && l.raw.is_some())
+                {
+                    self.start_develop_layer(id);
                 }
                 if !ctx.input(|i| i.raw.hovered_files.is_empty()) {
                     painter.rect_stroke(

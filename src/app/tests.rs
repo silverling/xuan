@@ -2533,3 +2533,92 @@ fn floating_panel_title_remains_draggable() {
         "Panel didn't move: {before:?} → {after:?}"
     );
 }
+
+#[test]
+fn double_click_raw_layer_opens_develop_and_rasterization_is_undoable() {
+    let (context, mut app) = app();
+    app.dimensions = [80, 60];
+    app.new_document();
+    let doc = &mut app.session_mut().unwrap().document;
+    let layer = doc.active_mut().unwrap();
+    layer.name = "Camera RAW".into();
+    layer.pixels = Some(Arc::new(RgbaImage::from_pixel(
+        80,
+        60,
+        image::Rgba([100, 90, 80, 255]),
+    )));
+    layer.raw = Some(xuan::raw::RawAsset {
+        filename: "camera.NEF".into(),
+        bytes: Arc::new(vec![1, 2, 3]),
+        metadata: xuan::raw::RawMetadata {
+            width: 80,
+            height: 60,
+            ..Default::default()
+        },
+        settings: xuan::raw::DevelopSettings::default(),
+    });
+    let pos = layer_label(&context, &mut app, "Camera RAW") + Vec2::new(5.0, 5.0);
+    for _ in 0..2 {
+        pointer_frame(&context, &mut app, pos, Some(true), egui::Modifiers::NONE);
+        pointer_frame(&context, &mut app, pos, Some(false), egui::Modifiers::NONE);
+    }
+    assert!(app.develop.is_some());
+    assert!(app.rename.is_none());
+    app.cancel_develop();
+    // Let the previous double-click expire before testing a second target.
+    for _ in 0..40 {
+        frame(&context, &mut app);
+    }
+    let output = frame(&context, &mut app);
+    let session = app.session().unwrap();
+    let thumbnail_id = session.thumbnails[&(session.document.active.unwrap(), false)].id();
+    let thumbnail = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Mesh(mesh) if mesh.texture_id == thumbnail_id => {
+                Some(mesh.calc_bounds().center())
+            }
+            _ => None,
+        })
+        .expect("RAW thumbnail is visible");
+    pointer_frame(&context, &mut app, thumbnail, None, egui::Modifiers::NONE);
+    for _ in 0..2 {
+        pointer_frame(
+            &context,
+            &mut app,
+            thumbnail,
+            Some(true),
+            egui::Modifiers::NONE,
+        );
+        pointer_frame(
+            &context,
+            &mut app,
+            thumbnail,
+            Some(false),
+            egui::Modifiers::NONE,
+        );
+    }
+    assert!(app.develop.is_some());
+    app.cancel_develop();
+    app.command("rasterize_raw");
+    assert!(
+        app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .raw
+            .is_none()
+    );
+    app.command("undo");
+    assert!(
+        app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .raw
+            .is_some()
+    );
+}

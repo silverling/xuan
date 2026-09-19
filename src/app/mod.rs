@@ -1,6 +1,8 @@
 mod canvas;
 mod chrome;
 mod clipboard;
+mod develop;
+mod develop_controls;
 mod dialogs;
 mod font_picker;
 mod gpu_preview;
@@ -334,6 +336,9 @@ impl Gesture {
 pub struct EditorApp {
     context: egui::Context,
     job: Option<jobs::Job>,
+    develop: Option<develop::Develop>,
+    raw_queue: std::collections::VecDeque<(PathBuf, develop::DevelopTarget)>,
+    develop_close_requested: bool,
     gpu_state: Option<eframe::egui_wgpu::RenderState>,
     sessions: Vec<Session>,
     current: usize,
@@ -435,6 +440,9 @@ impl EditorApp {
         let mut app = Self {
             context: ctx.clone(),
             job: None,
+            develop: None,
+            raw_queue: Default::default(),
+            develop_close_requested: false,
             gpu_state: None,
             sessions: Vec::new(),
             current: 0,
@@ -569,6 +577,10 @@ impl EditorApp {
     }
 
     fn open_path(&mut self, path: &Path, as_layer: bool) {
+        if xuan::raw::is_raw(path) {
+            self.queue_raw(path, as_layer);
+            return;
+        }
         let project = path.is_dir() || path.extension().is_some_and(|e| e == "xuan");
         let result = if project {
             io::load(path)
@@ -662,7 +674,7 @@ impl EditorApp {
                 "Images and Xuan projects",
                 &[
                     "xuan", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "heic",
-                    "heif",
+                    "heif", "nef", "nrw",
                 ],
             )
             .pick_files()
@@ -822,10 +834,23 @@ impl EditorApp {
     }
 
     fn command(&mut self, command: &str) {
-        if self.job.is_some() {
+        if self.job.is_some() || self.develop.is_some() {
             return;
         }
         match command {
+            "develop" => {
+                if let Some(id) = self.session().and_then(|s| s.document.active) {
+                    self.start_develop_layer(id);
+                }
+            }
+            "rasterize_raw" => self.edit("Rasterize RAW Layer", |doc| {
+                let layer = doc
+                    .active_mut()
+                    .ok_or_else(|| anyhow::anyhow!("Select a RAW layer"))?;
+                anyhow::ensure!(!layer.locked, "The layer is locked");
+                layer.raw = None;
+                Ok(())
+            }),
             "levels" => self.start_adjustment(
                 Adjustment::LevelsChannels {
                     ranges: [xuan::color::DEFAULT_LEVELS; 4],
@@ -1152,9 +1177,18 @@ impl eframe::App for EditorApp {
 impl EditorApp {
     fn show(&mut self, ctx: &egui::Context) {
         self.poll_job();
+        self.poll_develop(ctx);
         self.frames += 1;
+        if self.develop.is_some()
+            && !self.allow_close
+            && ctx.input(|i| i.viewport().close_requested())
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.develop_close_requested = true;
+        }
         if ctx.input(|i| i.viewport().close_requested())
             && !self.allow_close
+            && self.develop.is_none()
             && self.sessions.iter().any(|s| s.history.dirty())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1164,6 +1198,7 @@ impl EditorApp {
             self.close_app = true;
         }
         if self.dialog.is_none()
+            && self.develop.is_none()
             && self.job.is_none()
             && self.error.is_none()
             && self.close_tab.is_none()
@@ -1178,13 +1213,17 @@ impl EditorApp {
             }
         }
         self.window_resize(ctx);
-        self.menus(ctx);
-        self.tabs(ctx);
-        self.tool_options(ctx);
-        self.status_bar(ctx);
-        self.tool_rail(ctx);
-        self.layers_panel(ctx);
-        self.canvas(ctx);
+        if self.develop.is_some() {
+            self.develop_workspace(ctx);
+        } else {
+            self.menus(ctx);
+            self.tabs(ctx);
+            self.tool_options(ctx);
+            self.status_bar(ctx);
+            self.tool_rail(ctx);
+            self.layers_panel(ctx);
+            self.canvas(ctx);
+        }
         self.dialogs(ctx);
         if self.gesture.is_none()
             && self.effect.is_none()
@@ -1207,6 +1246,10 @@ impl EditorApp {
             && !self.screenshot_requested
             && self.frames >= 5
             && ctx.input(|i| i.time) >= 0.5
+            && self
+                .develop
+                .as_ref()
+                .is_none_or(|d| d.ready_for_screenshot())
         {
             self.screenshot_requested = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));

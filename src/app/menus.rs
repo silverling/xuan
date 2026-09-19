@@ -209,6 +209,21 @@ impl EditorApp {
                                         &mut action,
                                     );
                                     item(ui, "Delete Layers", "", "delete_layer", &mut action);
+                                    ui.add_enabled_ui(
+                                        self.session()
+                                            .and_then(|s| s.document.active())
+                                            .is_some_and(|l| l.raw.is_some() && !l.locked),
+                                        |ui| {
+                                            item(ui, "Develop RAW…", "", "develop", &mut action);
+                                            item(
+                                                ui,
+                                                "Rasterize RAW Layer",
+                                                "",
+                                                "rasterize_raw",
+                                                &mut action,
+                                            );
+                                        },
+                                    );
                                     ui.separator();
                                     item(ui, "Group Layers", "Ctrl+G", "group", &mut action);
                                     item(

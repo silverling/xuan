@@ -51,6 +51,11 @@ impl History {
         let mut bytes = 0;
         for entry in &self.undo {
             for layer in &entry.document.layers {
+                if let Some(raw) = &layer.raw
+                    && seen.insert(std::sync::Arc::as_ptr(&raw.bytes) as usize)
+                {
+                    bytes += raw.bytes.len();
+                }
                 if let Some(pixels) = &layer.pixels
                     && seen.insert(std::sync::Arc::as_ptr(pixels) as usize)
                 {
@@ -110,6 +115,11 @@ impl History {
 
     pub fn mark_saved(&mut self) {
         self.saved_revision = self.revision;
+    }
+    /// A newly imported document needs saving but has no earlier document to undo to.
+    pub fn mark_modified(&mut self) {
+        self.next_revision += 1;
+        self.revision = self.next_revision;
     }
     pub fn dirty(&self) -> bool {
         self.revision != self.saved_revision || self.pending.is_some()
