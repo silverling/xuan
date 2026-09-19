@@ -503,9 +503,13 @@ fn benchmark_large_image_motion_blur_apply() {
 }
 
 #[test]
-#[ignore = "requires a GPU; run explicitly for native verification"]
-fn motion_blur_gpu_preview_toggles_cancels_and_applies_full_resolution() {
+#[ignore = "requires a Vulkan or OpenGL compute adapter; run explicitly for native verification"]
+fn motion_blur_preview_toggles_cancels_and_applies_full_resolution() {
     let (context, mut app, state) = large_image_benchmark_app();
+    let adapter = state.adapter.get_info();
+    eprintln!("Motion Blur adapter: {adapter:?}");
+    // Software adapters intentionally use the asynchronous CPU preview.
+    let gpu_preview = adapter.device_type != wgpu::DeviceType::Cpu;
     app.sessions = vec![Session::new(
         Document::new(32, 24).unwrap(),
         "Blur test".into(),
@@ -514,6 +518,7 @@ fn motion_blur_gpu_preview_toggles_cancels_and_applies_full_resolution() {
     app.brush.color = [210, 80, 40, 255];
     app.command("fill_fg");
     frame(&context, &mut app);
+    assert_eq!(app.session().unwrap().gpu.is_some(), gpu_preview);
     let original = app.session().unwrap().document.clone();
     let pixels = original.active().unwrap().pixels.as_ref().unwrap();
     let revision = app.session().unwrap().history.revision;
@@ -521,6 +526,8 @@ fn motion_blur_gpu_preview_toggles_cancels_and_applies_full_resolution() {
         distance: 20.0,
         angle: 35.0,
     };
+    let mut expected = original.clone();
+    xuan::effects::apply_filter(&mut expected, &filter, false).unwrap();
     app.start_filter(filter.clone());
     for preview in [true, false, true] {
         let edit = app.effect.as_mut().unwrap();
@@ -532,23 +539,32 @@ fn motion_blur_gpu_preview_toggles_cancels_and_applies_full_resolution() {
             .device
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
+        if !gpu_preview {
+            wait_for_filter_preview(&context, &mut app);
+        }
         assert_eq!(
             app.session().unwrap().motion_blur_preview.is_some(),
-            preview
+            preview && gpu_preview
         );
         assert!(!app.effect.as_ref().unwrap().filter_preview.busy());
         assert_eq!(app.session().unwrap().history.revision, revision);
-        assert!(Arc::ptr_eq(
-            pixels,
-            app.session()
-                .unwrap()
-                .document
-                .active()
-                .unwrap()
-                .pixels
-                .as_ref()
-                .unwrap()
-        ));
+        let preview_pixels = app
+            .session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .pixels
+            .as_ref()
+            .unwrap();
+        if preview && !gpu_preview {
+            assert_eq!(
+                preview_pixels,
+                expected.active().unwrap().pixels.as_ref().unwrap()
+            );
+        } else {
+            assert!(Arc::ptr_eq(pixels, preview_pixels));
+        }
     }
 
     let apply = layer_label(&context, &mut app, "Apply") + Vec2::splat(5.0);
@@ -569,8 +585,6 @@ fn motion_blur_gpu_preview_toggles_cancels_and_applies_full_resolution() {
     assert!(app.dialog.is_none());
     assert!(app.session().unwrap().motion_blur_preview.is_none());
     assert_eq!(app.session().unwrap().history.revision, revision + 1);
-    let mut expected = original.clone();
-    xuan::effects::apply_filter(&mut expected, &filter, false).unwrap();
     assert_eq!(
         app.session().unwrap().document.active().unwrap().pixels,
         expected.active().unwrap().pixels
@@ -589,7 +603,13 @@ fn motion_blur_gpu_preview_toggles_cancels_and_applies_full_resolution() {
     app.start_filter(filter);
     frame(&context, &mut app);
     frame(&context, &mut app);
-    assert!(app.session().unwrap().motion_blur_preview.is_some());
+    if !gpu_preview {
+        wait_for_filter_preview(&context, &mut app);
+    }
+    assert_eq!(
+        app.session().unwrap().motion_blur_preview.is_some(),
+        gpu_preview
+    );
     keyboard_frame(
         &context,
         &mut app,
@@ -603,6 +623,19 @@ fn motion_blur_gpu_preview_toggles_cancels_and_applies_full_resolution() {
         app.session().unwrap().document.active().unwrap().pixels,
         expected.active().unwrap().pixels
     );
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+fn wait_for_filter_preview(context: &egui::Context, app: &mut EditorApp) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.effect.as_ref().unwrap().filter_preview.busy() {
+        frame(context, app);
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Filter preview worker did not finish"
+        );
+        std::thread::yield_now();
+    }
 }
 
 fn large_image_benchmark_app() -> (egui::Context, EditorApp, eframe::egui_wgpu::RenderState) {
