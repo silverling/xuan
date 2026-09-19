@@ -12,6 +12,7 @@ mod panels;
 mod shortcuts;
 #[cfg(test)]
 mod tests;
+mod text_controls;
 mod theme;
 mod widgets;
 
@@ -50,13 +51,14 @@ pub enum Tool {
     Blur,
     Gradient,
     Shape,
+    Text,
     Dropper,
     Hand,
     Zoom,
 }
 
 impl Tool {
-    const ALL: [Self; 15] = [
+    const ALL: [Self; 16] = [
         Self::Move,
         Self::Marquee,
         Self::Lasso,
@@ -69,6 +71,7 @@ impl Tool {
         Self::Blur,
         Self::Gradient,
         Self::Shape,
+        Self::Text,
         Self::Dropper,
         Self::Hand,
         Self::Zoom,
@@ -88,6 +91,7 @@ impl Tool {
             Self::Blur => "Blur / Smudge",
             Self::Gradient => "Gradient",
             Self::Shape => "Shape",
+            Self::Text => "Text",
             Self::Dropper => "Eyedropper",
             Self::Hand => "Hand",
             Self::Zoom => "Zoom",
@@ -107,6 +111,7 @@ impl Tool {
             Self::Blur => "R",
             Self::Gradient => "G",
             Self::Shape => "U",
+            Self::Text => "T",
             Self::Dropper => "I",
             Self::Hand => "H",
             Self::Zoom => "Z",
@@ -146,6 +151,7 @@ impl Tool {
             Self::Shape => {
                 "Drag to draw a new shape · Shift constrains proportions · Alt draws from center"
             }
+            Self::Text => "Click to add text · Click text to edit · Use Move to transform",
             Self::Dropper => "Click to sample the composition · X swaps foreground and background",
             Self::Hand => "Drag to pan · Scroll to zoom · Ctrl+0 fits canvas",
             Self::Zoom => "Click to zoom in · Alt-click to zoom out · Ctrl+1 actual pixels",
@@ -260,6 +266,7 @@ enum Dialog {
     CanvasSize,
     ImageSize,
     Effect,
+    Text,
     Export,
     Shortcuts,
     About,
@@ -342,6 +349,9 @@ pub struct EditorApp {
     radial: bool,
     shape_kind: ShapeKind,
     corner_radius: f32,
+    text_style: xuan::text::TextStyle,
+    text_renderer: Option<xuan::text::TextRenderer>,
+    text_edit: Option<text_controls::TextEdit>,
     blur_mode: PaintMode,
     auto_select: bool,
     show_controls: bool,
@@ -400,6 +410,10 @@ impl EditorApp {
             "selection" => self.set_tool(Tool::Marquee),
             "gradient" => self.set_tool(Tool::Gradient),
             "shape" => self.set_tool(Tool::Shape),
+            "text" => {
+                self.set_tool(Tool::Text);
+                self.start_text(None, Point::new(100.0, 120.0));
+            }
             "export" => {
                 self.export_format = "jpg".into();
                 self.command(name);
@@ -435,6 +449,9 @@ impl EditorApp {
             radial: false,
             shape_kind: ShapeKind::Rectangle,
             corner_radius: 16.0,
+            text_style: xuan::text::TextStyle::default(),
+            text_renderer: None,
+            text_edit: None,
             blur_mode: PaintMode::Blur,
             auto_select: true,
             show_controls: true,
@@ -1168,6 +1185,7 @@ impl EditorApp {
         self.dialogs(ctx);
         if self.gesture.is_none()
             && self.effect.is_none()
+            && self.text_edit.is_none()
             && self.job.is_none()
             && !ctx.input(|i| i.pointer.any_down())
             && let Some(session) = self.session_mut()

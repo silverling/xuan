@@ -440,6 +440,8 @@ impl EditorApp {
                         egui::CursorIcon::ResizeNwSe
                     } else if self.tool == Tool::Move {
                         egui::CursorIcon::Move
+                    } else if self.tool == Tool::Text {
+                        egui::CursorIcon::Text
                     } else {
                         egui::CursorIcon::Crosshair
                     };
@@ -566,6 +568,7 @@ impl EditorApp {
 
     fn canvas_click(&mut self, point: Point, modifiers: egui::Modifiers) {
         match self.tool {
+            Tool::Text => self.text_click(point),
             Tool::Move => {
                 if self.auto_select || modifiers.ctrl {
                     self.select_canvas_layer(point, modifiers.shift, false);
@@ -680,6 +683,9 @@ impl EditorApp {
         modifiers: egui::Modifiers,
     ) {
         if self.gesture.is_some() || self.sessions.is_empty() {
+            return;
+        }
+        if self.tool == Tool::Text && !panning {
             return;
         }
         if self.tool == Tool::Clone && modifiers.alt {

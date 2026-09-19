@@ -147,6 +147,7 @@ pub fn copy_layers(source: &Document, destination: &mut Document, root: Uuid) ->
             }
             copy.pixels = Some(Arc::new(baked));
             copy.shape = None;
+            copy.text = None;
         }
         copy.id = ids[&layer.id];
         copy.parent = layer.parent.and_then(|id| ids.get(&id).copied());

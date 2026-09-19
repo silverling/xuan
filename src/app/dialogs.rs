@@ -30,6 +30,7 @@ impl EditorApp {
                     self.size_dialog(ctx, dialog)
                 }
                 Dialog::Effect => self.effect_dialog(ctx),
+                Dialog::Text => self.text_dialog(ctx),
                 Dialog::Export => self.export_dialog(ctx),
                 Dialog::Shortcuts => {
                     let mut open = true;
@@ -62,6 +63,7 @@ impl EditorApp {
                                             "Gradient / Shape / Eyedropper / Hand / Zoom",
                                         ),
                                         ("[ / ] · Shift+[ / ]", "Brush size / Hardness"),
+                                        ("T", "Text"),
                                         ("1–0", "Brush or layer opacity"),
                                         ("Alt-click", "Set clone source"),
                                         ("X / D", "Swap / Reset colors"),

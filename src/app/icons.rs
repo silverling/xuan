@@ -165,6 +165,13 @@ pub fn draw(ui: &Ui, tool: Tool, rect: Rect, color: Color32) {
                 StrokeKind::Inside,
             );
         }
+        Tool::Text => {
+            line((0.08, 0.1), (0.92, 0.1));
+            line((0.08, 0.1), (0.08, 0.3));
+            line((0.92, 0.1), (0.92, 0.3));
+            line((0.5, 0.1), (0.5, 0.95));
+            line((0.3, 0.95), (0.7, 0.95));
+        }
         Tool::Dropper => {
             line((0.3, 0.48), (0.0, 0.95));
             line((0.0, 0.95), (0.18, 1.0));

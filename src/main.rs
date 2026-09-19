@@ -19,7 +19,7 @@ fn main() -> eframe::Result {
             }
             "--help" | "-h" => {
                 println!(
-                    "xuan —  native Linux image compositor\n\nUsage: xuan [IMAGE|PROJECT ...] [--demo] [--screenshot PATH] [--screenshot-panel levels|hue|curves|export|brush|selection|gradient|shape|new]\n\nProjects use .xuan; original .comp directory packages can also be opened."
+                    "xuan —  native Linux image compositor\n\nUsage: xuan [IMAGE|PROJECT ...] [--demo] [--screenshot PATH] [--screenshot-panel levels|hue|curves|export|brush|selection|gradient|shape|text|new]\n\nProjects use .xuan; original .comp directory packages can also be opened."
                 );
                 return Ok(());
             }

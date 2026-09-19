@@ -22,6 +22,7 @@
 | Move / Marquee / Lasso / Wand / Crop | V / M / L / W / C |
 | Brush / Eraser / Heal / Clone / Blur | B / E / J / S / R |
 | Gradient / Shape / Eyedropper / Hand / Zoom | G / U / I / H / Z |
+| Text / Apply text / Cancel text | T / Ctrl+Enter / Escape |
 | Brush size / Hardness | [ and ] / Shift+[ and Shift+] |
 | Opacity | Number keys 1–9, 0 for 100% |
 | Swap / Reset colors | X / D |
@@ -41,6 +42,8 @@ Shift with a selection adds coverage, Alt subtracts, and Shift+Alt intersects. D
 Move handles scale the selected layers, the circular handle rotates them, and Ctrl-dragging a corner applies perspective distortion. Shift constrains movement or rotation; the Link control toggles the size ratio. Alt-drag duplicates a layer. The mask thumbnail targets the mask for painting and transformations. Its context menu controls linking and visibility.
 
 Alt-click sets a Clone Stamp source. Shift-click continues a straight brush line. Clone alignment and sampling are configured in the contextual header. Use the same header to switch marquee/lasso/shape variants and linear/radial gradients.
+
+With the Text tool, click the canvas to add text or click existing text to edit it. The text dialog provides multiline input, a searchable list of installed font families, pixel size, color, bold, italic, underline, and strikethrough. Enter starts a new line; Ctrl+Enter applies the preview as one undo step; Escape cancels. Double-click a text layer or choose “Edit text…” from its context menu to reopen it. Use Move to position, scale, or rotate text. Painting or applying pixel filters converts a text layer to pixels; undo restores its text settings.
 
 With the Move tool, click visible layer content to select it, or click empty canvas or the surrounding workspace to deselect. Shift-click toggles layers in the selection. Auto Select is enabled by default; turn it off to keep the current selection while moving, or hold Ctrl to select from the canvas temporarily.
 

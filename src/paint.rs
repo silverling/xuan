@@ -44,6 +44,7 @@ pub fn ensure_pixels(layer: &mut Layer) -> Result<()> {
         "Select an unlocked pixel layer to paint"
     );
     layer.shape = None;
+    layer.text = None;
     if layer.pixels.is_none() {
         let width = layer.transform.width.round() as u32;
         let height = layer.transform.height.round() as u32;

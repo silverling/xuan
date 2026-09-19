@@ -4,6 +4,203 @@ use super::*;
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
+fn text_tool_creates_edits_and_undoes_one_transaction() {
+    let (context, mut app) = app();
+    app.dimensions = [640, 480];
+    app.new_document();
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::T, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert!(app.tool == Tool::Text);
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(40.0, 50.0),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.dialog == Some(Dialog::Text));
+    assert_eq!(app.session().unwrap().document.layers.len(), 2);
+    let id = app.session().unwrap().document.active.unwrap();
+    assert!(
+        (app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .transform
+            .x
+            - 40.0)
+            .abs()
+            < 0.01
+    );
+    let style = &mut app.text_edit.as_mut().unwrap().style;
+    style.content = "Editable text\nSecond line".into();
+    style.bold = true;
+    style.italic = true;
+    style.underline = true;
+    style.strikethrough = true;
+    app.preview_text();
+    frame(&context, &mut app);
+    assert_eq!(app.session().unwrap().history.names().count(), 0);
+    app.finish_text(true);
+    let session = app.session().unwrap();
+    let pixels = session.document.active().unwrap().pixels.clone();
+    assert_eq!(session.history.names().count(), 1);
+    assert!(
+        session
+            .document
+            .active()
+            .unwrap()
+            .text
+            .as_ref()
+            .unwrap()
+            .bold
+    );
+
+    app.start_text(Some(id), Point::default());
+    app.text_edit.as_mut().unwrap().style.content = "Revised".into();
+    app.preview_text();
+    app.finish_text(true);
+    assert_eq!(app.session().unwrap().document.active.unwrap(), id);
+    assert_eq!(app.session().unwrap().document.layers.len(), 2);
+    app.command("undo");
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().pixels,
+        pixels
+    );
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+    app.command("redo");
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().pixels,
+        pixels
+    );
+}
+
+fn text_key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    }
+}
+
+#[test]
+fn text_dialog_typing_apply_and_escape_do_not_trigger_canvas_shortcuts() {
+    let (context, mut app) = app();
+    app.dimensions = [640, 480];
+    app.new_document();
+    app.start_text(None, Point::new(25.0, 35.0));
+    frame(&context, &mut app);
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Text("Typing B and T".into())],
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(
+        app.text_edit.as_ref().unwrap().style.content,
+        "Typing B and T"
+    );
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::Enter, egui::Modifiers::CTRL)],
+        egui::Modifiers::CTRL,
+    );
+    assert!(app.dialog.is_none());
+    let session = app.session().unwrap();
+    assert_eq!(
+        session
+            .document
+            .active()
+            .unwrap()
+            .text
+            .as_ref()
+            .unwrap()
+            .content,
+        "Typing B and T"
+    );
+    let original = session.document.active().unwrap().pixels.clone();
+    let id = session.document.active.unwrap();
+    app.start_text(Some(id), Point::default());
+    frame(&context, &mut app);
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Paste("Changed".into())],
+        egui::Modifiers::CTRL,
+    );
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert!(app.dialog.is_none());
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().pixels,
+        original
+    );
+    assert_eq!(app.session().unwrap().history.names().count(), 1);
+
+    app.start_text(None, Point::new(20.0, 20.0));
+    frame(&context, &mut app);
+    app.finish_text(false);
+    assert_eq!(app.session().unwrap().document.layers.len(), 2);
+    app.session_mut()
+        .unwrap()
+        .document
+        .active_mut()
+        .unwrap()
+        .locked = true;
+    app.start_text(Some(id), Point::default());
+    assert!(app.dialog.is_none());
+}
+
+#[test]
+fn text_preview_keeps_group_parent_and_rejects_invalid_edits() {
+    let (_, mut app) = app();
+    app.dimensions = [640, 480];
+    app.new_document();
+    app.command("group");
+    let group = app.session().unwrap().document.active.unwrap();
+    app.start_text(None, Point::new(10.0, 20.0));
+    app.text_edit.as_mut().unwrap().style.content = "In a folder".into();
+    app.preview_text();
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().parent,
+        Some(group)
+    );
+    let pixels = app
+        .session()
+        .unwrap()
+        .document
+        .active()
+        .unwrap()
+        .pixels
+        .clone();
+    app.text_edit.as_mut().unwrap().style.size = f32::NAN;
+    app.preview_text();
+    app.finish_text(true);
+    assert!(app.dialog == Some(Dialog::Text));
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().pixels,
+        pixels
+    );
+    app.text_edit.as_mut().unwrap().style.size = 24.0;
+    app.preview_text();
+    app.finish_text(true);
+    assert!(app.dialog.is_none());
+    app.session().unwrap().document.validate().unwrap();
+}
+
+#[test]
 #[ignore = "requires a GPU; optionally set XUAN_ZOOM_BENCH_IMAGE to an image path"]
 fn benchmark_large_image_zoom() {
     let (context, mut app, state) = large_image_benchmark_app();
@@ -2075,11 +2272,16 @@ fn floating_panels_stay_bounded_at_minimum_window_size() {
         full.height() > 530.0,
         "Levels should expand before scrolling: {full:?}"
     );
-    for panel in ["levels", "hue", "curves", "export", "new"] {
+    for panel in ["levels", "hue", "curves", "export", "new", "text"] {
         app.dialog = None;
         app.effect = None;
         app.export_format = "jpg".into();
-        app.command(panel);
+        if panel == "text" {
+            app.start_text(None, Point::default());
+            app.text_edit.as_mut().unwrap().style.content = "A long text document\n".repeat(60);
+        } else {
+            app.command(panel);
+        }
         for _ in 0..5 {
             let _ = context.run(
                 egui::RawInput {
@@ -2097,6 +2299,7 @@ fn floating_panels_stay_bounded_at_minimum_window_size() {
             "hue" => "Hue/Saturation",
             "curves" => "Curves",
             "export" => "Export image",
+            "text" => "Text",
             _ => "New canvas",
         };
         let rect = context

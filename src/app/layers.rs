@@ -47,6 +47,7 @@ struct Actions {
     appearance: Option<(BlendMode, f32, bool)>,
     rename: Option<(Uuid, String)>,
     edit_adjustment: Option<Uuid>,
+    edit_text: Option<Uuid>,
 }
 
 #[derive(Clone, Copy)]
@@ -257,6 +258,8 @@ impl EditorApp {
                                     "Folder".to_owned()
                                 } else if let Some(adjustment) = &layer.adjustment {
                                     adjustment.name().to_owned()
+                                } else if let Some(text) = &layer.text {
+                                    format!("Text · {} · {:.0} px", text.family, text.size)
                                 } else {
                                     format!(
                                         "{:.0} × {:.0} px{}",
@@ -287,6 +290,8 @@ impl EditorApp {
         if response.double_clicked() {
             if layer.adjustment.is_some() {
                 actions.edit_adjustment = Some(layer.id);
+            } else if layer.text.is_some() {
+                actions.edit_text = Some(layer.id);
             } else {
                 actions.rename = Some((layer.id, layer.name.clone()));
             }
@@ -296,6 +301,10 @@ impl EditorApp {
             Stroke::new(0.5_f32, Color32::from_white_alpha(14)),
         );
         response.context_menu(|ui| {
+            if layer.text.is_some() && ui.button("Edit text…").clicked() {
+                actions.edit_text = Some(layer.id);
+                ui.close();
+            }
             if layer.adjustment.is_some() && ui.button("Edit adjustment…").clicked() {
                 actions.edit_adjustment = Some(layer.id);
                 ui.close();
@@ -581,6 +590,9 @@ impl EditorApp {
         }
         if let Some(id) = actions.edit_adjustment {
             self.edit_adjustment_layer(id);
+        }
+        if let Some(id) = actions.edit_text {
+            self.start_text(Some(id), xuan::document::Point::default());
         }
         if let Some(rename) = actions.rename {
             self.rename = Some(rename);

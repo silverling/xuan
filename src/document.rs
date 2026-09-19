@@ -287,6 +287,8 @@ pub struct Layer {
     pub adjustment: Option<Adjustment>,
     #[serde(default)]
     pub shape: Option<ShapeStyle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<crate::text::TextStyle>,
     #[serde(skip)]
     pub pixels: Option<Arc<RgbaImage>>,
 }
@@ -307,6 +309,7 @@ impl Layer {
             mask: None,
             adjustment: None,
             shape: None,
+            text: None,
             pixels: None,
         }
     }
@@ -465,6 +468,13 @@ impl Document {
         let mut pixels = 0_u64;
         let mut mask_pixels = 0_u64;
         for layer in &self.layers {
+            if let Some(text) = &layer.text {
+                text.validate()?;
+                ensure!(
+                    layer.pixels.is_some() && layer.shape.is_none(),
+                    "Invalid text layer"
+                );
+            }
             if let Some(shape) = &layer.shape {
                 ensure!(
                     shape.corner_radius.is_finite()

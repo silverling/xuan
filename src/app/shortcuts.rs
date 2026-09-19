@@ -138,6 +138,7 @@ impl EditorApp {
             (Key::R, Tool::Blur),
             (Key::G, Tool::Gradient),
             (Key::U, Tool::Shape),
+            (Key::T, Tool::Text),
             (Key::I, Tool::Dropper),
             (Key::H, Tool::Hand),
             (Key::Z, Tool::Zoom),

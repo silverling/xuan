@@ -233,6 +233,7 @@ impl EditorApp {
                                             ui.label("px");
                                         }
                                     }
+                                    Tool::Text => self.text_options(ui),
                                     Tool::Crop => {
                                         ui.label(
                                             RichText::new(

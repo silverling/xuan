@@ -11,3 +11,4 @@ pub mod paint;
 pub mod render;
 pub mod retouch;
 pub mod selection;
+pub mod text;
