@@ -91,6 +91,132 @@ fn text_key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
 }
 
 #[test]
+fn font_picker_arrows_preview_filtered_fonts_without_editing_text() {
+    let (context, mut app) = app();
+    app.dimensions = [640, 480];
+    app.new_document();
+    app.start_text(None, Point::new(25.0, 35.0));
+    frame(&context, &mut app);
+    let original = app.text_edit.as_ref().unwrap().style.clone();
+    let families = app.text_renderer.as_ref().unwrap().families().to_vec();
+    let start = families
+        .iter()
+        .position(|family| family == &original.family)
+        .unwrap();
+    let position = layer_label(&context, &mut app, &original.family) + egui::vec2(5.0, 5.0);
+    pointer_frame(
+        &context,
+        &mut app,
+        position,
+        Some(true),
+        egui::Modifiers::NONE,
+    );
+    pointer_frame(
+        &context,
+        &mut app,
+        position,
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+    frame(&context, &mut app);
+    assert!(egui::Popup::is_any_open(&context));
+
+    for step in 1..=12 {
+        keyboard_frame(
+            &context,
+            &mut app,
+            vec![text_key(egui::Key::ArrowDown, egui::Modifiers::NONE)],
+            egui::Modifiers::NONE,
+        );
+        let style = &app.text_edit.as_ref().unwrap().style;
+        assert_eq!(
+            style.family,
+            families[(start + step).min(families.len() - 1)]
+        );
+        assert_eq!(style.content, original.content);
+        let layer = app.session().unwrap().document.active().unwrap();
+        assert_eq!(layer.text.as_ref().unwrap(), style);
+        assert!(egui::Popup::is_any_open(&context));
+        assert_eq!(app.session().unwrap().history.names().count(), 0);
+    }
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::ArrowUp, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(
+        app.text_edit.as_ref().unwrap().style.family,
+        families[(start + 12).min(families.len() - 1).saturating_sub(1)]
+    );
+    let style = app.text_edit.as_ref().unwrap().style.clone();
+    let expected = app.text_renderer.as_mut().unwrap().render(&style).unwrap();
+    assert_eq!(
+        app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .pixels
+            .as_deref(),
+        Some(&expected)
+    );
+
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Text(original.family.clone())],
+        egui::Modifiers::NONE,
+    );
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::ArrowDown, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(
+        app.text_edit.as_ref().unwrap().style.family,
+        original.family
+    );
+    assert_eq!(
+        app.text_edit.as_ref().unwrap().style.content,
+        original.content
+    );
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Text(" no matching font".into())],
+        egui::Modifiers::NONE,
+    );
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::ArrowDown, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(
+        app.text_edit.as_ref().unwrap().style.family,
+        original.family
+    );
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert!(!egui::Popup::is_any_open(&context));
+    assert!(app.dialog == Some(Dialog::Text));
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert!(app.dialog.is_none());
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+}
+
+#[test]
 fn text_dialog_typing_apply_and_escape_do_not_trigger_canvas_shortcuts() {
     let (context, mut app) = app();
     app.dimensions = [640, 480];

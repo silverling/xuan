@@ -45,6 +45,8 @@ Alt-click sets a Clone Stamp source. Shift-click continues a straight brush line
 
 With the Text tool, click the canvas to add text or click existing text to edit it. The text dialog provides multiline input, a searchable list of installed font families, pixel size, color, bold, italic, underline, and strikethrough. Enter starts a new line; Ctrl+Enter applies the preview as one undo step; Escape cancels. Double-click a text layer or choose “Edit text…” from its context menu to reopen it. Use Move to position, scale, or rotate text. Painting or applying pixel filters converts a text layer to pixels; undo restores its text settings.
 
+Each font in the selector previews its own typeface. While the selector is open, Up/Down moves through the filtered fonts and updates the canvas preview. Enter or Escape closes the selector while keeping the preview; Escape again cancels the text edit.
+
 With the Move tool, click visible layer content to select it, or click empty canvas or the surrounding workspace to deselect. Shift-click toggles layers in the selection. Auto Select is enabled by default; turn it off to keep the current selection while moving, or hold Ctrl to select from the canvas temporarily.
 
 Drag a layer row or thumbnail to reorder it. Drop on the upper or lower half of a row to place it above or below that layer; drop in the center of a folder row to nest it. The highlighted line or outline marks the destination. Alt-drag duplicates it. Drop onto another project tab to copy the layer and its descendants. “Move Out of Group” is in the row's context menu. Shift/Ctrl-click layer rows toggles multi-selection.

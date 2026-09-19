@@ -6,13 +6,13 @@ use xuan::{
     text::{self, TextRenderer, TextStyle},
 };
 
-use super::{Dialog, EditorApp, Tool, theme, widgets};
+use super::{Dialog, EditorApp, Tool, font_picker::FontPicker, theme, widgets};
 
 pub(super) struct TextEdit {
     target: Uuid,
     original: Layer,
     pub(super) style: TextStyle,
-    filter: String,
+    fonts: FontPicker,
     focus: bool,
     changed: bool,
     error: Option<String>,
@@ -140,7 +140,7 @@ impl EditorApp {
             target: layer.id,
             style: layer.text.clone().unwrap(),
             original: layer,
-            filter: String::new(),
+            fonts: FontPicker::default(),
             focus: true,
             changed: is_new,
             error: None,
@@ -213,8 +213,10 @@ impl EditorApp {
         let Some(edit) = &mut self.text_edit else {
             return;
         };
-        let renderer = self.text_renderer.as_ref().unwrap();
+        let renderer = self.text_renderer.as_mut().unwrap();
         let before = edit.style.clone();
+        edit.fonts
+            .handle_keys(ctx, renderer.families(), &mut edit.style.family);
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
@@ -251,32 +253,7 @@ impl EditorApp {
                 }
                 ui.horizontal(|ui| {
                     ui.label("Font");
-                    widgets::PopUp::from_id_salt("text_family")
-                        .width(255.0)
-                        .selected_text(&edit.style.family)
-                        .show_ui(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut edit.filter)
-                                    .hint_text("Search installed fonts"),
-                            );
-                            let filter = edit.filter.to_lowercase();
-                            egui::ScrollArea::vertical()
-                                .max_height(240.0)
-                                .show(ui, |ui| {
-                                    for family in renderer
-                                        .families()
-                                        .iter()
-                                        .filter(|name| name.to_lowercase().contains(&filter))
-                                    {
-                                        widgets::menu_choice(
-                                            ui,
-                                            &mut edit.style.family,
-                                            family.clone(),
-                                            family,
-                                        );
-                                    }
-                                });
-                        });
+                    edit.fonts.show(ui, renderer, &mut edit.style.family);
                 });
                 if !renderer.has_family(&edit.style.family) {
                     ui.label(

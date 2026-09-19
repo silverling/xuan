@@ -583,6 +583,11 @@ impl PopUp {
         ui: &mut Ui,
         content: impl FnOnce(&mut Ui) -> R,
     ) -> Option<egui::InnerResponse<R>> {
+        let response = self.button(ui);
+        egui::Popup::menu(&response).width(self.width).show(content)
+    }
+
+    pub fn button(&self, ui: &mut Ui) -> Response {
         let (rect, _) = ui.allocate_exact_size(vec2(self.width, 22.0), Sense::hover());
         let response = ui.interact(rect, ui.make_persistent_id(self.id), Sense::click());
         response.widget_info(|| {
@@ -596,7 +601,7 @@ impl PopUp {
         painter.text(
             pos2(rect.left() + 10.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            self.text,
+            &self.text,
             FontId::proportional(12.0),
             theme::TEXT,
         );
@@ -611,7 +616,7 @@ impl PopUp {
                 Stroke::new(1.2_f32, theme::TEXT),
             ));
         }
-        egui::Popup::menu(&response).width(self.width).show(content)
+        response
     }
 }
 

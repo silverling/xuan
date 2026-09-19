@@ -2,6 +2,7 @@ mod canvas;
 mod chrome;
 mod clipboard;
 mod dialogs;
+mod font_picker;
 mod gpu_preview;
 mod icons;
 mod jobs;
