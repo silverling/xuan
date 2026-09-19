@@ -353,6 +353,57 @@ fn benchmark_large_image_zoom() {
     report_benchmark("Zoom UI + compositor", durations);
 }
 
+#[test]
+#[ignore = "requires a GPU; optionally set XUAN_ZOOM_BENCH_IMAGE to an image path"]
+fn benchmark_large_image_levels() {
+    let (context, mut app, state) = large_image_benchmark_app();
+    app.start_adjustment(
+        Adjustment::LevelsChannels {
+            ranges: [xuan::color::DEFAULT_LEVELS; 4],
+        },
+        true,
+    );
+    for _ in 0..3 {
+        frame(&context, &mut app);
+    }
+    for refresh in [false, true] {
+        let mut durations = Vec::new();
+        for step in 0..24 {
+            let edit = app.effect.as_mut().unwrap();
+            if refresh {
+                let Some(Adjustment::LevelsChannels { ranges }) = &mut edit.adjustment else {
+                    unreachable!();
+                };
+                ranges[0][0] = step as f32;
+                edit.refresh = true;
+            }
+            let start = std::time::Instant::now();
+            let output = pointer_frame(
+                &context,
+                &mut app,
+                Pos2::new(500.0 + step as f32, 250.0),
+                None,
+                egui::Modifiers::NONE,
+            );
+            let _ = context.tessellate(output.shapes, output.pixels_per_point);
+            state
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+            durations.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        report_benchmark(
+            if refresh {
+                "Levels live preview"
+            } else {
+                "Levels pointer movement"
+            },
+            durations,
+        );
+    }
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
 fn large_image_benchmark_app() -> (egui::Context, EditorApp, eframe::egui_wgpu::RenderState) {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter =
@@ -1895,6 +1946,119 @@ fn layer_commands_and_tabs_have_independent_histories() {
     app.command("delete_mask");
     assert!(!app.mask_target);
     app.session().unwrap().document.validate().unwrap();
+}
+
+#[test]
+fn levels_reuses_original_histogram_source_until_dialog_closes() {
+    for adjustment in [
+        Adjustment::LevelsChannels {
+            ranges: [xuan::color::DEFAULT_LEVELS; 4],
+        },
+        Adjustment::Levels {
+            black: 0.0,
+            gamma: 1.0,
+            white: 255.0,
+            output_black: 0.0,
+            output_white: 255.0,
+        },
+    ] {
+        for as_layer in [false, true] {
+            let (context, mut app) = app();
+            app.dimensions = [32, 24];
+            app.new_document();
+            app.brush.color = [180, 140, 100, 255];
+            app.command("fill_fg");
+            frame(&context, &mut app);
+            let original = render::render(&app.session().unwrap().document);
+            let expected_source = render::render_scaled(&app.session().unwrap().document, 256, 192);
+            app.start_adjustment(adjustment.clone(), as_layer);
+            assert!(app.effect.as_ref().unwrap().levels_source.is_none());
+            frame(&context, &mut app);
+            let source = app.effect.as_ref().unwrap().levels_source.as_ref().unwrap();
+            assert_eq!(source, &expected_source);
+            let source_pixels = source.as_ptr();
+
+            for (channel, preview) in [(0, true), (1, true), (2, false), (3, true)] {
+                let edit = app.effect.as_mut().unwrap();
+                match edit.adjustment.as_mut().unwrap() {
+                    Adjustment::LevelsChannels { ranges } => ranges[0][1] = 2.0,
+                    Adjustment::Levels { gamma, .. } => *gamma = 2.0,
+                    _ => unreachable!(),
+                }
+                edit.channel = channel;
+                edit.preview = preview;
+                edit.refresh = true;
+                frame(&context, &mut app);
+                pointer_frame(
+                    &context,
+                    &mut app,
+                    Pos2::new(500.0 + channel as f32, 250.0),
+                    None,
+                    egui::Modifiers::NONE,
+                );
+                let source = app.effect.as_ref().unwrap().levels_source.as_ref().unwrap();
+                assert_eq!(source.as_ptr(), source_pixels);
+                assert_eq!(source, &expected_source);
+                assert_eq!(
+                    render::render(&app.session().unwrap().document) != original,
+                    preview
+                );
+            }
+
+            let apply = layer_label(&context, &mut app, "Apply") + Vec2::splat(5.0);
+            pointer_frame(&context, &mut app, apply, Some(true), egui::Modifiers::NONE);
+            pointer_frame(
+                &context,
+                &mut app,
+                apply,
+                Some(false),
+                egui::Modifiers::NONE,
+            );
+            assert!(app.dialog.is_none());
+            assert!(app.effect.is_none());
+            let applied = render::render(&app.session().unwrap().document);
+            app.command("undo");
+            assert_eq!(render::render(&app.session().unwrap().document), original);
+            app.command("redo");
+            assert_eq!(render::render(&app.session().unwrap().document), applied);
+
+            let expected_source = render::render_scaled(&app.session().unwrap().document, 256, 192);
+            if as_layer {
+                let target = app.session().unwrap().document.active.unwrap();
+                app.edit_adjustment_layer(target);
+            } else {
+                app.start_adjustment(adjustment.clone(), false);
+            }
+            assert!(app.effect.as_ref().unwrap().levels_source.is_none());
+            frame(&context, &mut app);
+            assert_eq!(
+                app.effect.as_ref().unwrap().levels_source.as_ref(),
+                Some(&expected_source)
+            );
+            assert_ne!(
+                expected_source.get_pixel(128, 96),
+                &image::Rgba([180, 140, 100, 255])
+            );
+            let edit = app.effect.as_mut().unwrap();
+            match edit.adjustment.as_mut().unwrap() {
+                Adjustment::LevelsChannels { ranges } => ranges[0][1] = 3.0,
+                Adjustment::Levels { gamma, .. } => *gamma = 3.0,
+                _ => unreachable!(),
+            }
+            edit.refresh = true;
+            frame(&context, &mut app);
+            assert_ne!(render::render(&app.session().unwrap().document), applied);
+            keyboard_frame(
+                &context,
+                &mut app,
+                vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)],
+                egui::Modifiers::NONE,
+            );
+            assert!(app.dialog.is_none());
+            assert!(app.effect.is_none());
+            assert_eq!(render::render(&app.session().unwrap().document), applied);
+        }
+    }
 }
 
 #[test]

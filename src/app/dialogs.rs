@@ -383,11 +383,13 @@ impl EditorApp {
                         }
                         Adjustment::LevelsChannels { ranges } => {
                             channel_picker(ui, &mut edit.channel);
-                            let source = render::render_scaled(&edit.original, 256, 192);
+                            let source = edit.levels_source.get_or_insert_with(|| {
+                                render::render_scaled(&edit.original, 256, 192)
+                            });
                             changed |= super::levels_controls::controls(
                                 ui,
                                 &mut ranges[edit.channel],
-                                &source,
+                                source,
                                 edit.channel,
                             );
                         }
@@ -429,9 +431,11 @@ impl EditorApp {
                             output_black,
                             output_white,
                         } => {
-                            let source = render::render_scaled(&edit.original, 256, 192);
+                            let source = edit.levels_source.get_or_insert_with(|| {
+                                render::render_scaled(&edit.original, 256, 192)
+                            });
                             let mut range = [*black, *gamma, *white, *output_black, *output_white];
-                            changed |= super::levels_controls::controls(ui, &mut range, &source, 0);
+                            changed |= super::levels_controls::controls(ui, &mut range, source, 0);
                             [*black, *gamma, *white, *output_black, *output_white] = range;
                         }
                         Adjustment::Curves { points } => {

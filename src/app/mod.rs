@@ -277,6 +277,8 @@ enum Dialog {
 
 struct EffectEdit {
     original: Document,
+    // The histogram uses the immutable original, independent of live preview edits.
+    levels_source: Option<RgbaImage>,
     adjustment: Option<Adjustment>,
     filter: Option<Filter>,
     as_layer: bool,
@@ -749,6 +751,7 @@ impl EditorApp {
         session.history.begin(adjustment.name(), &session.document);
         self.effect = Some(EffectEdit {
             original: session.document.clone(),
+            levels_source: None,
             adjustment: Some(adjustment),
             filter: None,
             as_layer,
@@ -767,6 +770,7 @@ impl EditorApp {
         session.history.begin(filter.name(), &session.document);
         self.effect = Some(EffectEdit {
             original: session.document.clone(),
+            levels_source: None,
             adjustment: None,
             filter: Some(filter),
             as_layer: false,
