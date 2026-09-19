@@ -351,27 +351,46 @@ pub fn fill(document: &mut Document, color: [u8; 4], erase: bool, mask_target: b
     Ok(())
 }
 
+pub struct GradientOptions {
+    pub foreground: [u8; 4],
+    pub background: [u8; 4],
+    pub radial: bool,
+    pub opacity: f32,
+    pub mask_target: bool,
+}
+
 pub fn gradient(
     document: &mut Document,
     start: Point,
     end: Point,
-    foreground: [u8; 4],
-    background: [u8; 4],
-    radial: bool,
-    opacity: f32,
+    options: GradientOptions,
 ) -> Result<()> {
+    let GradientOptions {
+        foreground,
+        background,
+        radial,
+        opacity,
+        mask_target,
+    } = options;
     let selection = document.selection.clone();
     let layer = document
         .active_mut()
         .ok_or_else(|| anyhow::anyhow!("Select a layer first"))?;
-    ensure_pixels(layer)?;
-    let transform = layer.transform;
-    let pixels = Arc::make_mut(layer.pixels.as_mut().unwrap());
-    let (w, h) = pixels.dimensions();
+    let (transform, (w, h)) = if mask_target {
+        prepare_mask(layer)?;
+        let mask = layer.mask.as_ref().unwrap();
+        (
+            mask.placement.unwrap_or(layer.transform),
+            mask.pixels.dimensions(),
+        )
+    } else {
+        ensure_pixels(layer)?;
+        (layer.transform, layer.pixels.as_ref().unwrap().dimensions())
+    };
     let dx = end.x - start.x;
     let dy = end.y - start.y;
     let length_sq = (dx * dx + dy * dy).max(0.01);
-    for (x, y, pixel) in pixels.enumerate_pixels_mut() {
+    let color_at = |x, y| {
         let point = transform.point(Point::new(
             (x as f32 + 0.5) / w as f32,
             (y as f32 + 0.5) / h as f32,
@@ -382,12 +401,29 @@ pub fn gradient(
             ((point.x - start.x) * dx + (point.y - start.y) * dy) / length_sq
         };
         let t = t.clamp(0.0, 1.0);
-        let mut color = std::array::from_fn(|i| {
+        let mut color: [f32; 4] = std::array::from_fn(|i| {
             (foreground[i] as f32 * (1.0 - t) + background[i] as f32 * t) / 255.0
         });
         color[3] *= opacity * selection::coverage(selection.as_deref(), point);
-        pixel.0 = composite(pixel.0.map(|v| v as f32 / 255.0), color, BlendMode::Normal)
+        color
+    };
+    if mask_target {
+        let pixels = Arc::make_mut(&mut layer.mask.as_mut().unwrap().pixels);
+        for (x, y, pixel) in pixels.enumerate_pixels_mut() {
+            let color = color_at(x, y);
+            let target = (color[0] * 0.3 + color[1] * 0.59 + color[2] * 0.11) * 255.0;
+            pixel[0] = (pixel[0] as f32 * (1.0 - color[3]) + target * color[3]).round() as u8;
+        }
+    } else {
+        let pixels = Arc::make_mut(layer.pixels.as_mut().unwrap());
+        for (x, y, pixel) in pixels.enumerate_pixels_mut() {
+            pixel.0 = composite(
+                pixel.0.map(|v| v as f32 / 255.0),
+                color_at(x, y),
+                BlendMode::Normal,
+            )
             .map(|v| (v * 255.0).round() as u8);
+        }
     }
     Ok(())
 }
@@ -503,6 +539,103 @@ pub fn mask_from_selection(document: &Document, layer: &Layer) -> GrayImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mask_gradient_respects_placement_selection_opacity_and_color_alpha() {
+        let mut doc = Document::new(12, 8).unwrap();
+        let mut layer = shape(
+            Point::default(),
+            Point::new(4.0, 2.0),
+            ShapeKind::Rectangle,
+            [50, 100, 150, 255],
+            0.0,
+        )
+        .unwrap();
+        layer.mask = Some(Mask {
+            linked: false,
+            placement: Some(crate::document::Transform {
+                x: 4.0,
+                y: 2.0,
+                ..crate::document::Transform::new(8, 4)
+            }),
+            ..Mask::white()
+        });
+        let before = layer.clone();
+        doc.insert(layer);
+        let mut selection = GrayImage::new(12, 8);
+        selection.put_pixel(5, 3, Luma([128]));
+        selection.put_pixel(7, 3, Luma([255]));
+        selection.put_pixel(11, 3, Luma([255]));
+        doc.selection = Some(Arc::new(selection));
+
+        gradient(
+            &mut doc,
+            Point::new(5.0, 3.0),
+            Point::new(11.0, 3.0),
+            GradientOptions {
+                foreground: [255, 0, 0, 128],
+                background: [0, 0, 255, 0],
+                radial: false,
+                opacity: 0.5,
+                mask_target: true,
+            },
+        )
+        .unwrap();
+
+        let layer = doc.active().unwrap();
+        assert!(Arc::ptr_eq(
+            layer.pixels.as_ref().unwrap(),
+            before.pixels.as_ref().unwrap(),
+        ));
+        assert!(layer.shape.is_some());
+        let mask = layer.mask.as_ref().unwrap();
+        assert_eq!(mask.placement, before.mask.as_ref().unwrap().placement);
+        assert!(!mask.linked);
+        assert_eq!(mask.pixels.dimensions(), (4, 2));
+        assert_eq!(
+            mask.pixels.as_raw(),
+            &[233, 222, 255, 255, 255, 255, 255, 255]
+        );
+        assert_eq!(before.mask.unwrap().pixels.as_raw(), &[255]);
+    }
+
+    #[test]
+    fn mask_gradient_supports_non_pixel_layers_and_rejects_locked_layers() {
+        for group in [false, true] {
+            let mut doc = Document::new(4, 2).unwrap();
+            let layer = doc.active_mut().unwrap();
+            layer.group = group;
+            layer.adjustment = (!group).then_some(crate::document::Adjustment::Invert);
+            layer.mask = Some(Mask::white());
+            let options = || GradientOptions {
+                foreground: [0, 0, 0, 255],
+                background: [255; 4],
+                radial: false,
+                opacity: 1.0,
+                mask_target: true,
+            };
+            let start = Point::new(0.5, 0.5);
+            let end = Point::new(3.5, 0.5);
+
+            gradient(&mut doc, start, end, options()).unwrap();
+            let layer = doc.active_mut().unwrap();
+            assert!(layer.pixels.is_none());
+            assert_eq!(layer.group, group);
+            assert_eq!(
+                layer.adjustment,
+                (!group).then_some(crate::document::Adjustment::Invert),
+            );
+            let pixels = layer.mask.as_ref().unwrap().pixels.clone();
+            assert_eq!(pixels.as_raw(), &[0, 85, 170, 255, 0, 85, 170, 255]);
+
+            layer.locked = true;
+            assert!(gradient(&mut doc, start, end, options()).is_err());
+            assert!(Arc::ptr_eq(
+                &pixels,
+                &doc.active().unwrap().mask.as_ref().unwrap().pixels,
+            ));
+        }
+    }
 
     #[test]
     fn brush_extends_an_imported_layer_without_moving_existing_pixels() {

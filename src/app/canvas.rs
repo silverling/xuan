@@ -1106,10 +1106,13 @@ impl EditorApp {
                     &mut session.document,
                     start,
                     end,
-                    self.brush.color,
-                    self.background,
-                    self.radial,
-                    self.brush.opacity,
+                    paint::GradientOptions {
+                        foreground: self.brush.color,
+                        background: self.background,
+                        radial: self.radial,
+                        opacity: self.brush.opacity,
+                        mask_target: self.mask_target,
+                    },
                 ),
                 Tool::Shape => {
                     let start = if modifiers.alt {

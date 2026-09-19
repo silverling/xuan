@@ -1813,6 +1813,73 @@ fn empty_canvas_drags_and_panning_do_not_move_or_select_layers() {
 }
 
 #[test]
+fn gradient_gestures_respect_the_mask_target_and_undo() {
+    for radial in [false, true] {
+        for mask_target in [true, false] {
+            let (context, mut app) = app();
+            app.dimensions = [64, 48];
+            app.new_document();
+            paint::fill(
+                &mut app.session_mut().unwrap().document,
+                [50, 100, 150, 255],
+                false,
+                false,
+            )
+            .unwrap();
+            app.command("mask");
+            app.mask_target = mask_target;
+            app.set_tool(Tool::Gradient);
+            app.radial = radial;
+            app.brush.color = [0, 0, 0, 255];
+            app.background = [255; 4];
+            let before = app.session().unwrap().document.active().unwrap().clone();
+
+            drag(
+                &context,
+                &mut app,
+                Point::new(10.5, 20.5),
+                Point::new(50.5, 20.5),
+                egui::Modifiers::NONE,
+            );
+
+            assert!(app.error.is_none(), "{:?}", app.error);
+            let session = app.session().unwrap();
+            assert_eq!(session.history.undo_name(), Some("Gradient"));
+            let after = session.document.active().unwrap().clone();
+            if mask_target {
+                assert!(Arc::ptr_eq(
+                    before.pixels.as_ref().unwrap(),
+                    after.pixels.as_ref().unwrap(),
+                ));
+                let mask = &after.mask.as_ref().unwrap().pixels;
+                assert!(mask.get_pixel(10, 20)[0] <= 1);
+                assert!((127..=129).contains(&mask.get_pixel(30, 20)[0]));
+                assert!(mask.get_pixel(50, 20)[0] >= 254);
+            } else {
+                assert!(Arc::ptr_eq(
+                    &before.mask.as_ref().unwrap().pixels,
+                    &after.mask.as_ref().unwrap().pixels,
+                ));
+                let pixels = after.pixels.as_ref().unwrap();
+                assert!(pixels.get_pixel(10, 20)[0] <= 1);
+                assert!((127..=129).contains(&pixels.get_pixel(30, 20)[0]));
+                assert!(pixels.get_pixel(50, 20)[0] >= 254);
+            }
+
+            for (command, expected) in [("undo", before), ("redo", after)] {
+                app.command(command);
+                let layer = app.session().unwrap().document.active().unwrap();
+                assert_eq!(layer.pixels, expected.pixels);
+                assert_eq!(
+                    layer.mask.as_ref().unwrap().pixels,
+                    expected.mask.as_ref().unwrap().pixels,
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn pointer_brush_selection_and_pixel_move_are_undoable() {
     let (context, mut app) = app();
     app.dimensions = [64, 48];
