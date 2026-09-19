@@ -1,6 +1,6 @@
 # Xuan
 
-A native Linux image editor, ported from Compositor and rewritten in Rust with **egui** and **wgpu**. It retains the original charcoal theme, compact contextual controls, vertical tool rail, tabbed workspace, and Layers panel.
+A native Linux image editor, ported from Compositor and rewritten in Rust with **egui** and **wgpu**. It retains the original charcoal theme, compact contextual controls, vertical tool rail, tabbed workspace, and Layers panel. Custom egui controls reproduce Compositor’s AppKit-style capsules, fields, sliders, segmented pickers, and floating panels. The menu bar shares a client-side titlebar with window controls; drag to move, double-click to maximize, or drag an edge to resize.
 
 ![xuan editing a layered composition](docs/screenshots/editor.png)
 
@@ -59,7 +59,7 @@ cargo run --release -- --demo --screenshot /tmp/xuan.png
 cargo run --release -- --demo --screenshot /tmp/levels.png --screenshot-panel levels
 ```
 
-The screenshot helper also supports `hue`, `curves`, and `export` panels. It captures the real native window and exits.
+The screenshot helper also supports `hue`, `curves`, `export`, `new`, `brush`, `selection`, `gradient`, and `shape`. It captures the real native window and exits.
 
 ## Port differences
 
@@ -69,4 +69,4 @@ Remove Background uses a border-color matte, intended for simple backgrounds, in
 
 ## License
 
-MIT. Original Compositor copyright © 2026 Wonder Assembly LLC. The original license is retained in [LICENSE](LICENSE). The Rust port has no runtime dependency on Swift, AppKit, Core Graphics, Metal, or macOS.
+MIT. Original Compositor copyright © 2026 Wonder Assembly LLC. The original license is retained in [LICENSE](LICENSE). The bundled [Inter font](assets/fonts/Inter-LICENSE.txt) is licensed under the SIL Open Font License. The Rust port has no runtime dependency on Swift, AppKit, Core Graphics, Metal, or macOS.

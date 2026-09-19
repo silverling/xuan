@@ -26,7 +26,7 @@ fn pointer_frame(
     pos: Pos2,
     pressed: Option<bool>,
     modifiers: egui::Modifiers,
-) {
+) -> egui::FullOutput {
     let mut events = vec![egui::Event::PointerMoved(pos)];
     if let Some(pressed) = pressed {
         events.push(egui::Event::PointerButton {
@@ -36,7 +36,7 @@ fn pointer_frame(
             modifiers,
         });
     }
-    let _ = context.run(
+    context.run(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 Pos2::ZERO,
@@ -48,7 +48,7 @@ fn pointer_frame(
             ..Default::default()
         },
         |ctx| app.show(ctx),
-    );
+    )
 }
 
 fn drag(
@@ -300,4 +300,242 @@ fn copying_layers_between_projects_keeps_source_and_undoes_in_destination() {
     app.command("undo");
     assert_eq!(app.sessions[1].document.layers.len(), 1);
     assert_eq!(app.sessions[0].document.layers.len(), 2);
+}
+
+fn has_command(
+    output: &egui::FullOutput,
+    predicate: impl Fn(&egui::ViewportCommand) -> bool,
+) -> bool {
+    output
+        .viewport_output
+        .values()
+        .any(|viewport| viewport.commands.iter().any(&predicate))
+}
+
+#[test]
+fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
+    let (context, mut app) = app();
+    frame(&context, &mut app);
+    frame(&context, &mut app);
+    let output = pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(950.0, 20.0),
+        Some(true),
+        egui::Modifiers::NONE,
+    );
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::StartDrag
+    )));
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(950.0, 20.0),
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+
+    // Resize from the undecorated left edge.
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        None,
+        egui::Modifiers::NONE,
+    );
+    let output = pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        Some(true),
+        egui::Modifiers::NONE,
+    );
+    assert!(has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::BeginResize(egui::ResizeDirection::West)
+    )));
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(1.0, 400.0),
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+
+    for (x, maximize) in [(61.0, true), (41.0, false)] {
+        pointer_frame(
+            &context,
+            &mut app,
+            Pos2::new(x, 20.0),
+            None,
+            egui::Modifiers::NONE,
+        );
+        pointer_frame(
+            &context,
+            &mut app,
+            Pos2::new(x, 20.0),
+            Some(true),
+            egui::Modifiers::NONE,
+        );
+        let output = pointer_frame(
+            &context,
+            &mut app,
+            Pos2::new(x, 20.0),
+            Some(false),
+            egui::Modifiers::NONE,
+        );
+        assert!(has_command(&output, |c| if maximize {
+            matches!(c, egui::ViewportCommand::Maximized(true))
+        } else {
+            matches!(c, egui::ViewportCommand::Minimized(true))
+        }));
+    }
+
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("fill_fg");
+    frame(&context, &mut app);
+    pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(21.0, 20.0),
+        Some(true),
+        egui::Modifiers::NONE,
+    );
+    let output = pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(21.0, 20.0),
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.close_app);
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::Close
+    )));
+    assert_eq!(app.sessions.len(), 1);
+}
+
+#[test]
+fn custom_controls_keep_keyboard_input_and_disabled_behavior() {
+    let context = egui::Context::default();
+    theme::apply(&context);
+    let mut value = 0.5_f32;
+    let mut enabled = true;
+    let mut slider_id = egui::Id::NULL;
+    let mut draw = |events: Vec<egui::Event>, enabled: bool| {
+        let _ = context.run(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add_enabled_ui(enabled, |ui| {
+                        let response =
+                            ui.add(widgets::Slider::new(&mut value, 0.0..=1.0).percentage());
+                        slider_id = response.id;
+                        response.request_focus();
+                    });
+                });
+            },
+        );
+        value
+    };
+    draw(Vec::new(), enabled);
+    let key = egui::Event::Key {
+        key: egui::Key::ArrowRight,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let changed = draw(vec![key.clone()], enabled);
+    assert!(changed > 0.5 && changed <= 1.0);
+    enabled = false;
+    let unchanged = draw(vec![key], enabled);
+    assert_eq!(unchanged, changed);
+}
+
+#[test]
+fn floating_panels_stay_bounded_at_minimum_window_size() {
+    let (context, mut app) = app();
+    app.dimensions = [32, 24];
+    app.new_document();
+    app.command("fill_fg");
+    app.command("levels");
+    for _ in 0..5 {
+        frame(&context, &mut app);
+    }
+    let full = context
+        .memory(|memory| memory.area_rect(egui::Id::new("Levels")))
+        .unwrap();
+    assert!(
+        full.height() > 530.0,
+        "Levels should expand before scrolling: {full:?}"
+    );
+    for panel in ["levels", "hue", "curves", "export", "new"] {
+        app.dialog = None;
+        app.effect = None;
+        app.export_format = "jpg".into();
+        app.command(panel);
+        for _ in 0..5 {
+            let _ = context.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        Pos2::ZERO,
+                        Vec2::new(850.0, 560.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| app.show(ctx),
+            );
+        }
+        let title = match panel {
+            "levels" => "Levels",
+            "hue" => "Hue/Saturation",
+            "curves" => "Curves",
+            "export" => "Export image",
+            _ => "New canvas",
+        };
+        let rect = context
+            .memory(|memory| memory.area_rect(egui::Id::new(title)))
+            .expect(title);
+        assert!(rect.width() < 740.0, "{title} grew to {rect:?}");
+        assert!(rect.height() <= 542.0, "{title} is too tall: {rect:?}");
+        assert!(
+            rect.top() >= 0.0 && rect.bottom() <= 560.0,
+            "{title} clipped vertically: {rect:?}"
+        );
+        assert!(
+            rect.left() >= 0.0 && rect.right() <= 850.0,
+            "{title} clipped: {rect:?}"
+        );
+    }
+}
+
+#[test]
+fn floating_panel_title_remains_draggable() {
+    let (context, mut app) = app();
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("hue");
+    for _ in 0..3 {
+        frame(&context, &mut app);
+    }
+    let id = egui::Id::new("Hue/Saturation");
+    let before = context.memory(|memory| memory.area_rect(id)).unwrap();
+    let start = before.center_top() + Vec2::new(0.0, 15.0);
+    let end = start + Vec2::new(50.0, 30.0);
+    pointer_frame(&context, &mut app, start, None, egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, start, Some(true), egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, end, None, egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, end, Some(false), egui::Modifiers::NONE);
+    let after = context.memory(|memory| memory.area_rect(id)).unwrap();
+    assert!(
+        (after.min - before.min).length() > 20.0,
+        "Panel didn't move: {before:?} → {after:?}"
+    );
 }

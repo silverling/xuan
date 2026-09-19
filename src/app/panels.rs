@@ -1,3 +1,4 @@
+use super::widgets;
 use egui::RichText;
 use xuan::{
     paint::{PaintMode, ShapeKind},
@@ -14,7 +15,7 @@ fn value(
 ) -> bool {
     ui.label(RichText::new(label).color(theme::MUTED));
     ui.add(
-        egui::DragValue::new(number)
+        widgets::Number::new(number)
             .speed(1.0)
             .range(range)
             .max_decimals(1),
@@ -43,13 +44,18 @@ impl EditorApp {
                                     } else {
                                         self.tool.label()
                                     })
-                                    .strong(),
+                                    .strong()
+                                    .size(13.0),
                                 );
                                 ui.add_space(8.0);
                                 match self.tool {
                                     Tool::Move => {
-                                        ui.checkbox(&mut self.auto_select, "Auto Select");
-                                        ui.checkbox(&mut self.show_controls, "Show Controls");
+                                        widgets::checkbox(ui, &mut self.auto_select, "Auto Select");
+                                        widgets::checkbox(
+                                            ui,
+                                            &mut self.show_controls,
+                                            "Show Controls",
+                                        );
                                         ui.separator();
                                         if let Some(t) = &mut transform {
                                             changed |= value(
@@ -77,7 +83,7 @@ impl EditorApp {
                                                 }
                                                 changed = true;
                                             }
-                                            ui.checkbox(&mut self.lock_ratio, "Link");
+                                            widgets::checkbox(ui, &mut self.lock_ratio, "Link");
                                             changed |=
                                                 value(ui, "Angle", &mut t.rotation, -360.0..=360.0);
                                             ui.label("°");
@@ -89,132 +95,134 @@ impl EditorApp {
                                         }
                                     }
                                     tool if tool.is_brush() => {
+                                        if matches!(self.tool, Tool::Brush | Tool::Erase) {
+                                            let mut brush_tool = self.tool;
+                                            if widgets::segmented(
+                                                ui,
+                                                &mut brush_tool,
+                                                &[(Tool::Brush, "Paint"), (Tool::Erase, "Erase")],
+                                            )
+                                            .changed()
+                                            {
+                                                self.set_tool(brush_tool);
+                                            }
+                                        }
                                         if self.tool == Tool::Blur {
-                                            ui.selectable_value(
+                                            widgets::segmented(
+                                                ui,
                                                 &mut self.blur_mode,
-                                                PaintMode::Blur,
-                                                "Blur",
-                                            );
-                                            ui.selectable_value(
-                                                &mut self.blur_mode,
-                                                PaintMode::Smudge,
-                                                "Smudge",
+                                                &[
+                                                    (PaintMode::Blur, "Blur"),
+                                                    (PaintMode::Smudge, "Smudge"),
+                                                ],
                                             );
                                         }
                                         if self.tool == Tool::Clone {
-                                            ui.checkbox(&mut self.clone_aligned, "Aligned");
-                                            ui.checkbox(&mut self.clone_all, "All Layers");
+                                            widgets::checkbox(
+                                                ui,
+                                                &mut self.clone_aligned,
+                                                "Aligned",
+                                            );
+                                            widgets::segmented(
+                                                ui,
+                                                &mut self.clone_all,
+                                                &[(false, "This Layer"), (true, "All Layers")],
+                                            );
                                         }
                                         value(ui, "Size", &mut self.brush.diameter, 1.0..=2000.0);
                                         ui.label("px");
                                         ui.label("Hardness");
                                         ui.add(
-                                            egui::Slider::new(&mut self.brush.hardness, 0.0..=1.0)
-                                                .custom_formatter(|v, _| {
-                                                    format!("{:.0}%", v * 100.0)
-                                                }),
+                                            widgets::Slider::new(
+                                                &mut self.brush.hardness,
+                                                0.0..=1.0,
+                                            )
+                                            .percentage(),
                                         );
                                         ui.label("Opacity");
                                         ui.add(
-                                            egui::Slider::new(&mut self.brush.opacity, 0.01..=1.0)
-                                                .custom_formatter(|v, _| {
-                                                    format!("{:.0}%", v * 100.0)
-                                                }),
+                                            widgets::Slider::new(
+                                                &mut self.brush.opacity,
+                                                0.01..=1.0,
+                                            )
+                                            .percentage(),
                                         );
-                                        ui.color_edit_button_srgba_unmultiplied(
-                                            &mut self.brush.color,
-                                        );
+                                        widgets::color_well(ui, &mut self.brush.color);
                                     }
                                     tool if tool.is_selection() => {
-                                        for (mode, label) in [
-                                            (SelectionMode::Replace, "New"),
-                                            (SelectionMode::Add, "Add"),
-                                            (SelectionMode::Subtract, "Subtract"),
-                                            (SelectionMode::Intersect, "Intersect"),
-                                        ] {
-                                            ui.selectable_value(
-                                                &mut self.selection_mode,
-                                                mode,
-                                                label,
-                                            );
-                                        }
+                                        widgets::segmented(
+                                            ui,
+                                            &mut self.selection_mode,
+                                            &[
+                                                (SelectionMode::Replace, "New"),
+                                                (SelectionMode::Add, "Add"),
+                                                (SelectionMode::Subtract, "Subtract"),
+                                                (SelectionMode::Intersect, "Intersect"),
+                                            ],
+                                        );
                                         ui.separator();
                                         match self.tool {
                                             Tool::Marquee => {
-                                                ui.selectable_value(
+                                                widgets::segmented(
+                                                    ui,
                                                     &mut self.ellipse,
-                                                    false,
-                                                    "Rectangle",
-                                                );
-                                                ui.selectable_value(
-                                                    &mut self.ellipse,
-                                                    true,
-                                                    "Ellipse",
+                                                    &[(false, "Rectangle"), (true, "Ellipse")],
                                                 );
                                             }
                                             Tool::Lasso => {
-                                                ui.selectable_value(
+                                                widgets::segmented(
+                                                    ui,
                                                     &mut self.polygonal,
-                                                    false,
-                                                    "Freehand",
-                                                );
-                                                ui.selectable_value(
-                                                    &mut self.polygonal,
-                                                    true,
-                                                    "Polygonal",
+                                                    &[(false, "Freehand"), (true, "Polygonal")],
                                                 );
                                             }
                                             Tool::Wand => {
                                                 ui.label("Tolerance");
                                                 ui.add(
-                                                    egui::DragValue::new(&mut self.tolerance)
+                                                    widgets::Number::new(&mut self.tolerance)
                                                         .range(0..=255),
                                                 );
-                                                ui.checkbox(&mut self.contiguous, "Contiguous");
+                                                widgets::checkbox(
+                                                    ui,
+                                                    &mut self.contiguous,
+                                                    "Contiguous",
+                                                );
                                             }
                                             _ => {}
                                         }
                                     }
                                     Tool::Gradient => {
-                                        ui.selectable_value(&mut self.radial, false, "Linear");
-                                        ui.selectable_value(&mut self.radial, true, "Radial");
+                                        widgets::segmented(
+                                            ui,
+                                            &mut self.radial,
+                                            &[(false, "Linear"), (true, "Radial")],
+                                        );
                                         ui.separator();
-                                        ui.color_edit_button_srgba_unmultiplied(
-                                            &mut self.brush.color,
-                                        );
+                                        widgets::color_well(ui, &mut self.brush.color);
                                         ui.label("→");
-                                        ui.color_edit_button_srgba_unmultiplied(
-                                            &mut self.background,
-                                        );
+                                        widgets::color_well(ui, &mut self.background);
                                         ui.label("Opacity");
                                         ui.add(
-                                            egui::Slider::new(&mut self.brush.opacity, 0.0..=1.0)
-                                                .custom_formatter(|v, _| {
-                                                    format!("{:.0}%", v * 100.0)
-                                                }),
+                                            widgets::Slider::new(
+                                                &mut self.brush.opacity,
+                                                0.0..=1.0,
+                                            )
+                                            .percentage(),
                                         );
                                     }
                                     Tool::Shape => {
-                                        ui.selectable_value(
+                                        widgets::segmented(
+                                            ui,
                                             &mut self.shape_kind,
-                                            ShapeKind::Rectangle,
-                                            "Rectangle",
-                                        );
-                                        ui.selectable_value(
-                                            &mut self.shape_kind,
-                                            ShapeKind::RoundedRectangle,
-                                            "Rounded",
-                                        );
-                                        ui.selectable_value(
-                                            &mut self.shape_kind,
-                                            ShapeKind::Ellipse,
-                                            "Ellipse",
+                                            &[
+                                                (ShapeKind::Rectangle, "Rectangle"),
+                                                (ShapeKind::RoundedRectangle, "Rounded"),
+                                                (ShapeKind::Ellipse, "Ellipse"),
+                                            ],
                                         );
                                         ui.separator();
                                         ui.label("Fill");
-                                        ui.color_edit_button_srgba_unmultiplied(
-                                            &mut self.brush.color,
-                                        );
+                                        widgets::color_well(ui, &mut self.brush.color);
                                         if self.shape_kind == ShapeKind::RoundedRectangle {
                                             value(
                                                 ui,
@@ -235,9 +243,7 @@ impl EditorApp {
                                     }
                                     Tool::Dropper => {
                                         ui.label("Sample: All visible layers");
-                                        ui.color_edit_button_srgba_unmultiplied(
-                                            &mut self.brush.color,
-                                        );
+                                        widgets::color_well(ui, &mut self.brush.color);
                                     }
                                     Tool::Hand | Tool::Zoom => {
                                         ui.label(
@@ -263,11 +269,17 @@ impl EditorApp {
 
     pub(super) fn status_bar(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("status_bar")
-            .exact_height(24.0)
+            .exact_height(30.0)
             .frame(
                 egui::Frame::new()
                     .fill(theme::PANEL)
-                    .inner_margin(egui::Margin::symmetric(6, 0)),
+                    .corner_radius(egui::CornerRadius {
+                        nw: 0,
+                        ne: 0,
+                        sw: theme::window_corner_radius(ctx),
+                        se: theme::window_corner_radius(ctx),
+                    })
+                    .inner_margin(egui::Margin::symmetric(18, 4)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -321,7 +333,7 @@ impl EditorApp {
             .frame(
                 egui::Frame::new()
                     .fill(theme::PANEL)
-                    .inner_margin(egui::Margin::symmetric(10, 12)),
+                    .inner_margin(egui::Margin::symmetric(10, 16)),
             )
             .show(ctx, |ui| {
                 ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none(), |ui| {
@@ -337,17 +349,7 @@ impl EditorApp {
                             ui.add_space(8.0);
                             ui.separator();
                             ui.add_space(5.0);
-                            ui.color_edit_button_srgba_unmultiplied(&mut self.brush.color)
-                                .on_hover_text("Foreground color");
-                            ui.color_edit_button_srgba_unmultiplied(&mut self.background)
-                                .on_hover_text("Background color");
-                            if ui
-                                .small_button("⇄")
-                                .on_hover_text("Swap colors (X)")
-                                .clicked()
-                            {
-                                std::mem::swap(&mut self.brush.color, &mut self.background);
-                            }
+                            widgets::palette(ui, &mut self.brush.color, &mut self.background);
                         });
                 });
             });

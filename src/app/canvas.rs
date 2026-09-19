@@ -1,3 +1,4 @@
+use super::widgets;
 use std::sync::Arc;
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
@@ -516,7 +517,7 @@ impl EditorApp {
                     ui.label("Width");
                     ui.add_sized(
                         vec2(180.0, 36.0),
-                        egui::DragValue::new(&mut self.dimensions[0])
+                        widgets::Number::new(&mut self.dimensions[0])
                             .range(1..=30_000)
                             .suffix(" px"),
                     );
@@ -526,7 +527,7 @@ impl EditorApp {
                     ui.label("Height");
                     ui.add_sized(
                         vec2(180.0, 36.0),
-                        egui::DragValue::new(&mut self.dimensions[1])
+                        widgets::Number::new(&mut self.dimensions[1])
                             .range(1..=30_000)
                             .suffix(" px"),
                     );
@@ -536,11 +537,11 @@ impl EditorApp {
             ui.label(egui::RichText::new("Transparent canvas · sRGB").color(theme::MUTED));
             ui.add_space(20.0);
             ui.horizontal(|ui| {
-                open = ui.button("Open project").clicked();
-                import = ui.button("Import image").clicked();
+                open = widgets::button(ui, "Open project").clicked();
+                import = widgets::button(ui, "Import image").clicked();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     create = ui
-                        .add(egui::Button::new("Create canvas").fill(Color32::from_gray(80)))
+                        .add(widgets::Button::new("Create canvas").primary())
                         .clicked();
                 });
             });

@@ -1,6 +1,7 @@
+use super::widgets;
 use std::{io::Cursor, sync::Arc};
 
-use egui::{Color32, RichText, Stroke, Vec2, vec2};
+use egui::{Color32, RichText, Stroke, vec2};
 use xuan::{
     document::{Adjustment, Layer, Point},
     effects::{self, Filter},
@@ -12,19 +13,15 @@ use super::{Dialog, EditorApp, theme};
 impl EditorApp {
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         if let Some(job) = &self.job {
-            egui::Window::new(&job.name)
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label("Working…");
-                    });
-                    if ui.button("Cancel").clicked() {
-                        job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-                    }
+            widgets::Window::new(&job.name).show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Working…");
                 });
+                if widgets::button(ui, "Cancel").clicked() {
+                    job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            });
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         if let Some(dialog) = self.dialog {
@@ -36,11 +33,9 @@ impl EditorApp {
                 Dialog::Export => self.export_dialog(ctx),
                 Dialog::Shortcuts => {
                     let mut open = true;
-                    egui::Window::new("Keyboard shortcuts")
+                    widgets::Window::new("Keyboard shortcuts")
+                        .default_width(690.0)
                         .open(&mut open)
-                        .resizable(false)
-                        .collapsible(false)
-                        .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                         .show(ctx, |ui| {
                             egui::Grid::new("shortcut_grid")
                                 .spacing(vec2(35.0, 10.0))
@@ -85,11 +80,8 @@ impl EditorApp {
                 }
                 Dialog::About => {
                     let mut open = true;
-                    egui::Window::new("About Xuan")
+                    widgets::Window::new("About Xuan")
                         .open(&mut open)
-                        .resizable(false)
-                        .collapsible(false)
-                        .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                         .show(ctx, |ui| {
                             ui.heading("Xuan");
                             ui.label("A space for your next composition.");
@@ -109,21 +101,20 @@ impl EditorApp {
         if let Some((id, mut name)) = self.rename.clone() {
             let mut done = false;
             let mut cancel = false;
-            egui::Window::new("Rename layer")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-                .show(ctx, |ui| {
-                    let response = ui.text_edit_singleline(&mut name);
-                    response.request_focus();
-                    ui.horizontal(|ui| {
-                        cancel = ui.button("Cancel").clicked();
-                        done = ui
-                            .add_enabled(!name.trim().is_empty(), egui::Button::new("Rename"))
-                            .clicked()
-                            || ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    });
+            widgets::Window::new("Rename layer").show(ctx, |ui| {
+                let response = ui.text_edit_singleline(&mut name);
+                response.request_focus();
+                ui.horizontal(|ui| {
+                    cancel = widgets::button(ui, "Cancel").clicked();
+                    done = ui
+                        .add_enabled(
+                            !name.trim().is_empty(),
+                            widgets::Button::new("Rename").primary(),
+                        )
+                        .clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Enter));
                 });
+            });
             self.rename = Some((id, name.clone()));
             if done && !name.trim().is_empty() {
                 self.edit("Rename Layer", |doc| {
@@ -141,15 +132,12 @@ impl EditorApp {
         self.close_dialog(ctx);
         if let Some(error) = self.error.clone() {
             let mut dismiss = false;
-            egui::Window::new("Couldn't complete the operation")
-                .collapsible(false)
-                .resizable(false)
+            widgets::Window::new("Couldn't complete the operation")
                 .default_width(420.0)
-                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
                 .show(ctx, |ui| {
                     ui.label(error);
                     ui.add_space(12.0);
-                    dismiss = ui.button("OK").clicked();
+                    dismiss = widgets::primary_button(ui, "OK").clicked();
                 });
             if dismiss {
                 self.error = None;
@@ -166,12 +154,9 @@ impl EditorApp {
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
-        egui::Window::new(title)
+        widgets::Window::new(title)
             .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
             .default_width(410.0)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.add_space(7.0);
                 ui.label(
@@ -189,7 +174,7 @@ impl EditorApp {
                     ui.vertical(|ui| {
                         ui.label("Width");
                         ui.add(
-                            egui::DragValue::new(&mut self.dimensions[0])
+                            widgets::Number::new(&mut self.dimensions[0])
                                 .range(1..=30_000)
                                 .suffix(" px")
                                 .speed(1.0),
@@ -199,7 +184,7 @@ impl EditorApp {
                     ui.vertical(|ui| {
                         ui.label("Height");
                         ui.add(
-                            egui::DragValue::new(&mut self.dimensions[1])
+                            widgets::Number::new(&mut self.dimensions[1])
                                 .range(1..=30_000)
                                 .suffix(" px")
                                 .speed(1.0),
@@ -210,7 +195,7 @@ impl EditorApp {
                 ui.horizontal(|ui| {
                     ui.label("Resolution");
                     ui.add(
-                        egui::DragValue::new(&mut self.resolution)
+                        widgets::Number::new(&mut self.resolution)
                             .range(1.0..=9600.0)
                             .suffix(" ppi"),
                     );
@@ -247,16 +232,17 @@ impl EditorApp {
                 }
                 ui.add_space(15.0);
                 ui.horizontal(|ui| {
-                    cancel = ui.button("Cancel").clicked();
+                    cancel = widgets::button(ui, "Cancel").clicked();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         apply = ui
                             .add_enabled(
                                 valid.is_ok(),
-                                egui::Button::new(if dialog == Dialog::New {
+                                widgets::Button::new(if dialog == Dialog::New {
                                     "Create canvas"
                                 } else {
                                     "Apply"
-                                }),
+                                })
+                                .primary(),
                             )
                             .clicked();
                     });
@@ -303,56 +289,72 @@ impl EditorApp {
         let mut apply = false;
         let mut cancel = false;
         let mut changed = false;
-        egui::Window::new(title)
+        widgets::Window::new(title)
             .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
             .default_width(440.0)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.add_space(8.0);
                 if let Some(adjustment) = &mut edit.adjustment {
                     match adjustment {
                         Adjustment::HueRanges { settings } => {
-                            egui::ComboBox::from_id_salt("hue_range")
+                            widgets::PopUp::from_id_salt("hue_range")
                                 .selected_text(xuan::color::HueSettings::RANGES[settings.range])
                                 .show_ui(ui, |ui| {
                                     for (index, name) in
                                         xuan::color::HueSettings::RANGES.iter().enumerate()
                                     {
-                                        changed |= ui
-                                            .selectable_value(&mut settings.range, index, *name)
-                                            .changed();
+                                        changed |= widgets::menu_choice(
+                                            ui,
+                                            &mut settings.range,
+                                            index,
+                                            *name,
+                                        )
+                                        .changed();
                                     }
                                 });
                             let values = &mut settings.adjustments[settings.range];
                             changed |= ui
                                 .add(
-                                    egui::Slider::new(&mut values[0], -180.0..=360.0)
-                                        .text("Hue")
-                                        .suffix("°"),
+                                    widgets::Slider::new(
+                                        &mut values[0],
+                                        if settings.colorize {
+                                            0.0..=360.0
+                                        } else {
+                                            -180.0..=180.0
+                                        },
+                                    )
+                                    .text("Hue")
+                                    .suffix("°"),
                                 )
                                 .changed();
                             changed |= ui
                                 .add(
-                                    egui::Slider::new(&mut values[1], -100.0..=100.0)
-                                        .text("Saturation"),
+                                    widgets::Slider::new(
+                                        &mut values[1],
+                                        if settings.colorize {
+                                            0.0..=100.0
+                                        } else {
+                                            -100.0..=100.0
+                                        },
+                                    )
+                                    .text("Saturation"),
                                 )
                                 .changed();
                             changed |= ui
                                 .add(
-                                    egui::Slider::new(&mut values[2], -100.0..=100.0)
+                                    widgets::Slider::new(&mut values[2], -100.0..=100.0)
                                         .text("Lightness"),
                                 )
                                 .changed();
-                            changed |= ui.checkbox(&mut settings.colorize, "Colorize").changed();
+                            changed |=
+                                widgets::checkbox(ui, &mut settings.colorize, "Colorize").changed();
                             if settings.range > 0 {
-                                changed |= ui
-                                    .checkbox(
-                                        &mut settings.invert_range,
-                                        "Invert selected color range",
-                                    )
-                                    .changed();
+                                changed |= widgets::checkbox(
+                                    ui,
+                                    &mut settings.invert_range,
+                                    "Invert selected color range",
+                                )
+                                .changed();
                                 ui.collapsing("Color range falloff", |ui| {
                                     for (index, label) in
                                         ["Falloff start", "Range start", "Range end", "Falloff end"]
@@ -361,7 +363,7 @@ impl EditorApp {
                                     {
                                         changed |= ui
                                             .add(
-                                                egui::Slider::new(
+                                                widgets::Slider::new(
                                                     &mut settings.bands[settings.range][index],
                                                     0.0..=360.0,
                                                 )
@@ -375,55 +377,12 @@ impl EditorApp {
                         Adjustment::LevelsChannels { ranges } => {
                             channel_picker(ui, &mut edit.channel);
                             let source = render::render_scaled(&edit.original, 256, 192);
-                            histogram(ui, &source);
-                            let range = &mut ranges[edit.channel];
-                            let maximum = range[2] - 1.0;
-                            changed |= ui
-                                .add(
-                                    egui::Slider::new(&mut range[0], 0.0..=maximum)
-                                        .text("Input black"),
-                                )
-                                .changed();
-                            changed |= ui
-                                .add(
-                                    egui::Slider::new(&mut range[1], 0.1..=9.99)
-                                        .text("Gamma")
-                                        .logarithmic(true),
-                                )
-                                .changed();
-                            let minimum = range[0] + 1.0;
-                            changed |= ui
-                                .add(
-                                    egui::Slider::new(&mut range[2], minimum..=255.0)
-                                        .text("Input white"),
-                                )
-                                .changed();
-                            ui.separator();
-                            changed |= ui
-                                .add(
-                                    egui::Slider::new(&mut range[3], 0.0..=255.0)
-                                        .text("Output black"),
-                                )
-                                .changed();
-                            changed |= ui
-                                .add(
-                                    egui::Slider::new(&mut range[4], 0.0..=255.0)
-                                        .text("Output white"),
-                                )
-                                .changed();
-                            if ui.button("Auto").clicked() {
-                                if let Adjustment::Levels {
-                                    black,
-                                    gamma,
-                                    white,
-                                    output_black,
-                                    output_white,
-                                } = effects::auto_levels(&source)
-                                {
-                                    *range = [black, gamma, white, output_black, output_white];
-                                }
-                                changed = true;
-                            }
+                            changed |= super::levels_controls::controls(
+                                ui,
+                                &mut ranges[edit.channel],
+                                &source,
+                                edit.channel,
+                            );
                         }
                         Adjustment::CurvesChannels { channels } => {
                             channel_picker(ui, &mut edit.channel);
@@ -437,21 +396,24 @@ impl EditorApp {
                         } => {
                             changed |= ui
                                 .add(
-                                    egui::Slider::new(hue, -180.0..=180.0)
+                                    widgets::Slider::new(hue, -180.0..=180.0)
                                         .text("Hue")
                                         .suffix("°"),
                                 )
                                 .changed();
                             changed |= ui
                                 .add(
-                                    egui::Slider::new(saturation, -100.0..=100.0)
+                                    widgets::Slider::new(saturation, -100.0..=100.0)
                                         .text("Saturation"),
                                 )
                                 .changed();
                             changed |= ui
-                                .add(egui::Slider::new(lightness, -100.0..=100.0).text("Lightness"))
+                                .add(
+                                    widgets::Slider::new(lightness, -100.0..=100.0)
+                                        .text("Lightness"),
+                                )
                                 .changed();
-                            changed |= ui.checkbox(colorize, "Colorize").changed();
+                            changed |= widgets::checkbox(ui, colorize, "Colorize").changed();
                         }
                         Adjustment::Levels {
                             black,
@@ -460,46 +422,10 @@ impl EditorApp {
                             output_black,
                             output_white,
                         } => {
-                            let source = render::render_scaled(
-                                &edit.original,
-                                320,
-                                ((edit.original.height as f32 / edit.original.width as f32) * 320.0)
-                                    .round()
-                                    .max(1.0) as u32,
-                            );
-                            histogram(ui, &source);
-                            ui.label("Input levels");
-                            changed |= ui
-                                .add(
-                                    egui::Slider::new(black, 0.0..=(*white - 1.0).max(0.0))
-                                        .text("Black"),
-                                )
-                                .changed();
-                            changed |= ui
-                                .add(
-                                    egui::Slider::new(gamma, 0.1..=9.99)
-                                        .text("Gamma")
-                                        .logarithmic(true),
-                                )
-                                .changed();
-                            changed |= ui
-                                .add(
-                                    egui::Slider::new(white, (*black + 1.0).min(255.0)..=255.0)
-                                        .text("White"),
-                                )
-                                .changed();
-                            ui.separator();
-                            ui.label("Output levels");
-                            changed |= ui
-                                .add(egui::Slider::new(output_black, 0.0..=255.0).text("Black"))
-                                .changed();
-                            changed |= ui
-                                .add(egui::Slider::new(output_white, 0.0..=255.0).text("White"))
-                                .changed();
-                            if ui.button("Auto").clicked() {
-                                *adjustment = effects::auto_levels(&source);
-                                changed = true;
-                            }
+                            let source = render::render_scaled(&edit.original, 256, 192);
+                            let mut range = [*black, *gamma, *white, *output_black, *output_white];
+                            changed |= super::levels_controls::controls(ui, &mut range, &source, 0);
+                            [*black, *gamma, *white, *output_black, *output_white] = range;
                         }
                         Adjustment::Curves { points } => {
                             changed |= curve_editor(ui, points);
@@ -511,16 +437,16 @@ impl EditorApp {
                         } => {
                             changed |= ui
                                 .add(
-                                    egui::Slider::new(exposure, -5.0..=5.0)
+                                    widgets::Slider::new(exposure, -5.0..=5.0)
                                         .text("Exposure")
                                         .suffix(" EV"),
                                 )
                                 .changed();
                             changed |= ui
-                                .add(egui::Slider::new(offset, -0.5..=0.5).text("Offset"))
+                                .add(widgets::Slider::new(offset, -0.5..=0.5).text("Offset"))
                                 .changed();
                             changed |= ui
-                                .add(egui::Slider::new(gamma, 0.1..=5.0).text("Gamma"))
+                                .add(widgets::Slider::new(gamma, 0.1..=5.0).text("Gamma"))
                                 .changed();
                         }
                         Adjustment::GradientMap {
@@ -529,12 +455,9 @@ impl EditorApp {
                         } => {
                             ui.horizontal(|ui| {
                                 ui.label("Shadows");
-                                changed |=
-                                    ui.color_edit_button_srgba_unmultiplied(shadows).changed();
+                                changed |= widgets::color_well(ui, shadows).changed();
                                 ui.label("Highlights");
-                                changed |= ui
-                                    .color_edit_button_srgba_unmultiplied(highlights)
-                                    .changed();
+                                changed |= widgets::color_well(ui, highlights).changed();
                             });
                         }
                         Adjustment::FilmGrain {
@@ -544,19 +467,19 @@ impl EditorApp {
                             seed,
                         } => {
                             changed |= ui
-                                .add(egui::Slider::new(amount, 0.0..=100.0).text("Amount"))
+                                .add(widgets::Slider::new(amount, 0.0..=100.0).text("Amount"))
                                 .changed();
                             changed |= ui
                                 .add(
-                                    egui::Slider::new(size, 0.1..=100.0)
+                                    widgets::Slider::new(size, 0.1..=100.0)
                                         .logarithmic(true)
                                         .text("Size"),
                                 )
                                 .changed();
                             changed |= ui
-                                .add(egui::Slider::new(roughness, 0.0..=100.0).text("Roughness"))
+                                .add(widgets::Slider::new(roughness, 0.0..=100.0).text("Roughness"))
                                 .changed();
-                            if ui.button("New pattern").clicked() {
+                            if widgets::button(ui, "New pattern").clicked() {
                                 *seed = seed.wrapping_add(1);
                                 changed = true;
                             }
@@ -566,12 +489,12 @@ impl EditorApp {
                         } => {
                             changed |= ui
                                 .add(
-                                    egui::Slider::new(amount, 0.0..=100.0)
+                                    widgets::Slider::new(amount, 0.0..=100.0)
                                         .text("Amount")
                                         .suffix("%"),
                                 )
                                 .changed();
-                            changed |= ui.checkbox(monochrome, "Monochromatic").changed();
+                            changed |= widgets::checkbox(ui, monochrome, "Monochromatic").changed();
                         }
                         Adjustment::Invert => {}
                     }
@@ -581,7 +504,7 @@ impl EditorApp {
                         Filter::GaussianBlur { radius } => {
                             changed |= ui
                                 .add(
-                                    egui::Slider::new(radius, 0.1..=100.0)
+                                    widgets::Slider::new(radius, 0.1..=100.0)
                                         .text("Radius")
                                         .suffix(" px"),
                                 )
@@ -590,14 +513,14 @@ impl EditorApp {
                         Filter::MotionBlur { distance, angle } => {
                             changed |= ui
                                 .add(
-                                    egui::Slider::new(distance, 1.0..=200.0)
+                                    widgets::Slider::new(distance, 1.0..=200.0)
                                         .text("Distance")
                                         .suffix(" px"),
                                 )
                                 .changed();
                             changed |= ui
                                 .add(
-                                    egui::Slider::new(angle, -180.0..=180.0)
+                                    widgets::Slider::new(angle, -180.0..=180.0)
                                         .text("Angle")
                                         .suffix("°"),
                                 )
@@ -606,22 +529,27 @@ impl EditorApp {
                         Filter::Noise { amount, monochrome } => {
                             changed |= ui
                                 .add(
-                                    egui::Slider::new(amount, 0.0..=100.0)
+                                    widgets::Slider::new(amount, 0.0..=100.0)
                                         .text("Amount")
                                         .suffix("%"),
                                 )
                                 .changed();
-                            changed |= ui.checkbox(monochrome, "Monochromatic").changed();
+                            changed |= widgets::checkbox(ui, monochrome, "Monochromatic").changed();
                         }
                         Filter::LensCorrection {
                             distortion,
                             vignette,
                         } => {
                             changed |= ui
-                                .add(egui::Slider::new(distortion, -50.0..=50.0).text("Distortion"))
+                                .add(
+                                    widgets::Slider::new(distortion, -50.0..=50.0)
+                                        .text("Distortion"),
+                                )
                                 .changed();
                             changed |= ui
-                                .add(egui::Slider::new(vignette, -100.0..=100.0).text("Vignette"))
+                                .add(
+                                    widgets::Slider::new(vignette, -100.0..=100.0).text("Vignette"),
+                                )
                                 .changed();
                         }
                     }
@@ -629,10 +557,10 @@ impl EditorApp {
                 ui.add_space(14.0);
                 ui.separator();
                 ui.horizontal(|ui| {
-                    changed |= ui.checkbox(&mut edit.preview, "Preview").changed();
+                    changed |= widgets::checkbox(ui, &mut edit.preview, "Preview").changed();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        apply = ui.button("Apply").clicked();
-                        cancel = ui.button("Cancel").clicked();
+                        apply = widgets::primary_button(ui, "Apply").clicked();
+                        cancel = widgets::button(ui, "Cancel").clicked();
                     });
                 });
                 if edit.as_layer {
@@ -759,12 +687,9 @@ impl EditorApp {
         let mut open = true;
         let mut export = false;
         let mut cancel = false;
-        egui::Window::new("Export image")
+        widgets::Window::new("Export image")
             .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
             .default_width(650.0)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
                 if let Some(texture) = &self.export_texture {
                     let size = texture.size_vec2();
@@ -776,22 +701,26 @@ impl EditorApp {
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     ui.label("Format");
-                    egui::ComboBox::from_id_salt("export_format")
+                    widgets::PopUp::from_id_salt("export_format")
                         .selected_text(self.export_format.to_uppercase())
                         .show_ui(ui, |ui| {
                             for format in ["png", "jpg", "tiff", "webp"] {
-                                self.export_changed |= ui
-                                    .selectable_value(
-                                        &mut self.export_format,
-                                        format.into(),
-                                        format.to_uppercase(),
-                                    )
-                                    .changed();
+                                self.export_changed |= widgets::menu_choice(
+                                    ui,
+                                    &mut self.export_format,
+                                    format.into(),
+                                    format.to_uppercase(),
+                                )
+                                .changed();
                             }
                         });
                     if self.export_format == "jpg" {
+                        ui.spacing_mut().slider_width = (ui.available_width() - 164.0).max(90.0);
                         self.export_changed |= ui
-                            .add(egui::Slider::new(&mut self.jpeg_quality, 1..=100).text("Quality"))
+                            .add(
+                                widgets::Slider::new(&mut self.jpeg_quality, 1..=100)
+                                    .text("Quality"),
+                            )
                             .changed();
                     }
                 });
@@ -804,9 +733,9 @@ impl EditorApp {
                 }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    cancel = ui.button("Cancel").clicked();
+                    cancel = widgets::button(ui, "Cancel").clicked();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        export = ui.button("Export…").clicked();
+                        export = widgets::primary_button(ui, "Export…").clicked();
                     });
                 });
             });
@@ -854,32 +783,28 @@ impl EditorApp {
             return;
         }
         let mut choice = None;
-        egui::Window::new("Save your changes?")
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .show(ctx, |ui| {
-                ui.label(if self.close_app {
-                    "Some projects have unsaved changes.".to_owned()
-                } else {
-                    format!(
-                        "“{}” has unsaved changes.",
-                        self.sessions[self.close_tab.unwrap()].title
-                    )
-                });
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        choice = Some(0);
-                    }
-                    if ui.button("Discard changes").clicked() {
-                        choice = Some(1);
-                    }
-                    if ui.button("Save").clicked() {
-                        choice = Some(2);
-                    }
-                });
+        widgets::Window::new("Save your changes?").show(ctx, |ui| {
+            ui.label(if self.close_app {
+                "Some projects have unsaved changes.".to_owned()
+            } else {
+                format!(
+                    "“{}” has unsaved changes.",
+                    self.sessions[self.close_tab.unwrap()].title
+                )
             });
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if widgets::button(ui, "Cancel").clicked() {
+                    choice = Some(0);
+                }
+                if widgets::button(ui, "Discard changes").clicked() {
+                    choice = Some(1);
+                }
+                if widgets::primary_button(ui, "Save").clicked() {
+                    choice = Some(2);
+                }
+            });
+        });
         match choice {
             Some(0) => {
                 self.close_tab = None;
@@ -917,30 +842,12 @@ impl EditorApp {
     }
 }
 
-fn histogram(ui: &mut egui::Ui, image: &image::RgbaImage) {
-    let bins = effects::histogram(image);
-    let max = *bins.iter().max().unwrap_or(&1) as f32;
-    let (rect, _) = ui.allocate_exact_size(vec2(360.0, 110.0), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 2.0, Color32::from_gray(27));
-    for (i, count) in bins.into_iter().enumerate() {
-        let x = rect.left() + i as f32 / 256.0 * rect.width();
-        let height = (count as f32 / max.max(1.0)).sqrt() * rect.height();
-        ui.painter().line_segment(
-            [
-                egui::pos2(x, rect.bottom()),
-                egui::pos2(x, rect.bottom() - height),
-            ],
-            Stroke::new(rect.width() / 256.0, Color32::from_gray(177)),
-        );
-    }
-}
-
 fn channel_picker(ui: &mut egui::Ui, channel: &mut usize) {
-    egui::ComboBox::from_id_salt("adjustment_channel")
+    widgets::PopUp::from_id_salt("adjustment_channel")
         .selected_text(["RGB", "Red", "Green", "Blue"][*channel])
         .show_ui(ui, |ui| {
             for (index, name) in ["RGB", "Red", "Green", "Blue"].iter().enumerate() {
-                ui.selectable_value(channel, index, *name);
+                widgets::menu_choice(ui, channel, index, *name);
             }
         });
 }

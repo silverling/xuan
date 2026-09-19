@@ -18,7 +18,9 @@ wgpu dispatches an 8×8 compute shader per visible layer, ping-ponging through f
 
 ## UI preservation
 
-The port uses the source's neutral 0.14-gray panels, darker canvas, 56 px tool rail, 36 px rounded tool buttons, 42 px contextual header, 252 px Layers panel (202–352 px resize range), 30 px status bar, restrained 11–13 px type, subtle dividers, and compact rounded controls. Icons are drawn as vectors. A new layered Xuan icon replaces the application identity. Native Linux window decorations and portal dialogs follow the desktop environment.
+The port uses the source's neutral 0.14-gray panels, darker canvas, 56 px tool rail, 36 px rounded tool buttons, 42 px contextual header, 252 px Layers panel (202–352 px resize range), 30 px status bar, restrained 11–13 px type, subtle dividers, and compact rounded controls. Icons are drawn as vectors. A new layered Xuan icon replaces the application identity. A client-side titlebar integrates the menu bar and traffic-light window controls; it supports window-manager dragging, all eight resize directions, minimize, maximize/restore, and the existing save-on-close flow. File dialogs continue to use the desktop portal.
+
+The shared `app/widgets.rs` controls paint capsule bezels, inset numeric fields, square checkboxes, circular slider thumbs, segmented pickers, paired pop-up chevrons, checked menu items, capsule project tabs, and overlapping palette swatches. Floating panels have a centered utility titlebar and 24 px content insets, retain their dragged positions, and scroll on short windows. Layer rows use the source’s 52 px height, 13 px names, 10 px dimensions, canvas-relative thumbnails, and hairline dividers. Levels uses a 150 px histogram, draggable input/output handles, and grouped numeric fields. Inter supplies portable typography; Apple’s proprietary system font and OS materials are approximated.
 
 The demo composition is generated locally and contains five editable layers; it is not a screenshot baked into the UI. See [editor](screenshots/editor.png), [Levels](screenshots/levels.png), and [JPEG export](screenshots/export.png) captures from the actual Linux release build.
 
@@ -27,10 +29,10 @@ The demo composition is generated locally and contains five editable layers; it 
 Verified locally on **2026-09-19**, Linux x86_64, Rust 1.98.0, glibc 2.43:
 
 - `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings` pass.
-- `cargo test --all-targets`: **37 tests pass**, with one hardware-dependent GPU test ignored in this default run.
+- `cargo test --all-targets`: **42 tests pass**, with one hardware-dependent GPU test ignored in this default run.
 - `cargo test --lib gpu::tests -- --ignored`: **1 GPU test passes**, comparing all blend modes, color/channel adjustments, film grain, masks, and perspective transforms against CPU output within two premultiplied 8-bit units.
 - Tests cover project round trips and atomic overwrite, original Swift dictionaries/transforms, unsafe asset paths, hierarchy and clipping validation, PNG/JPEG/TIFF/WebP export, PNG DPI, selection connectivity and coverage, copy-on-write pixels, expanded paint/blur bounds, live shape redraw, group transforms, linked mask placement, and history revisions.
-- egui input tests exercise brush/selection/pixel-move gestures, scale/distort handles, independent tabs, layer copying between projects, adjustment cancellation, export preview, and worker commit/cancellation.
+- egui input tests exercise brush/selection/pixel-move gestures, scale/distort handles, independent tabs, layer copying between projects, adjustment cancellation, export preview, and worker commit/cancellation. Style regression tests cover titlebar viewport commands and unsaved-close handling, floating-panel dragging and minimum-size bounds, keyboard/disabled slider behavior, and Levels handle clamping.
 - Release binary builds and starts on **Wayland** (DISPLAY unset) and **X11** (WAYLAND_DISPLAY unset). Real native screenshots were inspected for editor, welcome, Levels, Hue/Saturation, and export layouts.
 - HEIC import was verified using libheif's upstream example file; it decoded to a 1280×854 image in the editor. This external image is not bundled in the repository or archive.
 - Desktop entry validation, MIME/icon XML parsing, shell syntax checks, and CI YAML parsing pass. Release packaging and checksum verification succeed; both the extracted binary and an installation to a temporary prefix run successfully.

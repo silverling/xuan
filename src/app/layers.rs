@@ -1,3 +1,4 @@
+use super::widgets;
 use egui::{Color32, RichText, Sense, Stroke, StrokeKind, TextureOptions, vec2};
 use uuid::Uuid;
 use xuan::{
@@ -52,16 +53,18 @@ impl EditorApp {
             .resizable(true)
             .frame(egui::Frame::new().fill(theme::PANEL))
             .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
                 ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none(), |ui| {
                     self.layer_controls(ui, &mut actions);
                     ui.separator();
-                    let height = (ui.available_height() - 76.0).max(40.0);
+                    let height = (ui.available_height() - 55.0).max(40.0);
                     egui::ScrollArea::vertical()
                         .id_salt("layers_scroll")
                         .max_height(height)
                         .min_scrolled_height(height)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
                             if let Some(session) = self.session() {
                                 for (layer, depth) in rows(&session.document, &session.collapsed) {
                                     self.layer_row(ui, &layer, depth, &mut actions);
@@ -87,7 +90,7 @@ impl EditorApp {
 
     fn layer_controls(&self, ui: &mut egui::Ui, actions: &mut Actions) {
         egui::Frame::new()
-            .inner_margin(egui::Margin::symmetric(17, 15))
+            .inner_margin(egui::Margin::symmetric(18, 15))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Layers").strong());
@@ -100,37 +103,36 @@ impl EditorApp {
         ui.separator();
         let active = self.session().and_then(|s| s.document.active());
         egui::Frame::new()
-            .inner_margin(egui::Margin::symmetric(12, 7))
+            .inner_margin(egui::Margin::symmetric(12, 12))
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 8.0;
                 ui.add_enabled_ui(active.is_some_and(|layer| !layer.group), |ui| {
                     let mut blend = active.map_or(BlendMode::Normal, |l| l.blend);
                     let mut opacity = active.map_or(1.0, |l| l.opacity);
                     let mut locked = active.is_some_and(|l| l.locked);
                     let mut changed = false;
                     ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_salt("blend_mode")
-                            .width(ui.available_width() - 38.0)
+                        ui.label(RichText::new("Blend").size(11.0));
+                        widgets::PopUp::from_id_salt("blend_mode")
+                            .width((ui.available_width() - 24.0).max(80.0))
                             .selected_text(blend.name())
                             .show_ui(ui, |ui| {
                                 for mode in BlendMode::ALL {
-                                    changed |= ui
-                                        .selectable_value(&mut blend, mode, mode.name())
-                                        .changed();
+                                    changed |=
+                                        widgets::menu_choice(ui, &mut blend, mode, mode.name())
+                                            .changed();
                                 }
                             });
-                        changed |= ui
-                            .checkbox(&mut locked, "")
-                            .on_hover_text("Lock layer")
-                            .changed();
+                        if icons::lock(ui, locked).clicked() {
+                            locked = !locked;
+                            changed = true;
+                        }
                     });
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Opacity").color(theme::MUTED));
+                        ui.label(RichText::new("Opacity").size(11.0));
                         ui.spacing_mut().slider_width = (ui.available_width() - 72.0).max(40.0);
                         changed |= ui
-                            .add(
-                                egui::Slider::new(&mut opacity, 0.0..=1.0)
-                                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
-                            )
+                            .add(widgets::Slider::new(&mut opacity, 0.0..=1.0).percentage())
                             .changed();
                     });
                     if changed {
@@ -151,15 +153,16 @@ impl EditorApp {
             } else {
                 theme::PANEL
             })
-            .inner_margin(egui::Margin::symmetric(8, 6))
+            .inner_margin(egui::Margin::symmetric(8, 8))
             .show(ui, |ui| {
                 ui.set_min_width((width - 16.0).max(0.0));
                 ui.horizontal(|ui| {
+                    ui.set_min_height(36.0);
                     ui.spacing_mut().item_spacing.x = 6.0;
                     if icons::eye(ui, layer.visible).clicked() {
                         actions.visibility = Some(layer.id);
                     }
-                    ui.add_space((depth as f32 * 12.0).min(60.0));
+                    ui.add_space((depth as f32 * 24.0).min(72.0));
                     if layer.group {
                         let collapsed = self.sessions[self.current].collapsed.contains(&layer.id);
                         if ui.small_button(if collapsed { "▸" } else { "▾" }).clicked() {
@@ -182,11 +185,37 @@ impl EditorApp {
                     } else {
                         theme::MUTED
                     };
-                    let response = ui.add(
-                        egui::Label::new(RichText::new(&layer.name).color(color))
-                            .truncate()
-                            .sense(Sense::click_and_drag()),
-                    );
+                    let response = ui
+                        .vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 3.0;
+                            let response = ui.add(
+                                egui::Label::new(
+                                    RichText::new(&layer.name).size(13.0).color(color),
+                                )
+                                .truncate()
+                                .sense(Sense::click_and_drag()),
+                            );
+                            let detail = if layer.group {
+                                "Folder".to_owned()
+                            } else if let Some(adjustment) = &layer.adjustment {
+                                adjustment.name().to_owned()
+                            } else {
+                                format!(
+                                    "{:.0} × {:.0} px{}",
+                                    layer.transform.width,
+                                    layer.transform.height,
+                                    if layer.locked { " · Locked" } else { "" }
+                                )
+                            };
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(detail).size(10.0).color(theme::MUTED),
+                                )
+                                .truncate(),
+                            );
+                            response
+                        })
+                        .inner;
                     if response.clicked() {
                         actions.select = Some((layer.id, false));
                     }
@@ -205,6 +234,13 @@ impl EditorApp {
                     }
                 });
             });
+        ui.painter().line_segment(
+            [
+                row.response.rect.left_bottom(),
+                row.response.rect.right_bottom(),
+            ],
+            Stroke::new(0.5_f32, Color32::from_white_alpha(14)),
+        );
         row.response.context_menu(|ui| {
             if layer.adjustment.is_some() && ui.button("Edit adjustment…").clicked() {
                 actions.edit_adjustment = Some(layer.id);
@@ -263,12 +299,16 @@ impl EditorApp {
         selected: bool,
         actions: &mut Actions,
     ) {
-        let size = if mask {
-            vec2(28.0, 28.0)
+        let session = &mut self.sessions[self.current];
+        let document = &session.document;
+        let side = if mask { 30.0 } else { 36.0 };
+        let canvas_size = vec2(document.width as f32, document.height as f32);
+        let size = if layer.adjustment.is_some() {
+            vec2(side, side)
         } else {
-            vec2(38.0, 30.0)
+            canvas_size * (side / canvas_size.max_elem())
         };
-        let thumbnail = self.sessions[self.current]
+        let thumbnail = session
             .thumbnails
             .entry((layer.id, mask))
             .or_insert_with(|| {
@@ -280,8 +320,21 @@ impl EditorApp {
                         image::imageops::FilterType::Triangle,
                     );
                     egui::ColorImage::from_gray([28, 28], image.as_raw())
-                } else if let Some(pixels) = &layer.pixels {
-                    let image = image::imageops::thumbnail(&**pixels, 42, 32);
+                } else if layer.pixels.is_some() {
+                    let mut thumbnail_document = document.clone();
+                    let mut thumbnail_layer = layer.clone();
+                    thumbnail_layer.visible = true;
+                    thumbnail_layer.opacity = 1.0;
+                    thumbnail_layer.blend = BlendMode::Normal;
+                    thumbnail_layer.parent = None;
+                    thumbnail_layer.clip_to = None;
+                    thumbnail_layer.mask = None;
+                    thumbnail_document.layers = vec![thumbnail_layer];
+                    let image = xuan::render::render_scaled(
+                        &thumbnail_document,
+                        (size.x * 2.0).round().max(1.0) as u32,
+                        (size.y * 2.0).round().max(1.0) as u32,
+                    );
                     egui::ColorImage::from_rgba_unmultiplied(
                         [image.width() as usize, image.height() as usize],
                         image.as_raw(),
@@ -295,17 +348,27 @@ impl EditorApp {
                     TextureOptions::LINEAR,
                 )
             });
-        let response = ui.add(
-            egui::Image::new((thumbnail.id(), size))
-                .fit_to_exact_size(size)
-                .sense(Sense::click()),
+        let (slot, response) = ui.allocate_exact_size(vec2(side, 36.0), Sense::click());
+        let rect = egui::Rect::from_center_size(slot.center(), size);
+        widgets::checkerboard(ui, rect, 4.0);
+        ui.painter().image(
+            thumbnail.id(),
+            rect,
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+        ui.painter().rect_stroke(
+            rect,
+            2.0,
+            Stroke::new(1.0_f32, Color32::from_white_alpha(75)),
+            StrokeKind::Inside,
         );
         if response.clicked() {
             actions.select = Some((layer.id, mask));
         }
-        if mask && selected && self.mask_target {
+        if selected && mask == self.mask_target {
             ui.painter().rect_stroke(
-                response.rect.expand(2.0),
+                rect.expand(2.0),
                 2.0,
                 Stroke::new(1.0_f32, theme::TEXT),
                 StrokeKind::Outside,
@@ -355,7 +418,9 @@ impl EditorApp {
                                 actions.command = Some(command);
                             }
                         }
-                        ui.menu_button("Adjust", |ui| {
+                        let adjustment = icons::action_button(ui, "adjustment")
+                            .on_hover_text("New adjustment layer");
+                        egui::Popup::menu(&adjustment).show(|ui| {
                             actions.adjustment = menus::adjustment_menu(ui);
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

@@ -1,15 +1,18 @@
 mod canvas;
+mod chrome;
 mod dialogs;
 mod gpu_preview;
 mod icons;
 mod jobs;
 mod layers;
+mod levels_controls;
 mod menus;
 mod panels;
 mod shortcuts;
 #[cfg(test)]
 mod tests;
 mod theme;
+mod widgets;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -364,11 +367,20 @@ impl EditorApp {
     }
 
     pub fn preview_panel(&mut self, name: &str) {
-        if self.screenshot.is_some() && matches!(name, "levels" | "hue" | "curves" | "export") {
-            if name == "export" {
+        if self.screenshot.is_none() {
+            return;
+        }
+        match name {
+            "brush" => self.set_tool(Tool::Brush),
+            "selection" => self.set_tool(Tool::Marquee),
+            "gradient" => self.set_tool(Tool::Gradient),
+            "shape" => self.set_tool(Tool::Shape),
+            "export" => {
                 self.export_format = "jpg".into();
+                self.command(name);
             }
-            self.command(name);
+            "levels" | "hue" | "curves" | "new" => self.command(name),
+            _ => {}
         }
     }
 
@@ -1080,6 +1092,11 @@ impl EditorApp {
 }
 
 impl eframe::App for EditorApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // Let the desktop show through outside the rounded client frame.
+        [0.0; 4]
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.show(ctx);
     }
@@ -1113,6 +1130,7 @@ impl EditorApp {
                 }
             }
         }
+        self.window_resize(ctx);
         self.menus(ctx);
         self.tabs(ctx);
         self.tool_options(ctx);

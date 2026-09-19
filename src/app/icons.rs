@@ -9,7 +9,7 @@ pub fn tool_button(ui: &mut Ui, tool: Tool, selected: bool) -> egui::Response {
         painter.rect(
             rect,
             7.0,
-            Color32::from_gray(if selected { 64 } else { 48 }),
+            Color32::from_gray(if selected { 62 } else { 48 }),
             Stroke::new(
                 1.0_f32,
                 if selected {
@@ -226,6 +226,11 @@ pub fn eye(ui: &mut Ui, visible: bool) -> egui::Response {
     ));
     if visible {
         ui.painter().circle_filled(c, 2.0, color);
+    } else {
+        ui.painter().line_segment(
+            [c + vec2(-6.0, -5.0), c + vec2(6.0, 5.0)],
+            Stroke::new(1.0_f32, color),
+        );
     }
     response.on_hover_text("Toggle visibility")
 }
@@ -258,6 +263,20 @@ pub fn action_button(ui: &mut Ui, kind: &str) -> egui::Response {
                 stroke,
             ));
         }
+        "adjustment" => {
+            painter.circle_stroke(rect.center(), 7.0, stroke);
+            let points = (0..=24)
+                .map(|i| {
+                    let a = std::f32::consts::FRAC_PI_2 + i as f32 / 24.0 * std::f32::consts::PI;
+                    rect.center() + vec2(a.cos(), a.sin()) * 6.5
+                })
+                .collect();
+            painter.add(egui::Shape::convex_polygon(
+                points,
+                theme::MUTED,
+                Stroke::NONE,
+            ));
+        }
         "mask" => {
             painter.rect_stroke(rect, 1.0, stroke, StrokeKind::Inside);
             painter.circle_filled(rect.center(), 3.5, super::theme::MUTED);
@@ -278,4 +297,34 @@ pub fn action_button(ui: &mut Ui, kind: &str) -> egui::Response {
         _ => {}
     }
     response
+}
+
+pub fn lock(ui: &mut Ui, locked: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(16.0, 22.0), egui::Sense::click());
+    let center = rect.center();
+    let color = if locked { theme::TEXT } else { theme::MUTED };
+    let stroke = Stroke::new(1.0_f32, color);
+    ui.painter().rect_stroke(
+        Rect::from_center_size(center + vec2(0.0, 2.0), vec2(9.0, 7.0)),
+        1.5,
+        stroke,
+        StrokeKind::Inside,
+    );
+    let offset = if locked { 0.0 } else { 3.0 };
+    let points = (0..=12)
+        .map(|i| {
+            let angle = std::f32::consts::PI + i as f32 / 12.0 * std::f32::consts::PI;
+            center + vec2(offset + angle.cos() * 3.0, -2.0 + angle.sin() * 3.0)
+        })
+        .collect();
+    ui.painter().add(egui::Shape::line(points, stroke));
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            ui.is_enabled(),
+            locked,
+            "Lock layer",
+        )
+    });
+    response.on_hover_text(if locked { "Unlock layer" } else { "Lock layer" })
 }

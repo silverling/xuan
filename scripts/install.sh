@@ -16,6 +16,7 @@ install -Dm644 "$xuan_root/assets/org.xuan.Editor.svg" "$xuan_prefix/share/icons
 install -Dm644 "$xuan_root/packaging/org.xuan.Editor.desktop" "$xuan_prefix/share/applications/org.xuan.Editor.desktop"
 install -Dm644 "$xuan_root/packaging/org.xuan.Editor.xml" "$xuan_prefix/share/mime/packages/org.xuan.Editor.xml"
 install -Dm644 "$xuan_root/LICENSE" "$xuan_prefix/share/licenses/xuan/LICENSE"
+install -Dm644 "$xuan_root/assets/fonts/Inter-LICENSE.txt" "$xuan_prefix/share/licenses/xuan/Inter-LICENSE.txt"
 if command -v update-desktop-database >/dev/null; then
     update-desktop-database "$xuan_prefix/share/applications"
 fi
