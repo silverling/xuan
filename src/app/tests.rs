@@ -2005,6 +2005,67 @@ fn has_command(
 }
 
 #[test]
+fn idle_window_stops_requesting_repaints() {
+    for with_document in [false, true] {
+        let (context, mut app) = app();
+        if with_document {
+            app.dimensions = [64, 48];
+            app.new_document();
+        }
+        // Let layout, font uploads, and opening animations settle.
+        for _ in 0..30 {
+            frame(&context, &mut app);
+        }
+        let output = frame(&context, &mut app);
+        assert_eq!(
+            output.viewport_output[&egui::ViewportId::ROOT].repaint_delay,
+            std::time::Duration::MAX,
+            "Idle window kept requesting repaints (document: {with_document})"
+        );
+    }
+}
+
+#[test]
+fn window_title_updates_on_document_and_dirty_state_changes() {
+    let (context, mut app) = app();
+    let expect_title = |app: &mut EditorApp, title: &str| {
+        let output = frame(&context, app);
+        assert!(has_command(&output, |command| matches!(
+            command,
+            egui::ViewportCommand::Title(value) if value == title
+        )));
+        let output = frame(&context, app);
+        assert!(!has_command(&output, |command| matches!(
+            command,
+            egui::ViewportCommand::Title(_)
+        )));
+    };
+
+    expect_title(&mut app, "Xuan");
+    app.dimensions = [64, 48];
+    app.new_document();
+    app.session_mut().unwrap().title = "Photo".into();
+    expect_title(&mut app, "Photo —  Xuan");
+    app.command("fill_fg");
+    expect_title(&mut app, "Photo • —  Xuan");
+    app.command("undo");
+    expect_title(&mut app, "Photo —  Xuan");
+    app.command("redo");
+    expect_title(&mut app, "Photo • —  Xuan");
+    app.session_mut().unwrap().history.mark_saved();
+    expect_title(&mut app, "Photo —  Xuan");
+
+    app.new_document();
+    expect_title(&mut app, "Untitled —  Xuan");
+    app.current = 0;
+    expect_title(&mut app, "Photo —  Xuan");
+    app.session_mut().unwrap().title = "Saved photo".into();
+    expect_title(&mut app, "Saved photo —  Xuan");
+    app.sessions.clear();
+    expect_title(&mut app, "Xuan");
+}
+
+#[test]
 fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
     let (context, mut app) = app();
     frame(&context, &mut app);

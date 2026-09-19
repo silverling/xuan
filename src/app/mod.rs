@@ -335,6 +335,7 @@ impl Gesture {
 
 pub struct EditorApp {
     context: egui::Context,
+    window_title: String,
     job: Option<jobs::Job>,
     develop: Option<develop::Develop>,
     raw_queue: std::collections::VecDeque<(PathBuf, develop::DevelopTarget)>,
@@ -439,6 +440,7 @@ impl EditorApp {
         theme::apply(ctx);
         let mut app = Self {
             context: ctx.clone(),
+            window_title: String::new(),
             job: None,
             develop: None,
             raw_queue: Default::default(),
@@ -1241,7 +1243,11 @@ impl EditorApp {
                 if s.history.dirty() { " •" } else { "" }
             )
         });
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        if title != self.window_title {
+            self.window_title = title.clone();
+            // Viewport commands request another repaint, even for an unchanged title.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        }
         if self.screenshot.is_some()
             && !self.screenshot_requested
             && self.frames >= 5
