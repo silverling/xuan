@@ -29,10 +29,10 @@ The demo composition is generated locally and contains five editable layers; it 
 Verified locally on **2026-09-19**, Linux x86_64, Rust 1.98.0, glibc 2.43:
 
 - `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings` pass.
-- `cargo test --all-targets`: **42 tests pass**, with one hardware-dependent GPU test ignored in this default run.
+- `cargo test --all-targets`: **43 tests pass**, with one hardware-dependent GPU test ignored in this default run.
 - `cargo test --lib gpu::tests -- --ignored`: **1 GPU test passes**, comparing all blend modes, color/channel adjustments, film grain, masks, and perspective transforms against CPU output within two premultiplied 8-bit units.
 - Tests cover project round trips and atomic overwrite, original Swift dictionaries/transforms, unsafe asset paths, hierarchy and clipping validation, PNG/JPEG/TIFF/WebP export, PNG DPI, selection connectivity and coverage, copy-on-write pixels, expanded paint/blur bounds, live shape redraw, group transforms, linked mask placement, and history revisions.
-- egui input tests exercise brush/selection/pixel-move gestures, scale/distort handles, independent tabs, layer copying between projects, adjustment cancellation, export preview, and worker commit/cancellation. Style regression tests cover titlebar viewport commands and unsaved-close handling, floating-panel dragging and minimum-size bounds, keyboard/disabled slider behavior, and Levels handle clamping.
+- egui input tests exercise brush/selection/pixel-move gestures, scale/distort handles, independent tabs, layer copying between projects, adjustment cancellation, export preview, and worker commit/cancellation. Style regression tests cover titlebar dragging, double-click maximize/restore, and unsaved-close handling, floating-panel dragging and minimum-size bounds, keyboard/disabled slider behavior, and Levels handle clamping.
 - Release binary builds and starts on **Wayland** (DISPLAY unset) and **X11** (WAYLAND_DISPLAY unset). Real native screenshots were inspected for editor, welcome, Levels, Hue/Saturation, and export layouts.
 - HEIC import was verified using libheif's upstream example file; it decoded to a 1280×854 image in the editor. This external image is not bundled in the repository or archive.
 - Desktop entry validation, MIME/icon XML parsing, shell syntax checks, and CI YAML parsing pass. Release packaging and checksum verification succeed; both the extracted binary and an installation to a temporary prefix run successfully.

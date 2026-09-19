@@ -132,8 +132,8 @@ impl EditorApp {
             let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-        } else if response.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed())
-        {
+        } else if response.drag_started_by(egui::PointerButton::Primary) {
+            // A native drag grabs the pointer, so let clicks finish before handing it off.
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
     }

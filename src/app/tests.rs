@@ -324,6 +324,17 @@ fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
         Some(true),
         egui::Modifiers::NONE,
     );
+    assert!(!has_command(&output, |c| matches!(
+        c,
+        egui::ViewportCommand::StartDrag
+    )));
+    let output = pointer_frame(
+        &context,
+        &mut app,
+        Pos2::new(970.0, 25.0),
+        None,
+        egui::Modifiers::NONE,
+    );
     assert!(has_command(&output, |c| matches!(
         c,
         egui::ViewportCommand::StartDrag
@@ -331,7 +342,7 @@ fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
     pointer_frame(
         &context,
         &mut app,
-        Pos2::new(950.0, 20.0),
+        Pos2::new(970.0, 25.0),
         Some(false),
         egui::Modifiers::NONE,
     );
@@ -416,6 +427,67 @@ fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
         egui::ViewportCommand::Close
     )));
     assert_eq!(app.sessions.len(), 1);
+}
+
+#[test]
+fn titlebar_double_click_toggles_maximize_without_starting_a_drag() {
+    for maximized in [false, true] {
+        for x in [640.0, 950.0] {
+            let (context, mut app) = app();
+            frame(&context, &mut app);
+            frame(&context, &mut app);
+            for (index, pressed) in [true, false, true, false].into_iter().enumerate() {
+                let pos = Pos2::new(x, 20.0);
+                let output = context.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(1280.0, 860.0),
+                        )),
+                        viewports: [(
+                            egui::ViewportId::ROOT,
+                            egui::ViewportInfo {
+                                maximized: Some(maximized),
+                                ..Default::default()
+                            },
+                        )]
+                        .into_iter()
+                        .collect(),
+                        events: vec![
+                            egui::Event::PointerMoved(pos),
+                            egui::Event::PointerButton {
+                                pos,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                        time: Some(1.0 + index as f64 * 0.05),
+                        ..Default::default()
+                    },
+                    |ctx| app.show(ctx),
+                );
+                assert!(!has_command(&output, |c| matches!(
+                    c,
+                    egui::ViewportCommand::StartDrag
+                )));
+                let toggles: Vec<_> = output
+                    .viewport_output
+                    .values()
+                    .flat_map(|viewport| &viewport.commands)
+                    .filter_map(|command| match command {
+                        egui::ViewportCommand::Maximized(value) => Some(*value),
+                        _ => None,
+                    })
+                    .collect();
+                if index == 3 {
+                    assert_eq!(toggles, vec![!maximized]);
+                } else {
+                    assert!(toggles.is_empty());
+                }
+            }
+        }
+    }
 }
 
 #[test]
