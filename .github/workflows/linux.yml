@@ -1,8 +1,10 @@
 name: Linux
 on:
   push:
+    branches: ['**']
   pull_request:
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:
@@ -17,7 +19,7 @@ jobs:
       - name: Install Linux libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libvulkan1 mesa-vulkan-drivers libheif-examples desktop-file-utils xvfb
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libvulkan1 mesa-vulkan-drivers libheif-examples desktop-file-utils xvfb dpkg rpm cpio binutils
       - name: Set up Rust
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
@@ -27,13 +29,22 @@ jobs:
       - name: Validate desktop integration
         run: desktop-file-validate packaging/me.silverl.xuan.desktop
       - name: Package
-        run: scripts/package.sh
+        run: scripts/package.sh all
+      - name: Verify distribution packages
+        run: python3 scripts/check-packages.py
+      - name: Install Debian package
+        run: sudo apt-get install -y ./dist/*.deb
       - name: Native X11 smoke test
-        run: xvfb-run -a target/release/xuan --demo --screenshot /tmp/xuan.png
+        run: xvfb-run -a xuan --demo --screenshot /tmp/xuan.png
       - name: Native clipboard test
         run: xvfb-run -a env -u WAYLAND_DISPLAY cargo test --locked --bin xuan system_clipboard_images_and_files_paste_from_another_process -- --ignored --test-threads=1
+      - name: Remove Debian package
+        run: |
+          sudo apt-get remove -y xuan
+          test ! -e /usr/bin/xuan
+          test ! -e /usr/share/applications/me.silverl.xuan.desktop
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: xuan-linux-x86_64
-          path: dist/*.tar.gz*
+          path: dist/*
           if-no-files-found: error

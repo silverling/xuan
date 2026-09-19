@@ -36,12 +36,41 @@ The installer adds a desktop launcher, icons, and the `.xuan` file association. 
 ## Packaging
 
 ```sh
-scripts/package.sh                 # archive and SHA-256 checksum in dist/
+scripts/package.sh                 # portable archive (default)
+scripts/package.sh deb             # Debian/Ubuntu package
+scripts/package.sh rpm             # RPM package
+scripts/package.sh all             # all three formats
+python3 scripts/check-packages.py  # inspect and extract all three packages
 ```
 
-Packaging also requires Python 3. A release archive includes `bin/xuan`, `scripts/install.sh`, and rebuildable sources, including the LGPL RAW decoder. It can run directly after extraction. See [third-party notices](../THIRD_PARTY.md) for rebuilding or relinking with a modified decoder.
+Outputs and individual SHA-256 checksums are written to `dist/`. Packaging requires Python **3.11+**, binutils, and the normal build prerequisites. Debian packaging additionally needs `dpkg-deb`; RPM packaging needs `rpmbuild`. On Debian/Ubuntu, install the packaging and inspection tools with `sudo apt install dpkg rpm cpio binutils desktop-file-utils`. Native x86_64 and aarch64 builds are supported; cross-compilation is not supported by these scripts.
+
+A portable archive includes `bin/xuan`, `scripts/install.sh`, and rebuildable sources, including the LGPL RAW decoder. It can run directly after extraction. Native packages install under `/usr` and include `/usr/share/doc/xuan/source.tar.gz` for rebuilding or relinking. Both formats preserve the patched egui-winit sources and the exact Rawler sources. See [third-party notices](../THIRD_PARTY.md).
+
+Package versions come from `Cargo.toml`. Prerelease versions such as `0.2.0-rc.1` become `0.2.0~rc.1` in Debian/RPM metadata so they sort before the final release. Build metadata (`+...`) is not supported. The Debian package records the executable's required glibc version; RPM derives ELF library requirements automatically. Both declare desktop libraries that are loaded at runtime.
 
 Build on the oldest distribution you intend to support. The locally produced archive uses this workstation's glibc **2.43**; build from source on older distributions. The [CI workflow](../.github/workflows/linux.yml) builds on Ubuntu 24.04.
+
+## GitHub releases
+
+The [release workflow](../.github/workflows/release.yml) runs when a `v*` tag is pushed. It rejects tags that do not match the package version in `Cargo.toml`, then runs the shared Linux checks, builds all three x86_64 packages on Ubuntu 24.04, verifies their contents and checksums, and tests Debian installation, native startup, and removal.
+
+To release, update the version in `Cargo.toml` and the `xuan` entry in `Cargo.lock`, commit the changes, then create and push the matching tag. For example, for version `0.2.0`:
+
+```sh
+git tag -a v0.2.0 -m 'Release v0.2.0'
+git push origin v0.2.0
+```
+
+After validation succeeds, [changelogithub](https://github.com/antfu-collective/changelogithub) generates release notes from conventional commits. The GitHub CLI uploads the `.tar.gz`, `.deb`, `.rpm`, and their checksums, replacing matching assets on retries and failing the workflow if an upload fails. The workflow fetches the full Git history and uses pinned changelogithub **15.0.5** with Node.js 24. Only the publishing job receives `contents: write`; it uses the built-in `GITHUB_TOKEN` and needs no separate release secret. Prerelease tags such as `v0.2.0-rc.1` are marked as GitHub prereleases.
+
+Preview release notes locally without publishing:
+
+```sh
+npx --yes changelogithub@15.0.5 --dry --to HEAD --github silverling/xuan
+```
+
+The first release uses the available commit history; subsequent notes start after the preceding release tag. To retry a failed release, rerun its workflow in GitHub Actions.
 
 ## Application icons
 

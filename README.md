@@ -15,11 +15,10 @@ This project is inspired by [Compositor](https://github.com/robbietilton/Composi
 
 ## Get started
 
-From an extracted release archive, install and launch the demo:
+Download a `.deb`, `.rpm`, or portable archive from [Releases](https://github.com/silverling/xuan/releases). Follow the [installation instructions](docs/USAGE.md#install-and-launch), then launch the demo:
 
 ```sh
-scripts/install.sh
-~/.local/bin/xuan --demo
+xuan --demo
 ```
 
 Xuan supports Wayland and X11 and requires working Vulkan drivers. See the [user guide](docs/USAGE.md) for installation, file formats, and editing tools. To build from source, follow the [development guide](docs/DEVELOPMENT.md).

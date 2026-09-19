@@ -4,7 +4,23 @@
 
 Xuan runs on Linux with Wayland or X11 and working Vulkan drivers. Mesa software Vulkan can also run the editor. Native file dialogs use the desktop portal; install the portal backend for your desktop if dialogs do not appear.
 
-From an extracted release archive:
+Download the package for your distribution from [Releases](https://github.com/silverling/xuan/releases). GitHub releases provide x86_64 builds.
+
+On Debian or Ubuntu, install the downloaded `.deb` with APT so runtime dependencies are installed too:
+
+```sh
+sudo apt install ./xuan-*-linux-x86_64.deb
+```
+
+On Fedora or another compatible RPM distribution using DNF:
+
+```sh
+sudo dnf install ./xuan-*-linux-x86_64.rpm
+```
+
+Install one version at a time. These packages add Xuan to the application menu and provide the `xuan` command. Remove them with `sudo apt remove xuan` or `sudo dnf remove xuan`.
+
+For a portable `.tar.gz` archive, extract it and run:
 
 ```sh
 scripts/install.sh                 # installs under ~/.local
@@ -12,6 +28,8 @@ scripts/install.sh                 # installs under ~/.local
 ```
 
 The installer adds a desktop launcher, icons, and the `.xuan` file association. Use `scripts/install.sh /custom/prefix` to choose another location, and add the installation prefix's `bin` directory to `PATH`. You can also run `bin/xuan` directly from the extracted archive.
+
+Each download has a matching `.sha256` file. From the download directory, verify it with `sha256sum --check <package-file>.sha256`.
 
 Once `xuan` is on `PATH`:
 
