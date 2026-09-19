@@ -123,7 +123,7 @@ impl Tool {
     fn hint(self) -> &'static str {
         match self {
             Self::Move => {
-                "Drag to move · Handles to resize · Circle to rotate · Alt-drag duplicate · Space to pan"
+                "Click to select · Click outside to deselect · Drag to move · Handles to resize · Space to pan"
             }
             Self::Marquee => {
                 "Drag to select · Shift add · Alt subtract · Ctrl+D deselect · Delete clears"
@@ -411,7 +411,7 @@ impl EditorApp {
             shape_kind: ShapeKind::Rectangle,
             corner_radius: 16.0,
             blur_mode: PaintMode::Blur,
-            auto_select: false,
+            auto_select: true,
             show_controls: true,
             snap: true,
             lock_ratio: true,

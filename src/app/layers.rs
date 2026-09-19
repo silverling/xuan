@@ -15,10 +15,32 @@ struct Actions {
     visibility: Option<Uuid>,
     select: Option<(Uuid, bool)>,
     collapse: Option<Uuid>,
-    reorder: Option<(LayerDrag, Uuid, bool)>,
+    reorder: Option<(LayerDrag, Uuid, DropPosition, bool)>,
     appearance: Option<(BlendMode, f32, bool)>,
     rename: Option<(Uuid, String)>,
     edit_adjustment: Option<Uuid>,
+}
+
+#[derive(Clone, Copy)]
+enum DropPosition {
+    Above,
+    Below,
+    Inside,
+}
+
+impl DropPosition {
+    fn at(rect: egui::Rect, y: f32, group: bool) -> Self {
+        if group
+            && (rect.top() + rect.height() * 0.25..=rect.bottom() - rect.height() * 0.25)
+                .contains(&y)
+        {
+            Self::Inside
+        } else if y < rect.center().y {
+            Self::Above
+        } else {
+            Self::Below
+        }
+    }
 }
 
 fn rows(document: &Document, collapsed: &std::collections::HashSet<Uuid>) -> Vec<(Layer, usize)> {
@@ -185,63 +207,52 @@ impl EditorApp {
                     } else {
                         theme::MUTED
                     };
-                    let response = ui
-                        .vertical(|ui| {
-                            ui.spacing_mut().item_spacing.y = 3.0;
-                            let response = ui.add(
-                                egui::Label::new(
-                                    RichText::new(&layer.name).size(13.0).color(color),
-                                )
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 3.0;
+                        ui.add(
+                            egui::Label::new(RichText::new(&layer.name).size(13.0).color(color))
                                 .truncate()
-                                .sense(Sense::click_and_drag()),
-                            );
-                            let detail = if layer.group {
-                                "Folder".to_owned()
-                            } else if let Some(adjustment) = &layer.adjustment {
-                                adjustment.name().to_owned()
-                            } else {
-                                format!(
-                                    "{:.0} × {:.0} px{}",
-                                    layer.transform.width,
-                                    layer.transform.height,
-                                    if layer.locked { " · Locked" } else { "" }
-                                )
-                            };
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(detail).size(10.0).color(theme::MUTED),
-                                )
-                                .truncate(),
-                            );
-                            response
-                        })
-                        .inner;
-                    if response.clicked() {
-                        actions.select = Some((layer.id, false));
-                    }
-                    if response.double_clicked() {
-                        if layer.adjustment.is_some() {
-                            actions.edit_adjustment = Some(layer.id);
+                                .sense(Sense::hover()),
+                        );
+                        let detail = if layer.group {
+                            "Folder".to_owned()
+                        } else if let Some(adjustment) = &layer.adjustment {
+                            adjustment.name().to_owned()
                         } else {
-                            actions.rename = Some((layer.id, layer.name.clone()));
-                        }
-                    }
-                    if response.drag_started() {
-                        response.dnd_set_drag_payload(LayerDrag {
-                            project,
-                            layer: layer.id,
-                        });
-                    }
+                            format!(
+                                "{:.0} × {:.0} px{}",
+                                layer.transform.width,
+                                layer.transform.height,
+                                if layer.locked { " · Locked" } else { "" }
+                            )
+                        };
+                        ui.add(
+                            egui::Label::new(RichText::new(detail).size(10.0).color(theme::MUTED))
+                                .truncate(),
+                        );
+                    });
                 });
             });
+        let response = row.response.interact(Sense::click_and_drag());
+        response.dnd_set_drag_payload(LayerDrag {
+            project,
+            layer: layer.id,
+        });
+        if response.clicked() {
+            actions.select = Some((layer.id, false));
+        }
+        if response.double_clicked() {
+            if layer.adjustment.is_some() {
+                actions.edit_adjustment = Some(layer.id);
+            } else {
+                actions.rename = Some((layer.id, layer.name.clone()));
+            }
+        }
         ui.painter().line_segment(
-            [
-                row.response.rect.left_bottom(),
-                row.response.rect.right_bottom(),
-            ],
+            [response.rect.left_bottom(), response.rect.right_bottom()],
             Stroke::new(0.5_f32, Color32::from_white_alpha(14)),
         );
-        row.response.context_menu(|ui| {
+        response.context_menu(|ui| {
             if layer.adjustment.is_some() && ui.button("Edit adjustment…").clicked() {
                 actions.edit_adjustment = Some(layer.id);
                 ui.close();
@@ -280,14 +291,38 @@ impl EditorApp {
                 }
             }
         });
-        if let Some(source) = row.response.dnd_release_payload::<LayerDrag>() {
-            actions.reorder = Some((*source, layer.id, ui.input(|i| i.modifiers.alt)));
-        }
-        if row.response.dnd_hover_payload::<LayerDrag>().is_some() {
-            ui.painter().line_segment(
-                [row.response.rect.left_top(), row.response.rect.right_top()],
-                Stroke::new(2.0_f32, theme::ACCENT),
-            );
+        if let Some(source) = response.dnd_hover_payload::<LayerDrag>()
+            && (source.project != project
+                || !self.sessions[self.current]
+                    .document
+                    .descendants(source.layer)
+                    .contains(&layer.id))
+            && let Some(pointer) = ui.input(|i| i.pointer.hover_pos())
+        {
+            let position = DropPosition::at(response.rect, pointer.y, layer.group);
+            let stroke = Stroke::new(2.0_f32, theme::ACCENT);
+            match position {
+                DropPosition::Above => {
+                    ui.painter().line_segment(
+                        [response.rect.left_top(), response.rect.right_top()],
+                        stroke,
+                    );
+                }
+                DropPosition::Below => {
+                    ui.painter().line_segment(
+                        [response.rect.left_bottom(), response.rect.right_bottom()],
+                        stroke,
+                    );
+                }
+                DropPosition::Inside => {
+                    ui.painter()
+                        .rect_stroke(response.rect, 2.0, stroke, StrokeKind::Inside);
+                }
+            }
+            if let Some(source) = response.dnd_release_payload::<LayerDrag>() {
+                actions.reorder =
+                    Some((*source, layer.id, position, ui.input(|i| i.modifiers.alt)));
+            }
         }
     }
 
@@ -348,7 +383,11 @@ impl EditorApp {
                     TextureOptions::LINEAR,
                 )
             });
-        let (slot, response) = ui.allocate_exact_size(vec2(side, 36.0), Sense::click());
+        let (slot, response) = ui.allocate_exact_size(vec2(side, 36.0), Sense::click_and_drag());
+        response.dnd_set_drag_payload(LayerDrag {
+            project: document.id,
+            layer: layer.id,
+        });
         let rect = egui::Rect::from_center_size(slot.center(), size);
         widgets::checkerboard(ui, rect, 4.0);
         ui.painter().image(
@@ -468,14 +507,14 @@ impl EditorApp {
                 Ok(())
             });
         }
-        if let Some((source, target, duplicate)) = actions.reorder {
+        if let Some((source, target, position, duplicate)) = actions.reorder {
             if self
                 .session()
                 .is_some_and(|s| s.document.id != source.project)
             {
                 self.copy_layer_to_project(source, self.current);
             } else {
-                self.reorder_layer(source.layer, target, duplicate);
+                self.reorder_layer(source.layer, target, position, duplicate);
             }
         }
         if let Some(id) = actions.edit_adjustment {
@@ -492,11 +531,31 @@ impl EditorApp {
         }
     }
 
-    fn reorder_layer(&mut self, source: Uuid, target: Uuid, duplicate: bool) {
+    fn reorder_layer(
+        &mut self,
+        source: Uuid,
+        target: Uuid,
+        position: DropPosition,
+        duplicate: bool,
+    ) {
+        let Some(session) = self.session() else {
+            return;
+        };
+        if session.document.descendants(source).contains(&target)
+            || !session
+                .document
+                .layers
+                .iter()
+                .any(|layer| layer.id == source)
+            || !session
+                .document
+                .layers
+                .iter()
+                .any(|layer| layer.id == target)
+        {
+            return;
+        }
         self.edit("Reorder Layer", |doc| {
-            if source == target || doc.descendants(source).contains(&target) {
-                return Ok(());
-            }
             let Some(destination) = doc.layers.iter().find(|l| l.id == target).cloned() else {
                 return Ok(());
             };
@@ -513,20 +572,32 @@ impl EditorApp {
                 return Ok(());
             };
             let mut layer = doc.layers.remove(index);
-            layer.parent = if destination.group {
+            layer.parent = if matches!(position, DropPosition::Inside) {
                 Some(target)
             } else {
                 destination.parent
             };
             layer.clip_to = None;
-            let index = doc
-                .layers
-                .iter()
-                .position(|l| l.id == target)
-                .map_or(doc.layers.len(), |i| i + 1);
+            // The panel lists siblings from top to bottom, opposite their paint order.
+            let target_index = doc.layers.iter().position(|l| l.id == target).unwrap();
+            let index = match position {
+                DropPosition::Above => target_index + 1,
+                DropPosition::Below => target_index,
+                DropPosition::Inside => doc
+                    .layers
+                    .iter()
+                    .rposition(|l| l.parent == Some(target))
+                    .map_or(target_index + 1, |i| i + 1),
+            };
             doc.layers.insert(index, layer);
             doc.select(source, false);
             doc.validate()
         });
+        self.mask_target = false;
+        if matches!(position, DropPosition::Inside)
+            && let Some(session) = self.session_mut()
+        {
+            session.collapsed.remove(&target);
+        }
     }
 }

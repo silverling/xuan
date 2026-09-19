@@ -382,7 +382,15 @@ impl Document {
         } else {
             self.selected.insert(id);
         }
-        self.active = Some(id);
+        self.active = if self.selected.contains(&id) {
+            Some(id)
+        } else {
+            self.layers
+                .iter()
+                .rev()
+                .find(|layer| self.selected.contains(&layer.id))
+                .map(|layer| layer.id)
+        };
     }
 
     pub fn insert(&mut self, mut layer: Layer) {

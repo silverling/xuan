@@ -38,4 +38,6 @@ Move handles scale the selected layers, the circular handle rotates them, and Ct
 
 Alt-click sets a Clone Stamp source. Shift-click continues a straight brush line. Clone alignment and sampling are configured in the contextual header. Use the same header to switch marquee/lasso/shape variants and linear/radial gradients.
 
-Drag a layer name onto another row to reorder or nest it into a folder. Alt-drag duplicates it. Drop the name onto another project tab to copy the layer and its descendants. “Move Out of Group” is in the row's context menu. Shift/Ctrl-click layer names toggles multi-selection.
+With the Move tool, click visible layer content to select it, or click empty canvas or the surrounding workspace to deselect. Shift-click toggles layers in the selection. Auto Select is enabled by default; turn it off to keep the current selection while moving, or hold Ctrl to select from the canvas temporarily.
+
+Drag a layer row or thumbnail to reorder it. Drop on the upper or lower half of a row to place it above or below that layer; drop in the center of a folder row to nest it. The highlighted line or outline marks the destination. Alt-drag duplicates it. Drop onto another project tab to copy the layer and its descendants. “Move Out of Group” is in the row's context menu. Shift/Ctrl-click layer rows toggles multi-selection.

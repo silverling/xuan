@@ -6,7 +6,7 @@ fn app() -> (egui::Context, EditorApp) {
     (context, app)
 }
 
-fn frame(context: &egui::Context, app: &mut EditorApp) {
+fn frame(context: &egui::Context, app: &mut EditorApp) -> egui::FullOutput {
     let output = context.run(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -18,6 +18,7 @@ fn frame(context: &egui::Context, app: &mut EditorApp) {
         |ctx| app.show(ctx),
     );
     assert!(!output.shapes.is_empty());
+    output
 }
 
 fn pointer_frame(
@@ -67,6 +68,339 @@ fn drag(
     pointer_frame(context, app, a + (b - a) * 0.5, None, modifiers);
     pointer_frame(context, app, b, None, modifiers);
     pointer_frame(context, app, b, Some(false), modifiers);
+}
+
+fn click_canvas(
+    context: &egui::Context,
+    app: &mut EditorApp,
+    point: Point,
+    modifiers: egui::Modifiers,
+) {
+    frame(context, app);
+    let pos =
+        app.canvas_rect.unwrap().min + Vec2::new(point.x, point.y) * app.session().unwrap().zoom;
+    pointer_frame(context, app, pos, None, modifiers);
+    pointer_frame(context, app, pos, Some(true), modifiers);
+    pointer_frame(context, app, pos, Some(false), modifiers);
+}
+
+fn layer_label(context: &egui::Context, app: &mut EditorApp, name: &str) -> Pos2 {
+    frame(context, app)
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == name => Some(text.pos),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("Missing layer label: {name}"))
+}
+
+fn drag_pointer(
+    context: &egui::Context,
+    app: &mut EditorApp,
+    from: Pos2,
+    to: Pos2,
+    modifiers: egui::Modifiers,
+) {
+    pointer_frame(context, app, from, Some(true), modifiers);
+    pointer_frame(context, app, from + Vec2::new(0.0, 10.0), None, modifiers);
+    pointer_frame(context, app, to, None, modifiers);
+    pointer_frame(context, app, to, Some(false), modifiers);
+}
+
+#[test]
+fn layer_rows_and_thumbnails_reorder_in_both_directions_and_undo() {
+    let (context, mut app) = app();
+    app.dimensions = [32, 24];
+    app.new_document();
+    let document = &mut app.session_mut().unwrap().document;
+    document.layers = ["Bottom", "Middle", "Top"]
+        .map(|name| Layer::blank(name, 32, 24))
+        .into();
+    document.select(document.layers[2].id, false);
+
+    // Start on the row's padding, then drop below the last row.
+    let top = layer_label(&context, &mut app, "Top") + Vec2::new(100.0, 30.0);
+    let bottom = layer_label(&context, &mut app, "Bottom") + Vec2::new(5.0, 30.0);
+    drag_pointer(&context, &mut app, top, bottom, egui::Modifiers::NONE);
+    let names = |app: &EditorApp| {
+        app.session()
+            .unwrap()
+            .document
+            .layers
+            .iter()
+            .map(|layer| layer.name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&app), ["Top", "Bottom", "Middle"]);
+    assert_eq!(app.session().unwrap().history.names().count(), 1);
+    app.command("undo");
+    assert_eq!(names(&app), ["Bottom", "Middle", "Top"]);
+    app.command("redo");
+    assert_eq!(names(&app), ["Top", "Bottom", "Middle"]);
+
+    // Start on a thumbnail and drop above the first row.
+    let bottom = layer_label(&context, &mut app, "Top") + Vec2::new(-24.0, 15.0);
+    let top = layer_label(&context, &mut app, "Middle") + Vec2::new(5.0, 0.0);
+    drag_pointer(&context, &mut app, bottom, top, egui::Modifiers::NONE);
+    assert_eq!(names(&app), ["Bottom", "Middle", "Top"]);
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+#[test]
+fn layer_drops_nest_duplicate_and_reject_descendants() {
+    let (context, mut app) = app();
+    app.dimensions = [32, 24];
+    app.new_document();
+    app.command("group");
+    let folder = app.session().unwrap().document.active.unwrap();
+    app.session_mut()
+        .unwrap()
+        .document
+        .active_mut()
+        .unwrap()
+        .name = "Folder".into();
+    let loose = Layer::blank("Loose", 32, 24);
+    let loose_id = loose.id;
+    app.session_mut().unwrap().document.layers.push(loose);
+    let from = layer_label(&context, &mut app, "Loose") + Vec2::new(5.0, 5.0);
+    let into = layer_label(&context, &mut app, "Folder") + Vec2::new(5.0, 18.0);
+    drag_pointer(&context, &mut app, from, into, egui::Modifiers::ALT);
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 4);
+    let copy = document.active().unwrap();
+    assert_eq!(copy.name, "Loose copy");
+    assert_eq!(copy.parent, Some(folder));
+    assert_eq!(
+        document
+            .layers
+            .iter()
+            .find(|layer| layer.id == loose_id)
+            .unwrap()
+            .parent,
+        None
+    );
+    assert!(
+        layer_label(&context, &mut app, "Loose copy").y
+            < layer_label(&context, &mut app, "Layer 1").y
+    );
+
+    let revision = app.session().unwrap().history.revision;
+    let from = layer_label(&context, &mut app, "Folder") + Vec2::new(5.0, 5.0);
+    let descendant = layer_label(&context, &mut app, "Loose copy") + Vec2::new(5.0, 5.0);
+    drag_pointer(&context, &mut app, from, descendant, egui::Modifiers::NONE);
+    assert_eq!(app.session().unwrap().history.revision, revision);
+
+    // Dropping on a folder's lower edge moves the child out, below the folder.
+    let from = layer_label(&context, &mut app, "Loose copy") + Vec2::new(5.0, 5.0);
+    let below = layer_label(&context, &mut app, "Folder") + Vec2::new(5.0, 34.0);
+    drag_pointer(&context, &mut app, from, below, egui::Modifiers::NONE);
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.active().unwrap().parent, None);
+    assert!(
+        document
+            .layers
+            .iter()
+            .position(|layer| Some(layer.id) == document.active)
+            .unwrap()
+            < document
+                .layers
+                .iter()
+                .position(|layer| layer.id == folder)
+                .unwrap()
+    );
+    document.validate().unwrap();
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+fn canvas_layers(app: &mut EditorApp) -> [Uuid; 2] {
+    app.dimensions = [100, 80];
+    app.new_document();
+    let mut bottom = Layer::image(
+        "Bottom",
+        RgbaImage::from_pixel(50, 40, image::Rgba([255; 4])),
+    );
+    bottom.transform.x = 10.0;
+    bottom.transform.y = 10.0;
+    let mut top = Layer::image("Top", RgbaImage::from_pixel(20, 20, image::Rgba([255; 4])));
+    top.transform.x = 20.0;
+    top.transform.y = 20.0;
+    // A hole in the top layer should select the visible layer below it.
+    Arc::make_mut(top.pixels.as_mut().unwrap()).put_pixel(5, 5, image::Rgba([0; 4]));
+    let ids = [bottom.id, top.id];
+    let document = &mut app.session_mut().unwrap().document;
+    document.layers = vec![bottom, top];
+    document.select(ids[0], false);
+    app.snap = false;
+    ids
+}
+
+#[test]
+fn canvas_clicks_select_visible_layers_and_deselect_empty_space() {
+    let (context, mut app) = app();
+    let [bottom, top] = canvas_layers(&mut app);
+    assert!(app.auto_select);
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(30.0, 30.0),
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(app.session().unwrap().document.active, Some(top));
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(25.5, 25.5),
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(app.session().unwrap().document.active, Some(bottom));
+    app.session_mut().unwrap().document.layers[1].visible = false;
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(30.0, 30.0),
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(app.session().unwrap().document.active, Some(bottom));
+    app.mask_target = true;
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(80.0, 65.0),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.session().unwrap().document.active.is_none());
+    assert!(app.session().unwrap().document.selected.is_empty());
+    assert!(!app.mask_target);
+    assert!(operations::transform_box(&app.session().unwrap().document, false).is_none());
+
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(30.0, 30.0),
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(app.session().unwrap().document.active, Some(bottom));
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(-5.0, 30.0),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.session().unwrap().document.active.is_none());
+    assert!(app.session().unwrap().document.selected.is_empty());
+    assert!(!app.session().unwrap().history.dirty());
+}
+
+#[test]
+fn canvas_selection_preserves_multiselect_and_respects_auto_select() {
+    let (context, mut app) = app();
+    let [bottom, top] = canvas_layers(&mut app);
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(30.0, 30.0),
+        egui::Modifiers::SHIFT,
+    );
+    assert_eq!(
+        app.session().unwrap().document.selected,
+        HashSet::from([bottom, top])
+    );
+    drag(
+        &context,
+        &mut app,
+        Point::new(30.0, 30.0),
+        Point::new(35.0, 35.0),
+        egui::Modifiers::NONE,
+    );
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.selected, HashSet::from([bottom, top]));
+    assert_eq!(document.layers[0].transform.x, 15.0);
+    assert_eq!(document.layers[1].transform.x, 25.0);
+    app.command("undo");
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(30.0, 30.0),
+        egui::Modifiers::SHIFT,
+    );
+    assert_eq!(
+        app.session().unwrap().document.selected,
+        HashSet::from([bottom])
+    );
+    assert_eq!(app.session().unwrap().document.active, Some(bottom));
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(15.0, 15.0),
+        egui::Modifiers::SHIFT,
+    );
+    assert!(app.session().unwrap().document.active.is_none());
+    assert!(app.session().unwrap().document.selected.is_empty());
+
+    app.session_mut().unwrap().document.select(bottom, false);
+    app.auto_select = false;
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(30.0, 30.0),
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(app.session().unwrap().document.active, Some(bottom));
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(30.0, 30.0),
+        egui::Modifiers::CTRL,
+    );
+    assert_eq!(app.session().unwrap().document.active, Some(top));
+}
+
+#[test]
+fn empty_canvas_drags_and_panning_do_not_move_or_select_layers() {
+    let (context, mut app) = app();
+    let [bottom, _] = canvas_layers(&mut app);
+    drag(
+        &context,
+        &mut app,
+        Point::new(80.0, 65.0),
+        Point::new(85.0, 70.0),
+        egui::Modifiers::NONE,
+    );
+    let document = &app.session().unwrap().document;
+    assert!(document.active.is_none());
+    assert_eq!(document.layers[0].transform.x, 10.0);
+    assert!(!app.session().unwrap().history.dirty());
+
+    app.session_mut().unwrap().document.select(bottom, false);
+    frame(&context, &mut app);
+    let pos = app.canvas_rect.unwrap().min + Vec2::new(30.0, 30.0) * app.session().unwrap().zoom;
+    let _ = context.run(
+        egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Space,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        },
+        |ctx| app.show(ctx),
+    );
+    pointer_frame(&context, &mut app, pos, Some(true), egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, pos, Some(false), egui::Modifiers::NONE);
+    assert_eq!(app.session().unwrap().document.active, Some(bottom));
+    drag_pointer(
+        &context,
+        &mut app,
+        pos,
+        pos + Vec2::new(30.0, 20.0),
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(app.session().unwrap().document.active, Some(bottom));
+    assert!(app.session().unwrap().pan.length() > 20.0);
+    assert!(!app.session().unwrap().history.dirty());
 }
 
 #[test]

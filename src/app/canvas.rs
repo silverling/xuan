@@ -480,6 +480,8 @@ impl EditorApp {
                     self.end_gesture(modifiers);
                 }
                 if response.clicked()
+                    && !panning
+                    && hover_handle.is_none()
                     && let Some(point) = doc_point
                 {
                     self.canvas_click(point, modifiers);
@@ -566,16 +568,7 @@ impl EditorApp {
         match self.tool {
             Tool::Move => {
                 if self.auto_select || modifiers.ctrl {
-                    let id = self
-                        .session()
-                        .and_then(|s| render::hit_test(&s.document, point));
-                    if let Some(id) = id {
-                        self.session_mut()
-                            .unwrap()
-                            .document
-                            .select(id, modifiers.shift);
-                        self.mask_target = false;
-                    }
+                    self.select_canvas_layer(point, modifiers.shift, false);
                 }
             }
             Tool::Wand => {
@@ -630,6 +623,30 @@ impl EditorApp {
         }
     }
 
+    fn select_canvas_layer(&mut self, point: Point, extend: bool, dragging: bool) -> bool {
+        let Some(session) = self.session_mut() else {
+            return false;
+        };
+        let document = &mut session.document;
+        let inside = point.x >= 0.0
+            && point.y >= 0.0
+            && point.x < document.width as f32
+            && point.y < document.height as f32;
+        let hit = inside.then(|| render::hit_test(document, point)).flatten();
+        if let Some(id) = hit {
+            // Moving an already selected layer keeps the other selected layers and mask target.
+            if !dragging || !document.transform_targets().contains(&id) {
+                document.select(id, extend);
+                self.mask_target = false;
+            }
+        } else if !extend {
+            document.selected.clear();
+            document.active = None;
+            self.mask_target = false;
+        }
+        hit.is_some()
+    }
+
     fn selection_mode(&self, modifiers: egui::Modifiers) -> SelectionMode {
         if modifiers.shift {
             SelectionMode::Add
@@ -677,6 +694,8 @@ impl EditorApp {
             return;
         }
         if self.tool == Tool::Move && self.show_controls {
+            // The press location determines the handle, even if the pointer has moved since.
+            handle = None;
             let session = &self.sessions[self.current];
             if let Some(t) = operations::transform_box(&session.document, self.mask_target) {
                 if let Some(index) = HANDLES
@@ -703,14 +722,17 @@ impl EditorApp {
             }
         }
         let mut kind = handle.unwrap_or(TransformDrag::Move);
-        let session = &mut self.sessions[self.current];
         if self.tool == Tool::Move
+            && !panning
             && (self.auto_select || modifiers.ctrl)
             && handle.is_none()
-            && let Some(id) = render::hit_test(&session.document, point)
+            && !self.select_canvas_layer(point, modifiers.shift, true)
         {
-            session.document.select(id, modifiers.shift);
-            self.mask_target = false;
+            return;
+        }
+        let session = &mut self.sessions[self.current];
+        if self.tool == Tool::Move && !panning && session.document.active.is_none() {
+            return;
         }
         session.history.begin(self.tool.label(), &session.document);
         if self.tool == Tool::Move && modifiers.alt && !panning {
