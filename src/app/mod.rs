@@ -4,6 +4,7 @@ mod clipboard;
 mod develop;
 mod develop_controls;
 mod dialogs;
+mod filter_preview;
 mod font_picker;
 mod gpu_preview;
 mod icons;
@@ -281,6 +282,7 @@ struct EffectEdit {
     levels_source: Option<RgbaImage>,
     adjustment: Option<Adjustment>,
     filter: Option<Filter>,
+    filter_preview: filter_preview::FilterPreview,
     as_layer: bool,
     preview: bool,
     refresh: bool,
@@ -755,6 +757,7 @@ impl EditorApp {
             levels_source: None,
             adjustment: Some(adjustment),
             filter: None,
+            filter_preview: filter_preview::FilterPreview::default(),
             as_layer,
             preview: true,
             refresh: true,
@@ -774,6 +777,7 @@ impl EditorApp {
             levels_source: None,
             adjustment: None,
             filter: Some(filter),
+            filter_preview: filter_preview::FilterPreview::default(),
             as_layer: false,
             preview: true,
             refresh: true,

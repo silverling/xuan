@@ -511,7 +511,7 @@ impl EditorApp {
                     }
                 }
                 if let Some(filter) = &mut edit.filter {
-                    match filter {
+                    ui.add_enabled_ui(!edit.filter_preview.applying, |ui| match filter {
                         Filter::GaussianBlur { radius } => {
                             changed |= ui
                                 .add(
@@ -563,17 +563,31 @@ impl EditorApp {
                                 )
                                 .changed();
                         }
-                    }
+                    });
                 }
                 ui.add_space(14.0);
                 ui.separator();
                 ui.horizontal(|ui| {
-                    changed |= widgets::checkbox(ui, &mut edit.preview, "Preview").changed();
+                    ui.add_enabled_ui(!edit.filter_preview.applying, |ui| {
+                        changed |= widgets::checkbox(ui, &mut edit.preview, "Preview").changed();
+                    });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        apply = widgets::primary_button(ui, "Apply").clicked();
+                        ui.add_enabled_ui(!edit.filter_preview.applying, |ui| {
+                            apply = widgets::primary_button(ui, "Apply").clicked();
+                        });
                         cancel = widgets::button(ui, "Cancel").clicked();
                     });
                 });
+                if edit.filter_preview.busy() {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(if edit.filter_preview.applying {
+                            "Applying…"
+                        } else {
+                            "Updating preview…"
+                        });
+                    });
+                }
                 if edit.as_layer {
                     ui.label(
                         RichText::new("Non-destructive adjustment layer")
@@ -588,6 +602,12 @@ impl EditorApp {
                 s.invalidate();
             }
             self.dialog = None;
+            return;
+        }
+        if edit.filter.is_some() {
+            if !self.update_filter_preview(&mut edit, changed, apply) {
+                self.effect = Some(edit);
+            }
             return;
         }
         if changed || edit.refresh || apply {
@@ -627,8 +647,6 @@ impl EditorApp {
                                 mask_target,
                             )
                         }
-                    } else if let Some(filter) = &edit.filter {
-                        effects::apply_filter(&mut session.document, filter, mask_target)
                     } else {
                         Ok(())
                     };

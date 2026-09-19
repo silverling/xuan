@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use anyhow::{Result, ensure};
 use image::{Rgba, RgbaImage};
@@ -326,32 +329,8 @@ pub fn filtered(image: &RgbaImage, filter: &Filter) -> RgbaImage {
             result
         }
         Filter::MotionBlur { distance, angle } => {
-            let steps = distance.ceil().clamp(1.0, 256.0) as u32;
-            let (sin, cos) = angle.to_radians().sin_cos();
-            RgbaImage::from_fn(w, h, |x, y| {
-                let mut sum = [0.0; 4];
-                for i in 0..steps {
-                    let offset = ((i as f32 + 0.5) / steps as f32 - 0.5) * distance;
-                    let p = render::sample(
-                        image,
-                        Point::new(
-                            (x as f32 + 0.5 + offset * cos) / w as f32,
-                            (y as f32 + 0.5 + offset * sin) / h as f32,
-                        ),
-                    );
-                    for c in 0..3 {
-                        sum[c] += p[c] * p[3];
-                    }
-                    sum[3] += p[3];
-                }
-                if sum[3] > 0.0 {
-                    for i in 0..3 {
-                        sum[i] /= sum[3];
-                    }
-                }
-                sum[3] /= steps as f32;
-                Rgba(sum.map(|v| (v * 255.0).round() as u8))
-            })
+            motion_blur(image, *distance, *angle, &AtomicBool::new(false))
+                .expect("Motion blur was not cancelled")
         }
         Filter::Noise { amount, monochrome } => RgbaImage::from_fn(w, h, |x, y| {
             Rgba(
@@ -384,7 +363,92 @@ pub fn filtered(image: &RgbaImage, filter: &Filter) -> RgbaImage {
     }
 }
 
+fn motion_blur(
+    image: &RgbaImage,
+    distance: f32,
+    angle: f32,
+    cancel: &AtomicBool,
+) -> Result<RgbaImage> {
+    ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
+    let (width, height) = image.dimensions();
+    let mut result = RgbaImage::new(width, height);
+    if width == 0 || height == 0 {
+        return Ok(result);
+    }
+    let steps = distance.ceil().clamp(1.0, 256.0) as u32;
+    let (sin, cos) = angle.to_radians().sin_cos();
+    // Translation gives every pixel the same bilinear weights. Compute them once,
+    // and accumulate premultiplied colors without unpremultiplying every sample.
+    let samples: Vec<_> = (0..steps)
+        .map(|i| {
+            let offset = ((i as f32 + 0.5) / steps as f32 - 0.5) * distance;
+            let (x, y) = (offset * cos, offset * sin);
+            let (fx, fy) = (x - x.floor(), y - y.floor());
+            (
+                x,
+                y,
+                x.floor() as i32,
+                y.floor() as i32,
+                [
+                    (1.0 - fx) * (1.0 - fy),
+                    fx * (1.0 - fy),
+                    (1.0 - fx) * fy,
+                    fx * fy,
+                ],
+            )
+        })
+        .collect();
+    result
+        .as_mut()
+        .par_chunks_exact_mut(width as usize * 4)
+        .enumerate()
+        .try_for_each(|(y, row)| -> Result<()> {
+            ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
+            for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let mut sum = [0.0; 4];
+                for &(ox, oy, dx, dy, weights) in &samples {
+                    let sx = x as f32 + 0.5 + ox;
+                    let sy = y as f32 + 0.5 + oy;
+                    if sx < 0.0 || sx >= width as f32 || sy < 0.0 || sy >= height as f32 {
+                        continue;
+                    }
+                    for (i, weight) in weights.into_iter().enumerate() {
+                        if weight == 0.0 {
+                            continue;
+                        }
+                        let px = (x as i32 + dx + (i % 2) as i32).clamp(0, width as i32 - 1);
+                        let py = (y as i32 + dy + (i / 2) as i32).clamp(0, height as i32 - 1);
+                        let p = image.get_pixel(px as u32, py as u32);
+                        let alpha = p[3] as f32 * weight;
+                        for c in 0..3 {
+                            sum[c] += p[c] as f32 * alpha;
+                        }
+                        sum[3] += alpha;
+                    }
+                }
+                if sum[3] > 0.0 {
+                    for c in 0..3 {
+                        pixel[c] = (sum[c] / sum[3]).round() as u8;
+                    }
+                }
+                pixel[3] = (sum[3] / steps as f32).round() as u8;
+            }
+            Ok(())
+        })?;
+    Ok(result)
+}
+
 pub fn apply_filter(document: &mut Document, filter: &Filter, mask_target: bool) -> Result<()> {
+    apply_filter_cancellable(document, filter, mask_target, &AtomicBool::new(false))
+}
+
+pub fn apply_filter_cancellable(
+    document: &mut Document,
+    filter: &Filter,
+    mask_target: bool,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
     let selection = document.selection.clone();
     let layer = document
         .active_mut()
@@ -394,9 +458,13 @@ pub fn apply_filter(document: &mut Document, filter: &Filter, mask_target: bool)
         let mask = layer.mask.as_mut().unwrap();
         if let Filter::GaussianBlur { radius } = filter {
             let mut result = image::imageops::blur(&*mask.pixels, radius.max(0.01));
+            ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
             let transform = mask.placement.unwrap_or(layer.transform);
             let (width, height) = result.dimensions();
             for (x, y, pixel) in result.enumerate_pixels_mut() {
+                if x == 0 {
+                    ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
+                }
                 let point = transform.point(Point::new(
                     (x as f32 + 0.5) / width as f32,
                     (y as f32 + 0.5) / height as f32,
@@ -438,9 +506,19 @@ pub fn apply_filter(document: &mut Document, filter: &Filter, mask_target: bool)
             1.0 + pad / height,
         );
     }
-    let mut result = filtered(&expanded, filter);
+    ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
+    let mut result = match filter {
+        Filter::MotionBlur { distance, angle } => {
+            motion_blur(&expanded, *distance, *angle, cancel)?
+        }
+        _ => filtered(&expanded, filter),
+    };
+    ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
     if selection.is_some() {
         for (x, y, pixel) in result.enumerate_pixels_mut() {
+            if x == 0 {
+                ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
+            }
             let point = transform.point(Point::new(
                 (x as f32 + 0.5) / w as f32,
                 (y as f32 + 0.5) / h as f32,
@@ -597,6 +675,161 @@ pub fn validate_adjustment(adjustment: &Adjustment) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The original implementation is an independent reference for sampling and alpha.
+    fn reference_motion_blur(image: &RgbaImage, distance: f32, angle: f32) -> RgbaImage {
+        let (w, h) = image.dimensions();
+        let steps = distance.ceil().clamp(1.0, 256.0) as u32;
+        let (sin, cos) = angle.to_radians().sin_cos();
+        RgbaImage::from_fn(w, h, |x, y| {
+            let mut sum = [0.0; 4];
+            for i in 0..steps {
+                let offset = ((i as f32 + 0.5) / steps as f32 - 0.5) * distance;
+                let p = render::sample(
+                    image,
+                    Point::new(
+                        (x as f32 + 0.5 + offset * cos) / w as f32,
+                        (y as f32 + 0.5 + offset * sin) / h as f32,
+                    ),
+                );
+                for c in 0..3 {
+                    sum[c] += p[c] * p[3];
+                }
+                sum[3] += p[3];
+            }
+            if sum[3] > 0.0 {
+                for c in 0..3 {
+                    sum[c] /= sum[3];
+                }
+            }
+            sum[3] /= steps as f32;
+            Rgba(sum.map(|v| (v * 255.0).round() as u8))
+        })
+    }
+
+    #[test]
+    fn motion_blur_matches_reference_at_edges_and_arbitrary_angles() {
+        for (width, height) in [(31, 19), (1, 7), (7, 1), (0, 0)] {
+            let image = RgbaImage::from_fn(width, height, |x, y| {
+                Rgba([
+                    (x * 67 + y * 41) as u8,
+                    (x * 23 + y * 59) as u8,
+                    (x * 13 + y * 17) as u8,
+                    if (x + y) % 3 == 0 {
+                        0
+                    } else {
+                        (x * 53 + y * 97) as u8
+                    },
+                ])
+            });
+            for distance in [1.0, 4.0, 20.0, 23.7, 200.0, 300.0] {
+                for angle in [0.0, 90.0, -90.0, 180.0, 35.0, -35.0] {
+                    let expected = reference_motion_blur(&image, distance, angle);
+                    let actual = filtered(&image, &Filter::MotionBlur { distance, angle });
+                    for (p, q) in actual.pixels().zip(expected.pixels()) {
+                        for c in 0..4 {
+                            // RGB is undefined when both results are fully transparent.
+                            if c < 3 && p[3] == 0 && q[3] == 0 {
+                                continue;
+                            }
+                            assert!(
+                                p[c].abs_diff(q[c]) <= 1,
+                                "{width}x{height}, distance {distance}, angle {angle}: {p:?} != {q:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn motion_blur_preserves_color_selection_and_mask_placement() {
+        let mut doc = Document::new(20, 20).unwrap();
+        let mut layer = crate::document::Layer::image(
+            "red",
+            RgbaImage::from_pixel(4, 4, Rgba([255, 0, 0, 255])),
+        );
+        layer.transform.x = 8.0;
+        layer.transform.y = 8.0;
+        layer.mask = Some(crate::document::Mask::white());
+        let transform = layer.transform;
+        doc.insert(layer);
+        doc.selection = Some(Arc::new(image::GrayImage::from_fn(20, 20, |_, y| {
+            image::Luma([if y >= 10 { 255 } else { 0 }])
+        })));
+        apply_filter(
+            &mut doc,
+            &Filter::MotionBlur {
+                distance: 4.0,
+                angle: 0.0,
+            },
+            false,
+        )
+        .unwrap();
+        let layer = doc.active().unwrap();
+        assert_eq!(layer.mask.as_ref().unwrap().placement, Some(transform));
+        let pixels = layer.pixels.as_ref().unwrap();
+        assert_eq!(pixels.dimensions(), (10, 10));
+        assert_eq!(pixels.get_pixel(2, 4).0, [0; 4]);
+        assert_eq!(pixels.get_pixel(3, 4).0, [255, 0, 0, 255]);
+        assert!(pixels.get_pixel(2, 5)[3] > 0);
+        assert_eq!(pixels.get_pixel(2, 5)[0], 255);
+        doc.validate().unwrap();
+    }
+
+    #[test]
+    fn cancelled_motion_blur_leaves_document_untouched() {
+        let mut doc = Document::new(20, 20).unwrap();
+        let original = doc.clone();
+        assert!(
+            apply_filter_cancellable(
+                &mut doc,
+                &Filter::MotionBlur {
+                    distance: 200.0,
+                    angle: 35.0
+                },
+                false,
+                &AtomicBool::new(true),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            doc.active().unwrap().pixels,
+            original.active().unwrap().pixels
+        );
+        assert_eq!(
+            doc.active().unwrap().transform,
+            original.active().unwrap().transform
+        );
+    }
+
+    #[test]
+    #[ignore = "manual performance comparison with the original motion blur"]
+    fn motion_blur_benchmark() {
+        let image = RgbaImage::from_fn(1024, 768, |x, y| {
+            Rgba([x as u8, y as u8, (x + y) as u8, 255])
+        });
+        for (distance, angle) in [(20.0, 0.0), (200.0, 35.0)] {
+            let start = std::time::Instant::now();
+            let expected = reference_motion_blur(&image, distance, angle);
+            let original = start.elapsed();
+            let start = std::time::Instant::now();
+            let actual = filtered(&image, &Filter::MotionBlur { distance, angle });
+            let optimized = start.elapsed();
+            assert!(
+                actual
+                    .as_raw()
+                    .iter()
+                    .zip(expected.as_raw())
+                    .all(|(a, b)| a.abs_diff(*b) <= 1)
+            );
+            eprintln!(
+                "1024x768, distance {distance}, angle {angle}: original {original:?}, optimized {optimized:?} ({:.1}x)",
+                original.as_secs_f64() / optimized.as_secs_f64()
+            );
+        }
+    }
 
     #[test]
     fn blur_spreads_beyond_bounds_and_preserves_color() {
