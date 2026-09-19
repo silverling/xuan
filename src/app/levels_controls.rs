@@ -133,7 +133,7 @@ fn handles(ui: &mut Ui, range: &mut [f32; 5], output: bool) {
         };
         let x = rect.left() + position / 255.0 * rect.width();
         let hit = Rect::from_center_size(pos2(x, rect.center().y), vec2(18.0, 20.0));
-        let response = ui.interact(
+        let mut response = ui.interact(
             hit,
             ui.id().with(("level_handle", index)),
             Sense::click_and_drag(),
@@ -179,6 +179,20 @@ fn handles(ui: &mut Ui, range: &mut [f32; 5], output: bool) {
                 _ => range[index].clamp(0.0, 255.0),
             };
         }
+        let bounds = match index {
+            0 => 0.0..=f64::from(range[2] - 1.0),
+            1 => 0.1..=9.99,
+            2 => f64::from(range[0] + 1.0)..=255.0,
+            _ => 0.0..=255.0,
+        };
+        widgets::wheel_value(
+            ui,
+            &mut response,
+            &mut range[index],
+            bounds,
+            if index == 1 { 0.01 } else { 1.0 },
+            Some(if index == 1 { 2 } else { 0 }),
+        );
         let color = match index {
             0 | 3 => Color32::BLACK,
             1 => Color32::from_gray(130),
@@ -207,6 +221,49 @@ fn handles(ui: &mut Ui, range: &mut [f32; 5], output: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn histogram_handle_wheels_use_field_steps_and_bounds() {
+        for index in 0..5 {
+            let context = egui::Context::default();
+            let mut range = [64.0, 1.0, 192.0, 16.0, 240.0];
+            let initial = range[index];
+            let position = if index == 1 { 128.0 } else { initial };
+            let pos = pos2(8.0 + position / 255.0 * 400.0, 14.0);
+            for delta in [0.0, 1.0, -1000.0] {
+                let _ = context.run(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            vec2(416.0, 200.0),
+                        )),
+                        events: vec![
+                            egui::Event::PointerMoved(pos),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Line,
+                                delta: vec2(0.0, delta),
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            handles(ui, &mut range, index >= 3);
+                        });
+                    },
+                );
+                let expected = if delta == 0.0 {
+                    initial
+                } else if delta > 0.0 {
+                    initial + if index == 1 { 0.01 } else { 1.0 }
+                } else {
+                    [0.0, 0.1, 65.0, 0.0, 0.0][index]
+                };
+                assert!((range[index] - expected).abs() < 1e-6, "{index}: {range:?}");
+            }
+        }
+    }
 
     #[test]
     fn histogram_handles_drag_and_keep_input_bounds_ordered() {

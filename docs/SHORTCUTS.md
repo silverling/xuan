@@ -27,6 +27,8 @@
 | Swap / Reset colors | X / D |
 | Nudge / Larger nudge | Arrow keys / Shift+arrow keys |
 | Pan | Space-drag or middle-button drag |
+| Pan horizontally | Horizontal mouse wheel or Shift+wheel over the canvas |
+| Adjust slider or number | Wheel up / down over the control (increase / decrease) |
 | Apply crop or polygon / Cancel | Enter / Escape |
 | Shortcut reference | F1 |
 

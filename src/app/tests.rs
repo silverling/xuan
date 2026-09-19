@@ -531,6 +531,230 @@ fn custom_controls_keep_keyboard_input_and_disabled_behavior() {
     assert_eq!(unchanged, changed);
 }
 
+fn wheel_events(pos: Pos2, delta: Vec2, modifiers: egui::Modifiers) -> Vec<egui::Event> {
+    vec![
+        egui::Event::PointerMoved(pos),
+        egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta,
+            modifiers,
+        },
+    ]
+}
+
+fn wheel_control_frame(
+    context: &egui::Context,
+    events: Vec<egui::Event>,
+    mut control: impl FnMut(&mut egui::Ui) -> egui::Response,
+) -> (egui::Response, Vec2) {
+    let mut result = None;
+    let _ = context.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(400.0, 160.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let scroll = egui::ScrollArea::both().show(ui, |ui| {
+                    let response = control(ui);
+                    ui.allocate_space(Vec2::splat(800.0));
+                    response
+                });
+                result = Some((scroll.inner, scroll.state.offset));
+            });
+        },
+    );
+    result.unwrap()
+}
+
+#[test]
+fn number_wheel_changes_clamps_and_consumes_panel_scrolling() {
+    let context = egui::Context::default();
+    let mut value = 10_u32;
+    let mut draw = |events, enabled| {
+        let (response, offset) = wheel_control_frame(&context, events, |ui| {
+            ui.add_enabled(enabled, widgets::Number::new(&mut value).range(0..=20))
+        });
+        (value, response, offset)
+    };
+    let (_, response, _) = draw(Vec::new(), true);
+    let pos = response.rect.center();
+    draw(vec![egui::Event::PointerMoved(pos)], true);
+    for (delta, expected, changed) in [
+        (1.0, 11, true),
+        (-2.0, 9, true),
+        (100.0, 20, true),
+        (1.0, 20, false),
+        (-100.0, 0, true),
+        (-1.0, 0, false),
+    ] {
+        let (value, response, offset) = draw(
+            wheel_events(pos, Vec2::new(0.0, delta), egui::Modifiers::NONE),
+            true,
+        );
+        assert_eq!(value, expected);
+        assert_eq!(response.changed(), changed);
+        assert_eq!(offset, Vec2::ZERO);
+    }
+    // The smoothing tail must neither edit again nor scroll the containing panel.
+    for _ in 0..30 {
+        let (value, response, offset) = draw(Vec::new(), true);
+        assert_eq!(value, 0);
+        assert!(!response.changed());
+        assert_eq!(offset, Vec2::ZERO);
+    }
+    let (value, response, _) = draw(
+        wheel_events(pos, Vec2::new(0.0, 1.0), egui::Modifiers::NONE),
+        false,
+    );
+    assert_eq!(value, 0);
+    assert!(!response.changed());
+}
+
+#[test]
+fn slider_wheel_matches_number_steps_and_preserves_horizontal_scrolling() {
+    for (range, percentage, logarithmic, initial, step) in [
+        (0.0..=1.0, true, false, 0.5_f64, 0.01),
+        (-5.0..=5.0, false, false, 0.0, 0.01),
+        (0.1..=100.0, false, true, 10.0, 1.0),
+    ] {
+        let context = egui::Context::default();
+        let mut value = initial;
+        let mut draw = |events| {
+            let (response, offset) = wheel_control_frame(&context, events, |ui| {
+                let slider =
+                    widgets::Slider::new(&mut value, range.clone()).logarithmic(logarithmic);
+                ui.add(if percentage {
+                    slider.percentage()
+                } else {
+                    slider
+                })
+            });
+            (value, response, offset)
+        };
+        let (_, response, _) = draw(Vec::new());
+        let rail = egui::pos2(response.rect.left() + 10.0, response.rect.center().y);
+        let field = egui::pos2(response.rect.right() - 10.0, response.rect.center().y);
+        draw(vec![egui::Event::PointerMoved(rail)]);
+        let (value, response, offset) = draw(wheel_events(
+            rail,
+            Vec2::new(0.0, 1.0),
+            egui::Modifiers::NONE,
+        ));
+        assert!((value - initial - step).abs() < 1e-6);
+        assert!(response.changed());
+        assert_eq!(offset, Vec2::ZERO);
+        draw(vec![egui::Event::PointerMoved(field)]);
+        let (value, response, offset) = draw(wheel_events(
+            field,
+            Vec2::new(0.0, -1.0),
+            egui::Modifiers::NONE,
+        ));
+        assert!((value - initial).abs() < 1e-6);
+        assert!(response.changed());
+        assert_eq!(offset, Vec2::ZERO);
+        let (value, response, offset) = draw(wheel_events(
+            field,
+            Vec2::new(-1.0, 0.0),
+            egui::Modifiers::NONE,
+        ));
+        assert!((value - initial).abs() < 1e-6);
+        assert!(!response.changed());
+        assert!(offset.x > 0.0);
+    }
+}
+
+#[test]
+fn number_wheel_accumulates_small_deltas_and_keeps_focused_text_current() {
+    let context = egui::Context::default();
+    let mut value = 1.0_f64;
+    let mut draw = |events| {
+        let (response, _) = wheel_control_frame(&context, events, |ui| {
+            ui.add(widgets::Number::new(&mut value).speed(0.01).max_decimals(2))
+        });
+        (value, response)
+    };
+    let (_, response) = draw(Vec::new());
+    response.request_focus();
+    let pos = response.rect.center();
+    draw(vec![egui::Event::PointerMoved(pos)]);
+    let line_height = context.options(|options| options.input_options.line_scroll_speed);
+    for index in 0..10 {
+        let (value, response) = draw(vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: Vec2::new(0.0, line_height / 10.0),
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        assert_eq!(value, if index == 9 { 1.01 } else { 1.0 });
+        assert_eq!(response.changed(), index == 9);
+    }
+    let (value, response) = draw(Vec::new());
+    assert_eq!(value, 1.01);
+    assert_eq!(
+        context
+            .data(|data| data.get_temp::<String>(response.id))
+            .as_deref(),
+        Some("1.01"),
+    );
+    let (value, response) = draw(wheel_events(
+        pos + Vec2::new(100.0, 0.0),
+        Vec2::new(0.0, 1.0),
+        egui::Modifiers::NONE,
+    ));
+    assert_eq!(value, 1.01);
+    assert!(!response.changed());
+}
+
+#[test]
+fn canvas_wheel_pans_horizontally_and_keeps_vertical_zoom_anchored() {
+    for (delta, modifiers) in [
+        (Vec2::new(-1.0, 0.0), egui::Modifiers::NONE),
+        (Vec2::new(0.0, -1.0), egui::Modifiers::SHIFT),
+        (Vec2::new(0.0, 1.0), egui::Modifiers::NONE),
+    ] {
+        let (context, mut app) = app();
+        app.dimensions = [32, 24];
+        app.new_document();
+        frame(&context, &mut app);
+        let pos = app.canvas_rect.unwrap().center() + Vec2::new(30.0, 20.0);
+        pointer_frame(&context, &mut app, pos, None, modifiers);
+        let before = app.session().unwrap();
+        let zoom = before.zoom;
+        let pan = before.pan;
+        let point = (pos - app.canvas_rect.unwrap().min) / zoom;
+        let _ = context.run(
+            egui::RawInput {
+                events: wheel_events(pos, delta, modifiers),
+                modifiers,
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        );
+        frame(&context, &mut app);
+        let after = app.session().unwrap();
+        if modifiers.shift || delta.x != 0.0 {
+            assert!(after.pan.x < pan.x);
+            assert_eq!(after.pan.y, pan.y);
+            assert_eq!(after.zoom, zoom);
+        } else {
+            assert!(after.zoom > zoom);
+            // Rendering uses the previous frame's view; settle the smoothing first.
+            for _ in 0..30 {
+                frame(&context, &mut app);
+            }
+            let after_point = (pos - app.canvas_rect.unwrap().min) / app.session().unwrap().zoom;
+            assert!((after_point - point).length() < 0.001);
+        }
+    }
+}
+
 #[test]
 fn floating_panels_stay_bounded_at_minimum_window_size() {
     let (context, mut app) = app();

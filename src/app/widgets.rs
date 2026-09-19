@@ -141,34 +141,99 @@ pub fn primary_button(ui: &mut Ui, label: impl Into<String>) -> Response {
     ui.add(Button::new(label).primary())
 }
 
-/// A recessed field in place of DragValue's raised button.
-pub struct Number<'a> {
-    inner: egui::DragValue<'a>,
+/// Consume vertical wheel motion over a control, leaving horizontal scrolling to its parent.
+fn wheel_steps(ui: &Ui, response: &Response) -> f64 {
+    let id = response.id.with("wheel_remainder");
+    if !response.enabled() || !response.hovered() {
+        ui.data_mut(|data| data.remove::<f64>(id));
+        return 0.0;
+    }
+    let delta = ui.input_mut(|input| {
+        if input.smooth_scroll_delta.y == 0.0 {
+            return 0.0;
+        }
+        // Consume the smoothing tail too, so the containing panel stays still.
+        input.smooth_scroll_delta.y = 0.0;
+        std::mem::take(&mut input.raw_scroll_delta.y)
+    });
+    let line_height = ui
+        .ctx()
+        .options(|options| options.input_options.line_scroll_speed);
+    ui.data_mut(|data| {
+        let remainder = data.get_temp_mut_or_default::<f64>(id);
+        *remainder += f64::from(delta / line_height);
+        let steps = remainder.trunc();
+        *remainder -= steps;
+        steps
+    })
 }
-impl<'a> Number<'a> {
-    pub fn new<N: egui::emath::Numeric>(value: &'a mut N) -> Self {
+
+pub(super) fn wheel_value<N: egui::emath::Numeric>(
+    ui: &Ui,
+    response: &mut Response,
+    value: &mut N,
+    range: RangeInclusive<f64>,
+    step: f64,
+    decimals: Option<usize>,
+) {
+    let steps = wheel_steps(ui, response);
+    if steps == 0.0 {
+        return;
+    }
+    let old = value.to_f64();
+    let step = if N::INTEGRAL { step.max(1.0) } else { step };
+    let mut new = old + steps * step;
+    if let Some(decimals) = decimals {
+        new = egui::emath::round_to_decimals(new, decimals);
+    }
+    *value = N::from_f64(new.clamp(
+        range.start().min(*range.end()),
+        range.start().max(*range.end()),
+    ));
+    if value.to_f64() != old {
+        response.mark_changed();
+        // DragValue caches its text while focused. Refresh it after a wheel edit.
+        ui.data_mut(|data| data.remove::<String>(response.id));
+        ui.ctx().request_repaint();
+    }
+}
+
+/// A recessed field in place of DragValue's raised button.
+pub struct Number<'a, N> {
+    value: &'a mut N,
+    speed: f64,
+    range: RangeInclusive<f64>,
+    suffix: String,
+    max_decimals: Option<usize>,
+}
+impl<'a, N: egui::emath::Numeric> Number<'a, N> {
+    pub fn new(value: &'a mut N) -> Self {
         Self {
-            inner: egui::DragValue::new(value),
+            value,
+            speed: if N::INTEGRAL { 0.25 } else { 1.0 },
+            range: N::MIN.to_f64()..=N::MAX.to_f64(),
+            suffix: String::new(),
+            max_decimals: N::INTEGRAL.then_some(0),
         }
     }
     pub fn speed(mut self, speed: impl Into<f64>) -> Self {
-        self.inner = self.inner.speed(speed);
+        self.speed = speed.into();
         self
     }
-    pub fn range<N: egui::emath::Numeric>(mut self, range: RangeInclusive<N>) -> Self {
-        self.inner = self.inner.range(range);
+    pub fn range<T: egui::emath::Numeric>(mut self, range: RangeInclusive<T>) -> Self {
+        self.range = range.start().to_f64()..=range.end().to_f64();
         self
     }
     pub fn suffix(mut self, suffix: impl ToString) -> Self {
-        self.inner = self.inner.suffix(suffix);
+        self.suffix = suffix.to_string();
         self
     }
     pub fn max_decimals(mut self, decimals: usize) -> Self {
-        self.inner = self.inner.max_decimals(decimals);
+        self.max_decimals = Some(decimals);
         self
     }
 }
-impl Widget for Number<'_> {
+impl<N: egui::emath::Numeric> Widget for Number<'_, N> {
     fn ui(self, ui: &mut Ui) -> Response {
         ui.scope(|ui| {
             ui.spacing_mut().button_padding = vec2(6.0, 3.0);
@@ -186,7 +251,23 @@ impl Widget for Number<'_> {
                 widget.bg_stroke = Stroke::new(1.0_f32, Color32::from_gray(83));
                 widget.expansion = 0.0;
             }
-            ui.add(self.inner)
+            let mut number = egui::DragValue::new(&mut *self.value)
+                .speed(self.speed)
+                .range(self.range.clone())
+                .suffix(self.suffix);
+            if let Some(decimals) = self.max_decimals {
+                number = number.max_decimals(decimals);
+            }
+            let mut response = ui.add(number);
+            wheel_value(
+                ui,
+                &mut response,
+                self.value,
+                self.range,
+                self.speed,
+                self.max_decimals,
+            );
+            response
         })
         .inner
     }
@@ -290,6 +371,13 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
         let old = self.value.to_f64();
         let mut value = old;
         let range = self.range.start().to_f64()..=self.range.end().to_f64();
+        let scale = if self.percentage { 100.0 } else { 1.0 };
+        let decimals = if N::INTEGRAL || self.percentage || range.end() - range.start() > 20.0 {
+            0
+        } else {
+            2
+        };
+        let speed = if decimals == 0 { 1.0 } else { 0.01 };
         let result = ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             if !self.label.is_empty() {
@@ -300,7 +388,7 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
             }
             // An invisible native slider retains keyboard navigation and range semantics.
             // Only its painting is replaced; input remains enabled.
-            let response = ui
+            let mut response = ui
                 .scope(|ui| {
                     ui.set_opacity(0.0);
                     ui.spacing_mut().interact_size.y = 18.0;
@@ -314,6 +402,14 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
                     ui.add(slider)
                 })
                 .inner;
+            wheel_value(
+                ui,
+                &mut response,
+                &mut value,
+                range.clone(),
+                speed / scale,
+                Some(decimals + if self.percentage { 2 } else { 0 }),
+            );
             let r = response.rect;
             let radius = r.height() / 2.5;
             let x_range = (r.left() + radius)..=(r.right() - radius);
@@ -361,17 +457,11 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
                 Stroke::new(0.6_f32, Color32::from_gray(175)),
             );
             focus_ring(ui, &response, 4.0);
-            let scale = if self.percentage { 100.0 } else { 1.0 };
             let mut display = value * scale;
-            let decimals = if N::INTEGRAL || self.percentage || range.end() - range.start() > 20.0 {
-                0
-            } else {
-                2
-            };
             let number = ui.add(
                 Number::new(&mut display)
                     .range(range.start() * scale..=range.end() * scale)
-                    .speed(if decimals == 0 { 1.0 } else { 0.01 })
+                    .speed(speed)
                     .max_decimals(decimals),
             );
             if number.changed() {

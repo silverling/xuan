@@ -66,6 +66,11 @@ impl EditorApp {
                                         ("Alt-click", "Set clone source"),
                                         ("X / D", "Swap / Reset colors"),
                                         ("Space-drag", "Pan canvas"),
+                                        (
+                                            "Horizontal wheel / Shift+wheel",
+                                            "Pan canvas horizontally",
+                                        ),
+                                        ("Wheel over a slider or number", "Adjust value"),
                                         ("Enter / Escape", "Apply crop / Cancel gesture"),
                                     ] {
                                         ui.label(RichText::new(key).strong());

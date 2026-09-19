@@ -419,17 +419,18 @@ impl EditorApp {
                     || ctx.input(|i| i.key_down(egui::Key::Space))
                     || ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
                 if response.hovered() {
-                    let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
-                    if scroll.abs() > 0.01 {
+                    let scroll = ctx.input_mut(|i| std::mem::take(&mut i.smooth_scroll_delta));
+                    if scroll != Vec2::ZERO {
                         let session = &mut self.sessions[self.current];
                         let old = session.zoom;
-                        let new = (old * (scroll * 0.003).exp()).clamp(0.01, 64.0);
+                        let new = (old * (scroll.y * 0.003).exp()).clamp(0.01, 64.0);
                         if let Some(point) = doc_point {
                             session.pan -= (vec2(
                                 point.x - session.document.width as f32 * 0.5,
                                 point.y - session.document.height as f32 * 0.5,
                             )) * (new - old);
                         }
+                        session.pan.x += scroll.x;
                         session.zoom = new;
                         session.fit = false;
                     }
