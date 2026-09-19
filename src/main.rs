@@ -2,30 +2,43 @@ mod app;
 
 use std::path::PathBuf;
 
+use clap::Parser;
+
+#[derive(Debug, Parser)]
+#[command(
+    version,
+    about,
+    after_help = "Projects use .xuan; original .comp directory packages can also be opened."
+)]
+struct Args {
+    /// Images or projects to open
+    #[arg(value_name = "IMAGE|PROJECT")]
+    paths: Vec<PathBuf>,
+
+    /// Start with a sample composition
+    #[arg(long)]
+    demo: bool,
+
+    /// Capture the window to a file and exit
+    #[arg(long, value_name = "PATH")]
+    screenshot: Option<PathBuf>,
+
+    /// Open a panel for the screenshot
+    #[arg(
+        long,
+        value_name = "PANEL",
+        value_parser = ["levels", "hue", "curves", "export", "brush", "selection", "gradient", "shape", "text", "new"]
+    )]
+    screenshot_panel: Option<String>,
+}
+
 fn main() -> eframe::Result {
-    let mut paths = Vec::new();
-    let mut demo = false;
-    let mut screenshot = None;
-    let mut panel = None;
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--demo" => demo = true,
-            "--screenshot" => screenshot = args.next().map(PathBuf::from),
-            "--screenshot-panel" => panel = args.next(),
-            "--version" | "-V" => {
-                println!("xuan {}", env!("CARGO_PKG_VERSION"));
-                return Ok(());
-            }
-            "--help" | "-h" => {
-                println!(
-                    "xuan —  native Linux image compositor\n\nUsage: xuan [IMAGE|PROJECT ...] [--demo] [--screenshot PATH] [--screenshot-panel levels|hue|curves|export|brush|selection|gradient|shape|text|new]\n\nProjects use .xuan; original .comp directory packages can also be opened."
-                );
-                return Ok(());
-            }
-            _ => paths.push(PathBuf::from(arg)),
-        }
-    }
+    let Args {
+        paths,
+        demo,
+        screenshot,
+        screenshot_panel,
+    } = Args::parse();
     let icon = image::load_from_memory(include_bytes!(
         "../assets/icons/hicolor/256x256/apps/me.silverl.xuan.png"
     ))
@@ -73,10 +86,109 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let mut app = app::EditorApp::new(cc, paths, demo, screenshot);
-            if let Some(panel) = panel {
+            if let Some(panel) = screenshot_panel {
                 app.preview_panel(&panel);
             }
             Ok(Box::new(app))
         }),
     )
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    use clap::error::ErrorKind;
+
+    #[test]
+    fn launches_without_arguments() {
+        let args = Args::try_parse_from(["xuan"]).unwrap();
+        assert!(args.paths.is_empty());
+        assert!(!args.demo);
+        assert!(args.screenshot.is_none());
+        assert!(args.screenshot_panel.is_none());
+    }
+
+    #[test]
+    fn accepts_paths_interleaved_with_options() {
+        let args = Args::try_parse_from([
+            "xuan",
+            "photo.png",
+            "--demo",
+            "composition.xuan",
+            "--screenshot",
+            "preview.png",
+            "--screenshot-panel",
+            "levels",
+            "original.comp",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            args.paths,
+            ["photo.png", "composition.xuan", "original.comp"].map(PathBuf::from)
+        );
+        assert!(args.demo);
+        assert_eq!(args.screenshot, Some(PathBuf::from("preview.png")));
+        assert_eq!(args.screenshot_panel.as_deref(), Some("levels"));
+    }
+
+    #[test]
+    fn accepts_option_like_paths_after_separator() {
+        let args = Args::try_parse_from(["xuan", "--", "--demo", "-photo.png"]).unwrap();
+        assert_eq!(args.paths, ["--demo", "-photo.png"].map(PathBuf::from));
+        assert!(!args.demo);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn accepts_non_utf8_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = OsString::from_vec(b"photo-\xff.png".to_vec());
+        let args = Args::try_parse_from([
+            OsString::from("xuan"),
+            path.clone(),
+            OsString::from("--screenshot"),
+            path.clone(),
+        ])
+        .unwrap();
+
+        assert_eq!(args.paths, [PathBuf::from(&path)]);
+        assert_eq!(args.screenshot, Some(PathBuf::from(path)));
+    }
+
+    #[test]
+    fn rejects_invalid_arguments() {
+        for (args, kind) in [
+            (vec!["xuan", "--unknown"], ErrorKind::UnknownArgument),
+            (vec!["xuan", "--screenshot"], ErrorKind::InvalidValue),
+            (vec!["xuan", "--screenshot-panel"], ErrorKind::InvalidValue),
+            (
+                vec!["xuan", "--screenshot-panel", "unknown"],
+                ErrorKind::InvalidValue,
+            ),
+            (
+                vec!["xuan", "--screenshot", "--demo"],
+                ErrorKind::InvalidValue,
+            ),
+        ] {
+            let error = Args::try_parse_from(&args).unwrap_err();
+            assert_eq!(error.kind(), kind, "arguments: {args:?}");
+        }
+    }
+
+    #[test]
+    fn displays_help_and_version() {
+        for (flag, kind) in [
+            ("--help", ErrorKind::DisplayHelp),
+            ("-h", ErrorKind::DisplayHelp),
+            ("--version", ErrorKind::DisplayVersion),
+            ("-V", ErrorKind::DisplayVersion),
+        ] {
+            let error = Args::try_parse_from(["xuan", flag]).unwrap_err();
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.exit_code(), 0);
+        }
+    }
 }
