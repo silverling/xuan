@@ -107,7 +107,7 @@ impl EditorApp {
                 ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none(), |ui| {
                     self.layer_controls(ui, &mut actions);
                     ui.separator();
-                    let height = (ui.available_height() - 55.0).max(40.0);
+                    let height = (ui.available_height() - 40.0).max(40.0);
                     egui::ScrollArea::vertical()
                         .id_salt("layers_scroll")
                         .max_height(height)
@@ -140,7 +140,7 @@ impl EditorApp {
 
     fn layer_controls(&self, ui: &mut egui::Ui, actions: &mut Actions) {
         egui::Frame::new()
-            .inner_margin(egui::Margin::symmetric(18, 15))
+            .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Layers").strong());
@@ -502,7 +502,7 @@ impl EditorApp {
 
     fn layer_footer(&self, ui: &mut egui::Ui, actions: &mut Actions) {
         egui::Frame::new()
-            .inner_margin(egui::Margin::symmetric(9, 7))
+            .inner_margin(egui::Margin::symmetric(9, 3))
             .show(ui, |ui| {
                 ui.add_enabled_ui(!self.sessions.is_empty(), |ui| {
                     ui.horizontal(|ui| {
