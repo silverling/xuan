@@ -578,6 +578,24 @@ fn layer_label(context: &egui::Context, app: &mut EditorApp, name: &str) -> Pos2
         .unwrap_or_else(|| panic!("Missing layer label: {name}"))
 }
 
+fn layer_eye(context: &egui::Context, app: &mut EditorApp, name: &str) -> Pos2 {
+    let label = layer_label(context, app, name);
+    frame(context, app)
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Circle(circle)
+                if circle.radius == 2.0
+                    && circle.center.x < label.x
+                    && (label.y..label.y + 36.0).contains(&circle.center.y) =>
+            {
+                Some(circle.center)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("Missing visible layer eye: {name}"))
+}
+
 fn drag_pointer(
     context: &egui::Context,
     app: &mut EditorApp,
@@ -589,6 +607,103 @@ fn drag_pointer(
     pointer_frame(context, app, from + Vec2::new(0.0, 10.0), None, modifiers);
     pointer_frame(context, app, to, None, modifiers);
     pointer_frame(context, app, to, Some(false), modifiers);
+}
+
+#[test]
+fn layer_visibility_eye_toggles_preview_without_selecting_and_supports_undo() {
+    let (context, mut app) = app();
+    app.dimensions = [32, 24];
+    app.new_document();
+    let bottom = Layer::image(
+        "Bottom",
+        RgbaImage::from_pixel(32, 24, image::Rgba([0, 0, 255, 255])),
+    );
+    let mut top = Layer::image(
+        "Top",
+        RgbaImage::from_pixel(32, 24, image::Rgba([255, 0, 0, 255])),
+    );
+    top.locked = true;
+    let selected = bottom.id;
+    let document = &mut app.session_mut().unwrap().document;
+    document.layers = vec![bottom, top];
+    document.select(selected, false);
+
+    let eye = layer_eye(&context, &mut app, "Top");
+    let assert_visible = |app: &EditorApp, visible: bool| {
+        let session = app.session().unwrap();
+        assert_eq!(session.document.layers[1].visible, visible);
+        assert_eq!(session.document.active, Some(selected));
+        assert_eq!(session.document.selected, HashSet::from([selected]));
+        assert_eq!(
+            session.composite.as_ref().unwrap().get_pixel(16, 12).0,
+            if visible {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            }
+        );
+        assert!(app.rename.is_none());
+        assert!(app.error.is_none(), "{:?}", app.error);
+    };
+    assert_visible(&app, true);
+
+    pointer_frame(&context, &mut app, eye, Some(true), egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, eye, Some(false), egui::Modifiers::NONE);
+    assert_visible(&app, false);
+    assert_eq!(
+        app.session().unwrap().history.undo_name(),
+        Some("Layer Visibility")
+    );
+    assert_eq!(app.session().unwrap().history.names().count(), 1);
+
+    app.command("undo");
+    frame(&context, &mut app);
+    assert_visible(&app, true);
+    app.command("redo");
+    frame(&context, &mut app);
+    assert_visible(&app, false);
+
+    pointer_frame(&context, &mut app, eye, Some(true), egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, eye, Some(false), egui::Modifiers::NONE);
+    assert_visible(&app, true);
+    assert_eq!(app.session().unwrap().history.names().count(), 2);
+}
+
+#[test]
+fn collapsed_group_visibility_eye_toggles_children_in_preview() {
+    let (context, mut app) = app();
+    app.dimensions = [32, 24];
+    app.new_document();
+    let mut group = Layer::blank("Group", 32, 24);
+    group.group = true;
+    let group_id = group.id;
+    let mut child = Layer::image(
+        "Child",
+        RgbaImage::from_pixel(32, 24, image::Rgba([255, 0, 0, 255])),
+    );
+    child.parent = Some(group_id);
+    let child_id = child.id;
+    let session = app.session_mut().unwrap();
+    session.document.layers = vec![group, child];
+    session.document.select(child_id, false);
+    session.collapsed.insert(group_id);
+
+    let eye = layer_eye(&context, &mut app, "Group");
+    for visible in [false, true] {
+        pointer_frame(&context, &mut app, eye, Some(true), egui::Modifiers::NONE);
+        pointer_frame(&context, &mut app, eye, Some(false), egui::Modifiers::NONE);
+        let session = app.session().unwrap();
+        assert_eq!(session.document.layers[0].visible, visible);
+        assert!(session.document.layers[1].visible);
+        assert_eq!(session.document.active, Some(child_id));
+        assert!(session.collapsed.contains(&group_id));
+        assert_eq!(
+            session.composite.as_ref().unwrap().get_pixel(16, 12).0,
+            if visible { [255, 0, 0, 255] } else { [0; 4] }
+        );
+        assert!(app.rename.is_none());
+        assert!(app.error.is_none(), "{:?}", app.error);
+    }
 }
 
 #[test]

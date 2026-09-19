@@ -197,71 +197,86 @@ impl EditorApp {
         let selected = session.document.selected.contains(&layer.id);
         let project = session.document.id;
         let width = ui.available_width();
-        let row = egui::Frame::new()
-            .fill(if selected {
-                Color32::from_gray(57)
-            } else {
-                theme::PANEL
-            })
-            .inner_margin(egui::Margin::symmetric(8, 8))
-            .show(ui, |ui| {
-                ui.set_min_width((width - 16.0).max(0.0));
-                ui.horizontal(|ui| {
-                    ui.set_min_height(36.0);
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    if icons::eye(ui, layer.visible).clicked() {
-                        actions.visibility = Some(layer.id);
-                    }
-                    ui.add_space((depth as f32 * 24.0).min(72.0));
-                    if layer.group {
-                        let collapsed = self.sessions[self.current].collapsed.contains(&layer.id);
-                        if ui.small_button(if collapsed { "▸" } else { "▾" }).clicked() {
-                            actions.collapse = Some(layer.id);
-                        }
-                        if icons::action_button(ui, "group").clicked() {
-                            actions.select = Some((layer.id, false));
-                        }
+        // Register the row behind its controls so it cannot steal their clicks.
+        let row = ui.scope_builder(
+            egui::UiBuilder::new()
+                .id_salt(layer.id)
+                .sense(Sense::click_and_drag()),
+            |ui| {
+                ui.style_mut().interaction.selectable_labels = false;
+                egui::Frame::new()
+                    .fill(if selected {
+                        Color32::from_gray(57)
                     } else {
-                        if layer.clip_to.is_some() {
-                            ui.label(RichText::new("↳").small().color(theme::MUTED));
-                        }
-                        self.layer_thumbnail(ui, layer, false, selected, actions);
-                    }
-                    if layer.mask.is_some() {
-                        self.layer_thumbnail(ui, layer, true, selected, actions);
-                    }
-                    let color = if layer.visible {
-                        theme::TEXT
-                    } else {
-                        theme::MUTED
-                    };
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 3.0;
-                        ui.add(
-                            egui::Label::new(RichText::new(&layer.name).size(13.0).color(color))
-                                .truncate()
-                                .sense(Sense::hover()),
-                        );
-                        let detail = if layer.group {
-                            "Folder".to_owned()
-                        } else if let Some(adjustment) = &layer.adjustment {
-                            adjustment.name().to_owned()
-                        } else {
-                            format!(
-                                "{:.0} × {:.0} px{}",
-                                layer.transform.width,
-                                layer.transform.height,
-                                if layer.locked { " · Locked" } else { "" }
-                            )
-                        };
-                        ui.add(
-                            egui::Label::new(RichText::new(detail).size(10.0).color(theme::MUTED))
-                                .truncate(),
-                        );
+                        theme::PANEL
+                    })
+                    .inner_margin(egui::Margin::symmetric(8, 8))
+                    .show(ui, |ui| {
+                        ui.set_min_width((width - 16.0).max(0.0));
+                        ui.horizontal(|ui| {
+                            ui.set_min_height(36.0);
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if icons::eye(ui, layer.visible).clicked() {
+                                actions.visibility = Some(layer.id);
+                            }
+                            ui.add_space((depth as f32 * 24.0).min(72.0));
+                            if layer.group {
+                                let collapsed =
+                                    self.sessions[self.current].collapsed.contains(&layer.id);
+                                if ui.small_button(if collapsed { "▸" } else { "▾" }).clicked()
+                                {
+                                    actions.collapse = Some(layer.id);
+                                }
+                                if icons::action_button(ui, "group").clicked() {
+                                    actions.select = Some((layer.id, false));
+                                }
+                            } else {
+                                if layer.clip_to.is_some() {
+                                    ui.label(RichText::new("↳").small().color(theme::MUTED));
+                                }
+                                self.layer_thumbnail(ui, layer, false, selected, actions);
+                            }
+                            if layer.mask.is_some() {
+                                self.layer_thumbnail(ui, layer, true, selected, actions);
+                            }
+                            let color = if layer.visible {
+                                theme::TEXT
+                            } else {
+                                theme::MUTED
+                            };
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 3.0;
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&layer.name).size(13.0).color(color),
+                                    )
+                                    .truncate()
+                                    .sense(Sense::hover()),
+                                );
+                                let detail = if layer.group {
+                                    "Folder".to_owned()
+                                } else if let Some(adjustment) = &layer.adjustment {
+                                    adjustment.name().to_owned()
+                                } else {
+                                    format!(
+                                        "{:.0} × {:.0} px{}",
+                                        layer.transform.width,
+                                        layer.transform.height,
+                                        if layer.locked { " · Locked" } else { "" }
+                                    )
+                                };
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(detail).size(10.0).color(theme::MUTED),
+                                    )
+                                    .truncate(),
+                                );
+                            });
+                        });
                     });
-                });
-            });
-        let response = row.response.interact(Sense::click_and_drag());
+            },
+        );
+        let response = row.response;
         response.dnd_set_drag_payload(LayerDrag {
             project,
             layer: layer.id,
