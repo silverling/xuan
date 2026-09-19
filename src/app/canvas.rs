@@ -626,6 +626,7 @@ impl EditorApp {
     }
 
     fn select_canvas_layer(&mut self, point: Point, extend: bool, dragging: bool) -> bool {
+        let ignore_transparent_pixels = self.ignore_transparent_pixels;
         let Some(session) = self.session_mut() else {
             return false;
         };
@@ -634,7 +635,15 @@ impl EditorApp {
             && point.y >= 0.0
             && point.x < document.width as f32
             && point.y < document.height as f32;
-        let hit = inside.then(|| render::hit_test(document, point)).flatten();
+        let hit = inside
+            .then(|| {
+                if ignore_transparent_pixels {
+                    render::hit_test(document, point)
+                } else {
+                    render::hit_test_bounds(document, point)
+                }
+            })
+            .flatten();
         if let Some(id) = hit {
             // Moving an already selected layer keeps the other selected layers and mask target.
             if !dragging || !document.transform_targets().contains(&id) {

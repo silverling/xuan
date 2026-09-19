@@ -53,6 +53,14 @@ impl EditorApp {
                                         widgets::checkbox(ui, &mut self.auto_select, "Auto Select");
                                         widgets::checkbox(
                                             ui,
+                                            &mut self.ignore_transparent_pixels,
+                                            "Ignore Transparent Pixels",
+                                        )
+                                        .on_hover_text(
+                                            "Select layers only at visible pixels. Uncheck to select anywhere inside a layer's bounds.",
+                                        );
+                                        widgets::checkbox(
+                                            ui,
                                             &mut self.show_controls,
                                             "Show Controls",
                                         );

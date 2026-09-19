@@ -269,6 +269,35 @@ pub fn hit_test(document: &Document, point: Point) -> Option<uuid::Uuid> {
         .map(|l| l.id)
 }
 
+/// Select by transformed layer bounds, ignoring pixel, mask, and opacity coverage.
+pub fn hit_test_bounds(document: &Document, point: Point) -> Option<uuid::Uuid> {
+    paint_order(document)
+        .into_iter()
+        .rev()
+        .find(|layer| {
+            if layer.locked || !layer.visible || layer.adjustment.is_some() {
+                return false;
+            }
+            let unit = layer.transform.inverse(point);
+            if !(0.0..1.0).contains(&unit.x) || !(0.0..1.0).contains(&unit.y) {
+                return false;
+            }
+            let mut parent = layer.parent;
+            for _ in 0..64 {
+                let Some(group) = parent.and_then(|id| document.layers.iter().find(|l| l.id == id))
+                else {
+                    break;
+                };
+                if !group.visible {
+                    return false;
+                }
+                parent = group.parent;
+            }
+            true
+        })
+        .map(|l| l.id)
+}
+
 pub fn flatten_white(image: &RgbaImage) -> image::RgbImage {
     image::RgbImage::from_fn(image.width(), image.height(), |x, y| {
         let Rgba([r, g, b, a]) = *image.get_pixel(x, y);
@@ -284,6 +313,65 @@ mod tests {
     use super::*;
     use crate::document::Mask;
     use std::sync::Arc;
+
+    #[test]
+    fn bounds_hit_testing_follows_rotation_flips_and_perspective() {
+        let mut document = Document::new(100, 100).unwrap();
+        let bottom = document.layers[0].id;
+        let mut top = Layer::image("Transparent", RgbaImage::new(40, 20));
+        top.transform.x = 30.0;
+        top.transform.y = 40.0;
+        top.transform.rotation = 35.0;
+        top.transform.flip_x = true;
+        top.transform.warp = Some([
+            Point::new(0.1, 0.1),
+            Point::new(0.9, 0.0),
+            Point::new(1.0, 1.0),
+            Point::new(0.0, 0.9),
+        ]);
+        let id = top.id;
+        let inside = top.transform.point(Point::new(0.25, 0.5));
+        let outside = top.transform.point(Point::new(0.5, -0.2));
+        document.insert(top);
+
+        assert_eq!(hit_test(&document, inside), None);
+        assert_eq!(hit_test_bounds(&document, inside), Some(id));
+        assert_eq!(hit_test_bounds(&document, outside), Some(bottom));
+        assert_eq!(hit_test_bounds(&document, Point::new(101.0, 50.0)), None);
+    }
+
+    #[test]
+    fn bounds_hit_testing_respects_stacking_visibility_and_locks() {
+        let mut document = Document::new(100, 100).unwrap();
+        let bottom = document.layers[0].id;
+        let mut folder = Layer::blank("Folder", 100, 100);
+        folder.group = true;
+        folder.opacity = 0.0;
+        let mut top = Layer::blank("Masked", 100, 100);
+        top.parent = Some(folder.id);
+        top.opacity = 0.0;
+        top.mask = Some(Mask {
+            pixels: Arc::new(GrayImage::new(1, 1)),
+            ..Mask::white()
+        });
+        top.clip_to = Some(bottom);
+        let id = top.id;
+        document.layers.extend([folder, top]);
+        let point = Point::new(50.0, 50.0);
+
+        assert_eq!(hit_test_bounds(&document, point), Some(id));
+        document.layers[2].locked = true;
+        assert_eq!(hit_test_bounds(&document, point), Some(bottom));
+        document.layers[2].locked = false;
+        document.layers[2].visible = false;
+        assert_eq!(hit_test_bounds(&document, point), Some(bottom));
+        document.layers[2].visible = true;
+        document.layers[1].visible = false;
+        assert_eq!(hit_test_bounds(&document, point), Some(bottom));
+        document.layers[1].visible = true;
+        document.layers[2].adjustment = Some(crate::document::Adjustment::Invert);
+        assert_eq!(hit_test_bounds(&document, point), Some(bottom));
+    }
 
     #[test]
     fn thumbnails_preserve_layer_placement_and_transparent_color() {

@@ -1532,6 +1532,7 @@ fn canvas_clicks_select_visible_layers_and_deselect_empty_space() {
     let (context, mut app) = app();
     let [bottom, top] = canvas_layers(&mut app);
     assert!(app.auto_select);
+    app.ignore_transparent_pixels = true;
     click_canvas(
         &context,
         &mut app,
@@ -1582,6 +1583,71 @@ fn canvas_clicks_select_visible_layers_and_deselect_empty_space() {
     assert!(app.session().unwrap().document.active.is_none());
     assert!(app.session().unwrap().document.selected.is_empty());
     assert!(!app.session().unwrap().history.dirty());
+}
+
+#[test]
+fn move_tool_can_select_and_drag_through_transparent_pixels() {
+    let (context, mut app) = app();
+    let [bottom, top] = canvas_layers(&mut app);
+    assert!(!app.ignore_transparent_pixels);
+
+    let hole = Point::new(25.5, 25.5);
+    click_canvas(&context, &mut app, hole, egui::Modifiers::NONE);
+    assert_eq!(app.session().unwrap().document.active, Some(top));
+
+    // Starting on an unselected layer's transparent pixel selects and moves it.
+    app.session_mut().unwrap().document.select(bottom, false);
+    drag(
+        &context,
+        &mut app,
+        hole,
+        Point::new(30.5, 30.5),
+        egui::Modifiers::NONE,
+    );
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.active, Some(top));
+    assert_eq!(document.layers[0].transform.x, 10.0);
+    assert_eq!(document.layers[0].transform.y, 10.0);
+    assert_eq!(document.layers[1].transform.x, 25.0);
+    assert_eq!(document.layers[1].transform.y, 25.0);
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers[1].transform.x, 20.0);
+
+    app.session_mut().unwrap().document.select(bottom, false);
+    app.auto_select = false;
+    click_canvas(&context, &mut app, hole, egui::Modifiers::NONE);
+    assert_eq!(app.session().unwrap().document.active, Some(bottom));
+    click_canvas(&context, &mut app, hole, egui::Modifiers::CTRL);
+    assert_eq!(app.session().unwrap().document.active, Some(top));
+
+    let option = frame(&context, &mut app)
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Ignore Transparent Pixels" => {
+                Some(text.pos + Vec2::splat(5.0))
+            }
+            _ => None,
+        })
+        .expect("Move tool transparency option");
+    pointer_frame(&context, &mut app, option, None, egui::Modifiers::NONE);
+    pointer_frame(
+        &context,
+        &mut app,
+        option,
+        Some(true),
+        egui::Modifiers::NONE,
+    );
+    pointer_frame(
+        &context,
+        &mut app,
+        option,
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.ignore_transparent_pixels);
+    click_canvas(&context, &mut app, hole, egui::Modifiers::CTRL);
+    assert_eq!(app.session().unwrap().document.active, Some(bottom));
 }
 
 #[test]
