@@ -46,10 +46,32 @@ impl EditorApp {
         let preview = &mut edit.filter_preview;
         preview.applying |= apply;
         let wanted = edit.preview || preview.applying;
+        if wanted
+            && !preview.applying
+            && !self.mask_target
+            && let Filter::MotionBlur { distance, angle } = filter
+            && xuan::gpu::can_preview_motion_blur(&edit.original)
+            && let Some(session) = self.session_mut().filter(|session| session.gpu.is_some())
+        {
+            // Slider edits only change GPU uniforms. Full-resolution pixels are
+            // produced once, in the worker, when Apply is pressed.
+            preview.job = None;
+            preview.ready = None;
+            let settings = Some([*distance, *angle]);
+            if session.motion_blur_preview != settings || edit.refresh {
+                session.document = edit.original.clone();
+                session.motion_blur_preview = settings;
+                session.invalidate();
+                self.context.request_repaint();
+            }
+            edit.refresh = false;
+            return false;
+        }
         if changed || edit.refresh {
             preview.ready = None;
             if !wanted && let Some(session) = self.session_mut() {
                 session.document = edit.original.clone();
+                session.motion_blur_preview = None;
                 session.invalidate();
             }
             edit.refresh = false;
@@ -73,6 +95,7 @@ impl EditorApp {
                         Ok(document) => {
                             if let Some(session) = self.session_mut() {
                                 session.document = document;
+                                session.motion_blur_preview = None;
                                 session.invalidate();
                             }
                             preview.ready = Some(job.filter.clone());
@@ -81,6 +104,7 @@ impl EditorApp {
                         Err(error) => {
                             if let Some(session) = self.session_mut() {
                                 session.history.cancel(&mut session.document);
+                                session.motion_blur_preview = None;
                                 session.invalidate();
                             }
                             self.error = Some(error);

@@ -599,6 +599,7 @@ impl EditorApp {
         if cancel || !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             if let Some(s) = self.session_mut() {
                 s.history.cancel(&mut s.document);
+                s.motion_blur_preview = None;
                 s.invalidate();
             }
             self.dialog = None;

@@ -17,7 +17,17 @@ impl GpuPreview {
     }
 
     pub fn render(&mut self, document: &Document, size: [u32; 2]) {
-        self.compositor.render(document, size);
+        self.render_with_motion_blur(document, size, None);
+    }
+
+    pub fn render_with_motion_blur(
+        &mut self,
+        document: &Document,
+        size: [u32; 2],
+        motion_blur: Option<[f32; 2]>,
+    ) {
+        self.compositor
+            .render_with_motion_blur(document, size, motion_blur);
         let view = self.compositor.display_view();
         let sampler = wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Nearest,

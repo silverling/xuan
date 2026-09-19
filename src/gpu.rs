@@ -16,6 +16,23 @@ use crate::{
     render,
 };
 
+/// Selections and layers clipped to the edited pixels need the materialized result.
+/// Keep those cases on the cancellable CPU path until coverage is also GPU resident.
+pub fn can_preview_motion_blur(document: &Document) -> bool {
+    document.selection.is_none()
+        && document.active().is_some_and(|layer| {
+            layer.pixels.is_some()
+                && !layer.locked
+                && !layer.group
+                && layer.adjustment.is_none()
+                && layer.raw.is_none()
+                && !document
+                    .layers
+                    .iter()
+                    .any(|other| other.clip_to == Some(layer.id))
+        })
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Parameters {
@@ -98,6 +115,18 @@ impl GpuCompositor {
     }
 
     pub fn render(&mut self, document: &Document, size: [u32; 2]) {
+        self.render_with_motion_blur(document, size, None);
+    }
+
+    /// Preview distance/angle from cached source textures without changing document
+    /// pixels or reading the GPU result back to the CPU.
+    pub fn render_with_motion_blur(
+        &mut self,
+        document: &Document,
+        size: [u32; 2],
+        motion_blur: Option<[f32; 2]>,
+    ) {
+        let motion_blur = motion_blur.filter(|_| can_preview_motion_blur(document));
         if size != self.size {
             self.size = size;
             self.buffers = std::array::from_fn(|_| {
@@ -234,6 +263,17 @@ impl GpuCompositor {
                         .texture
                 })
                 .unwrap_or(&self.blank);
+            if document.active == Some(layer.id)
+                && let Some([distance, angle]) = motion_blur
+                && let Some(pixels) = &layer.pixels
+            {
+                let (sin, cos) = angle.to_radians().sin_cos();
+                let scale = (source.width() as f32 / pixels.width() as f32)
+                    .max(source.height() as f32 / pixels.height() as f32);
+                params.appearance[1] = (distance * scale).ceil().clamp(1.0, 256.0);
+                params.appearance[2] = distance * cos / pixels.width() as f32;
+                params.appearance[3] = distance * sin / pixels.height() as f32;
+            }
             self.dispatch(
                 &mut encoder,
                 current,
@@ -537,6 +577,105 @@ fn parameters(document: &Document, layer: &Layer, size: [u32; 2]) -> Parameters 
 mod tests {
     use super::*;
     use image::Rgba;
+
+    #[test]
+    fn motion_blur_preview_rejects_edits_that_need_cpu_coverage() {
+        let mut document = Document::new(8, 8).unwrap();
+        document.insert(Layer::image("Pixels", RgbaImage::new(8, 8)));
+        assert!(can_preview_motion_blur(&document));
+        document.active_mut().unwrap().locked = true;
+        assert!(!can_preview_motion_blur(&document));
+        document.active_mut().unwrap().locked = false;
+        document.selection = Some(Arc::new(image::GrayImage::new(8, 8)));
+        assert!(!can_preview_motion_blur(&document));
+        document.selection = None;
+        let mut clipped = Layer::blank("Clipped", 8, 8);
+        clipped.clip_to = document.active;
+        document.layers.push(clipped);
+        assert!(!can_preview_motion_blur(&document));
+    }
+
+    #[test]
+    #[ignore = "requires a Vulkan or OpenGL compute adapter; run explicitly for native verification"]
+    fn motion_blur_preview_matches_cpu_and_reuses_source_texture() {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut compositor = GpuCompositor::new(device, queue);
+        let mut document = Document::new(64, 48).unwrap();
+        let mut layer = Layer::image(
+            "Blurred",
+            RgbaImage::from_fn(24, 16, |x, y| {
+                Rgba([
+                    255,
+                    (y * 13) as u8,
+                    (x * 9) as u8,
+                    if x % 3 == 0 { 0 } else { 210 },
+                ])
+            }),
+        );
+        layer.transform.x = 20.0;
+        layer.transform.y = 16.0;
+        document.insert(layer);
+        compositor.render(&document, [64, 48]);
+        let pixels = document.active().unwrap().pixels.clone().unwrap();
+        let key = (Arc::as_ptr(&pixels) as usize, [24, 16]);
+        let texture = compositor.sources[&key].texture.clone();
+        for distance in [1.0, 4.0, 15.0, 23.7, 200.0] {
+            for angle in [0.0, 35.0, -90.0] {
+                compositor.render_with_motion_blur(&document, [64, 48], Some([distance, angle]));
+                assert_eq!(compositor.sources[&key].texture, texture);
+                assert!(Arc::ptr_eq(
+                    &pixels,
+                    document.active().unwrap().pixels.as_ref().unwrap()
+                ));
+                let mut expected = document.clone();
+                crate::effects::apply_filter(
+                    &mut expected,
+                    &crate::effects::Filter::MotionBlur { distance, angle },
+                    false,
+                )
+                .unwrap();
+                compare(
+                    &expected,
+                    &readback(&compositor),
+                    &format!("Motion Blur {distance}, {angle}"),
+                );
+            }
+        }
+        // Expanded blur still uses the original mask placement and layer blend.
+        for rotation in [0.0, 90.0] {
+            let layer = document.active_mut().unwrap();
+            layer.transform.rotation = rotation;
+            layer.transform.flip_x = true;
+            layer.opacity = 0.73;
+            layer.mask = Some(crate::document::Mask {
+                pixels: Arc::new(image::GrayImage::from_fn(24, 16, |x, _| {
+                    image::Luma([(x * 11) as u8])
+                })),
+                ..crate::document::Mask::white()
+            });
+            compositor.render_with_motion_blur(&document, [64, 48], Some([15.0, 35.0]));
+            let mut expected = document.clone();
+            crate::effects::apply_filter(
+                &mut expected,
+                &crate::effects::Filter::MotionBlur {
+                    distance: 15.0,
+                    angle: 35.0,
+                },
+                false,
+            )
+            .unwrap();
+            compare(
+                &expected,
+                &readback(&compositor),
+                "Motion Blur with transformed mask",
+            );
+        }
+        compositor.render(&document, [64, 48]);
+        compare(&document, &readback(&compositor), "Preview off");
+    }
 
     fn readback(compositor: &GpuCompositor) -> Vec<u8> {
         readback_mip(compositor, 0)

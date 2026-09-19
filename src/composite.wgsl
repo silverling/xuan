@@ -3,7 +3,7 @@ struct Parameters {
     bounds: vec4<f32>, // Origin and extent.
     rotation: vec4<f32>, // Cosine, sine, horizontal and vertical signs.
     flags: vec4<u32>, // Blend mode, adjustment kind, coverage present, curve point count.
-    appearance: vec4<f32>, // Opacity, unused.
+    appearance: vec4<f32>, // Opacity, motion blur samples, motion vector in source UV.
     first: vec4<f32>,
     second: vec4<f32>,
     points: array<vec4<f32>, 128>,
@@ -31,6 +31,32 @@ fn sample_source(uv: vec2<f32>) -> vec4<f32> {
     let b = mix(source_pixel(low + vec2(0, 1)), source_pixel(low + vec2(1, 1)), fraction.x);
     let p = mix(a, b, fraction.y);
     return vec4(select(vec3(0.0), p.rgb / max(p.a, 0.000001), p.a > 0.0), p.a);
+}
+
+fn motion_pixel(pixel: vec2<i32>) -> vec4<f32> {
+    let size = vec2<i32>(textureDimensions(source));
+    // Filtering a padded layer uses transparent texels outside the original image.
+    if any(pixel < vec2(0)) || any(pixel >= size) { return vec4(0.0); }
+    let p = textureLoad(source, pixel, 0);
+    return vec4(p.rgb * p.a, p.a);
+}
+
+fn sample_motion_blur(uv: vec2<f32>) -> vec4<f32> {
+    let size = vec2<f32>(textureDimensions(source));
+    let extent = abs(params.appearance.zw) * 0.5 + 0.5 / size;
+    if any(uv < -extent) || any(uv > 1.0 + extent) { return vec4(0.0); }
+    let steps = u32(params.appearance.y);
+    var sum = vec4(0.0);
+    for (var i = 0u; i < steps; i++) {
+        let offset = (f32(i) + 0.5) / f32(steps) - 0.5;
+        let point = (uv + offset * params.appearance.zw) * size - 0.5;
+        let low = vec2<i32>(floor(point));
+        let fraction = fract(point);
+        let a = mix(motion_pixel(low), motion_pixel(low + vec2(1, 0)), fraction.x);
+        let b = mix(motion_pixel(low + vec2(0, 1)), motion_pixel(low + vec2(1, 1)), fraction.x);
+        sum += mix(a, b, fraction.y);
+    }
+    return vec4(sum.rgb / max(sum.a, 0.000001), sum.a / f32(steps));
 }
 
 fn lum(c: vec3<f32>) -> f32 { return dot(c, vec3(0.3, 0.59, 0.11)); }
@@ -259,7 +285,12 @@ fn composite(@builtin(global_invocation_id) id: vec3<u32>) {
         let divisor = dot(params.points[2].xyz, homogeneous);
         uv = vec2(dot(params.points[0].xyz, homogeneous), dot(params.points[1].xyz, homogeneous)) / divisor;
     }
-    var src = sample_source(uv);
+    var src = vec4(0.0);
+    if params.appearance.y > 0.0 {
+        src = sample_motion_blur(uv);
+    } else {
+        src = sample_source(uv);
+    }
     src.a *= amount;
     let alpha = src.a + dst.a * (1.0 - src.a);
     let color = ((1.0 - src.a) * dst.a * dst.rgb + (1.0 - dst.a) * src.a * src.rgb

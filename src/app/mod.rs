@@ -174,6 +174,7 @@ struct Session {
     dirty_preview: bool,
     texture: Option<TextureHandle>,
     gpu: Option<gpu_preview::GpuPreview>,
+    motion_blur_preview: Option<[f32; 2]>,
     preview_size: [u32; 2],
     composite: Option<Arc<RgbaImage>>,
     thumbnails: HashMap<(Uuid, bool), layers::LayerThumbnail>,
@@ -194,6 +195,7 @@ impl Session {
             dirty_preview: true,
             texture: None,
             gpu: None,
+            motion_blur_preview: None,
             preview_size: [0, 0],
             composite: None,
             thumbnails: HashMap::new(),
@@ -238,7 +240,11 @@ impl Session {
             let preview = self
                 .gpu
                 .get_or_insert_with(|| gpu_preview::GpuPreview::new(state));
-            preview.render(&self.document, size);
+            if let Some(settings) = self.motion_blur_preview {
+                preview.render_with_motion_blur(&self.document, size, Some(settings));
+            } else {
+                preview.render(&self.document, size);
+            }
             self.texture = None;
             self.composite = None;
             self.dirty_preview = false;

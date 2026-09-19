@@ -404,6 +404,155 @@ fn benchmark_large_image_levels() {
     assert!(app.error.is_none(), "{:?}", app.error);
 }
 
+#[test]
+#[ignore = "requires a GPU; optionally set XUAN_ZOOM_BENCH_IMAGE to an image path"]
+fn benchmark_large_image_motion_blur() {
+    let (context, mut app, state) = large_image_benchmark_app();
+    eprintln!("Motion Blur adapter: {:?}", state.adapter.get_info());
+    for _ in 0..3 {
+        frame(&context, &mut app);
+    }
+    app.start_filter(Filter::MotionBlur {
+        distance: 15.0,
+        angle: 0.0,
+    });
+    for _ in 0..3 {
+        frame(&context, &mut app);
+    }
+    state
+        .device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
+    for distance in [15.0, 200.0] {
+        let mut durations = Vec::new();
+        for step in 0..24 {
+            let edit = app.effect.as_mut().unwrap();
+            edit.filter = Some(Filter::MotionBlur {
+                distance,
+                angle: step as f32 * 3.0,
+            });
+            edit.refresh = true;
+            let start = std::time::Instant::now();
+            // The dialog updates settings after drawing the canvas, so include
+            // the following frame and GPU completion in end-to-end latency.
+            frame(&context, &mut app);
+            frame(&context, &mut app);
+            state
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+            durations.push(start.elapsed().as_secs_f64() * 1000.0);
+            assert!(!app.effect.as_ref().unwrap().filter_preview.busy());
+            assert!(app.session().unwrap().motion_blur_preview.is_some());
+        }
+        report_benchmark(&format!("Motion Blur distance {distance}"), durations);
+    }
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+#[test]
+#[ignore = "requires a GPU; run explicitly for native verification"]
+fn motion_blur_gpu_preview_toggles_cancels_and_applies_full_resolution() {
+    let (context, mut app, state) = large_image_benchmark_app();
+    app.sessions = vec![Session::new(
+        Document::new(32, 24).unwrap(),
+        "Blur test".into(),
+        None,
+    )];
+    app.brush.color = [210, 80, 40, 255];
+    app.command("fill_fg");
+    frame(&context, &mut app);
+    let original = app.session().unwrap().document.clone();
+    let pixels = original.active().unwrap().pixels.as_ref().unwrap();
+    let revision = app.session().unwrap().history.revision;
+    let filter = Filter::MotionBlur {
+        distance: 20.0,
+        angle: 35.0,
+    };
+    app.start_filter(filter.clone());
+    for preview in [true, false, true] {
+        let edit = app.effect.as_mut().unwrap();
+        edit.preview = preview;
+        edit.refresh = true;
+        frame(&context, &mut app);
+        frame(&context, &mut app);
+        state
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+        assert_eq!(
+            app.session().unwrap().motion_blur_preview.is_some(),
+            preview
+        );
+        assert!(!app.effect.as_ref().unwrap().filter_preview.busy());
+        assert_eq!(app.session().unwrap().history.revision, revision);
+        assert!(Arc::ptr_eq(
+            pixels,
+            app.session()
+                .unwrap()
+                .document
+                .active()
+                .unwrap()
+                .pixels
+                .as_ref()
+                .unwrap()
+        ));
+    }
+
+    let apply = layer_label(&context, &mut app, "Apply") + Vec2::splat(5.0);
+    pointer_frame(&context, &mut app, apply, Some(true), egui::Modifiers::NONE);
+    pointer_frame(
+        &context,
+        &mut app,
+        apply,
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.effect.is_some() {
+        frame(&context, &mut app);
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert!(app.dialog.is_none());
+    assert!(app.session().unwrap().motion_blur_preview.is_none());
+    assert_eq!(app.session().unwrap().history.revision, revision + 1);
+    let mut expected = original.clone();
+    xuan::effects::apply_filter(&mut expected, &filter, false).unwrap();
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().pixels,
+        expected.active().unwrap().pixels
+    );
+    app.command("undo");
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().pixels,
+        original.active().unwrap().pixels
+    );
+    app.command("redo");
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().pixels,
+        expected.active().unwrap().pixels
+    );
+
+    app.start_filter(filter);
+    frame(&context, &mut app);
+    frame(&context, &mut app);
+    assert!(app.session().unwrap().motion_blur_preview.is_some());
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert!(app.session().unwrap().motion_blur_preview.is_none());
+    assert!(app.dialog.is_none());
+    assert_eq!(app.session().unwrap().history.revision, revision + 1);
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().pixels,
+        expected.active().unwrap().pixels
+    );
+}
+
 fn large_image_benchmark_app() -> (egui::Context, EditorApp, eframe::egui_wgpu::RenderState) {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter =
