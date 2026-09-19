@@ -42,6 +42,7 @@ struct Actions {
     adjustment: Option<Adjustment>,
     visibility: Option<Uuid>,
     select: Option<(Uuid, bool)>,
+    deselect: bool,
     collapse: Option<Uuid>,
     reorder: Option<(LayerDrag, Uuid, DropPosition, bool)>,
     appearance: Option<(BlendMode, f32, bool)>,
@@ -115,7 +116,14 @@ impl EditorApp {
                         .max_height(height)
                         .min_scrolled_height(height)
                         .auto_shrink([false, false])
-                        .show(ui, |ui| {
+                        .show_viewport(ui, |ui, viewport| {
+                            // Register the background before rows so their controls take priority.
+                            let background = ui.interact(
+                                viewport.translate(ui.max_rect().min.to_vec2()),
+                                ui.id().with("background"),
+                                Sense::click(),
+                            );
+                            actions.deselect = background.clicked();
                             ui.spacing_mut().item_spacing.y = 2.0;
                             if let Some(session) = self.session() {
                                 for (layer, depth) in rows(&session.document, &session.collapsed) {
@@ -573,6 +581,13 @@ impl EditorApp {
     }
 
     fn apply_layer_actions(&mut self, ctx: &egui::Context, actions: Actions) {
+        if actions.deselect {
+            if let Some(session) = self.session_mut() {
+                session.document.selected.clear();
+                session.document.active = None;
+            }
+            self.mask_target = false;
+        }
         if let Some(id) = actions.visibility {
             self.edit("Layer Visibility", |doc| {
                 if let Some(layer) = doc.layers.iter_mut().find(|l| l.id == id) {
