@@ -375,7 +375,7 @@ impl EditorApp {
                                 egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
                             )
                             .show(ui, |ui| {
-                                ui.horizontal(|ui| {
+                                ui.horizontal_centered(|ui| {
                                     if self.sessions.is_empty() {
                                         ui.label(RichText::new("Untitled").color(theme::MUTED));
                                     }

@@ -512,27 +512,31 @@ impl EditorApp {
                     .color(theme::MUTED),
             );
             ui.add_space(24.0);
-            ui.horizontal(|ui| {
-                ui.vertical(|ui| {
+            egui::Grid::new("welcome_dimensions")
+                .num_columns(3)
+                .min_col_width(0.0)
+                .min_row_height(0.0)
+                .show(ui, |ui| {
                     ui.label("Width");
+                    ui.label("");
+                    ui.label("Height");
+                    ui.end_row();
+
                     ui.add_sized(
                         vec2(180.0, 36.0),
                         widgets::Number::new(&mut self.dimensions[0])
                             .range(1..=30_000)
                             .suffix(" px"),
                     );
-                });
-                ui.label("×");
-                ui.vertical(|ui| {
-                    ui.label("Height");
+                    ui.label("×");
                     ui.add_sized(
                         vec2(180.0, 36.0),
                         widgets::Number::new(&mut self.dimensions[1])
                             .range(1..=30_000)
                             .suffix(" px"),
                     );
+                    ui.end_row();
                 });
-            });
             ui.add_space(15.0);
             ui.label(egui::RichText::new("Transparent canvas · sRGB").color(theme::MUTED));
             ui.add_space(20.0);
