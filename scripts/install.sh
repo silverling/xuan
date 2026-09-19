@@ -12,7 +12,11 @@ if [[ ! -f "$xuan_binary" ]]; then
     exit 1
 fi
 install -Dm755 "$xuan_binary" "$xuan_prefix/bin/xuan"
-install -Dm644 "$xuan_root/assets/me.silverl.xuan.svg" "$xuan_prefix/share/icons/hicolor/scalable/apps/me.silverl.xuan.svg"
+for xuan_icon in "$xuan_root"/assets/icons/hicolor/*/apps/me.silverl.xuan.png; do
+    install -Dm644 "$xuan_icon" "$xuan_prefix/share/icons/${xuan_icon#"$xuan_root/assets/icons/"}"
+done
+# Remove the previous logo so desktops cannot select it as a scalable fallback.
+rm -f -- "$xuan_prefix/share/icons/hicolor/scalable/apps/me.silverl.xuan.svg"
 install -Dm644 "$xuan_root/packaging/me.silverl.xuan.desktop" "$xuan_prefix/share/applications/me.silverl.xuan.desktop"
 install -Dm644 "$xuan_root/packaging/me.silverl.xuan.xml" "$xuan_prefix/share/mime/packages/me.silverl.xuan.xml"
 install -Dm644 "$xuan_root/LICENSE" "$xuan_prefix/share/licenses/xuan/LICENSE"
@@ -22,6 +26,9 @@ install -Dm644 "$xuan_root/assets/fonts/Inter-LICENSE.txt" "$xuan_prefix/share/l
 for xuan_license in LICENSE-MIT LICENSE-APACHE; do
     install -Dm644 "$xuan_root/vendor/egui-winit/$xuan_license" "$xuan_prefix/share/licenses/xuan/egui-winit/$xuan_license"
 done
+if command -v gtk-update-icon-cache >/dev/null; then
+    gtk-update-icon-cache -f -t "$xuan_prefix/share/icons/hicolor"
+fi
 if command -v update-desktop-database >/dev/null; then
     update-desktop-database "$xuan_prefix/share/applications"
 fi

@@ -26,9 +26,11 @@ fn main() -> eframe::Result {
             _ => paths.push(PathBuf::from(arg)),
         }
     }
-    let icon = image::load_from_memory(include_bytes!("../assets/icon.png"))
-        .expect("bundled application icon")
-        .to_rgba8();
+    let icon = image::load_from_memory(include_bytes!(
+        "../assets/icons/hicolor/256x256/apps/me.silverl.xuan.png"
+    ))
+    .expect("bundled application icon")
+    .to_rgba8();
     let icon = egui::IconData {
         width: icon.width(),
         height: icon.height(),

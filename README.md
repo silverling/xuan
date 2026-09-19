@@ -51,6 +51,8 @@ scripts/package.sh                 # archive and SHA-256 checksum in dist/
 
 A release archive includes `bin/xuan`, `scripts/install.sh`, and rebuildable sources (including the LGPL RAW decoder); it can run directly after extraction. Packaging also requires Python 3. The installer adds a desktop launcher, icon, and `.xuan` file association. Add the installation prefix's `bin` directory to `PATH`.
 
+Application and desktop icons are generated from `assets/Xuan.png`. After changing the logo in a source checkout, run `scripts/generate-icons.sh` (requires ImageMagick 7), then rebuild. The generated transparent PNGs cover sizes from 16 to 1024 pixels and are committed, so building, packaging, and installing do not require ImageMagick.
+
 Build on the oldest distribution you intend to support. The locally produced archive uses this workstation's glibc **2.43**; build from source on older distributions. The included CI workflow builds on Ubuntu 24.04.
 
 ## Verification

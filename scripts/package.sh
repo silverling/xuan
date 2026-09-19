@@ -17,7 +17,7 @@ install -m644 LICENSE README.md "$xuan_stage/"
 install -m644 THIRD_PARTY.md "$xuan_stage/"
 mkdir -p "$xuan_stage/licenses"
 install -m644 licenses/* "$xuan_stage/licenses/"
-install -m644 assets/me.silverl.xuan.svg "$xuan_stage/assets/"
+cp -R assets/icons "$xuan_stage/assets/"
 install -Dm644 assets/fonts/Inter-LICENSE.txt "$xuan_stage/assets/fonts/Inter-LICENSE.txt"
 mkdir -p "$xuan_stage/vendor/egui-winit"
 install -m644 vendor/egui-winit/{LICENSE-MIT,LICENSE-APACHE,PATCH.md} "$xuan_stage/vendor/egui-winit/"
@@ -29,6 +29,7 @@ install -m755 scripts/install.sh "$xuan_stage/scripts/"
 # rebuild/relink the executable after modifying Rawler.
 mkdir -p "$xuan_stage/source"
 cp -R src assets vendor licenses "$xuan_stage/source/"
+install -Dm755 scripts/generate-icons.sh "$xuan_stage/source/scripts/generate-icons.sh"
 install -m644 Cargo.lock LICENSE README.md THIRD_PARTY.md "$xuan_stage/source/"
 xuan_host=$(rustc -vV | sed -n 's/^host: //p')
 xuan_rawler_manifest=$(cargo metadata --locked --format-version 1 --filter-platform "$xuan_host" |
