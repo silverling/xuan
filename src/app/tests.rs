@@ -451,6 +451,58 @@ fn benchmark_large_image_motion_blur() {
 }
 
 #[test]
+#[ignore = "requires a GPU; optionally set XUAN_ZOOM_BENCH_IMAGE to an image path"]
+fn benchmark_large_image_motion_blur_apply() {
+    let (context, mut app, state) = large_image_benchmark_app();
+    frame(&context, &mut app);
+    state
+        .device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
+    let session = app.session().unwrap();
+    let original = &session.document;
+    let pixels = original.active().unwrap().pixels.as_ref().unwrap();
+    let worker = session.gpu.as_ref().unwrap().motion_blur_worker(pixels);
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    eprintln!(
+        "GPU Apply adapter: {:?}, source {}x{}",
+        state.adapter.get_info(),
+        pixels.width(),
+        pixels.height()
+    );
+    for distance in [15.0, 200.0] {
+        let filter = Filter::MotionBlur {
+            distance,
+            angle: 35.0,
+        };
+        let padding = (distance * 0.5_f32).ceil() as u32 + 1;
+        let start = std::time::Instant::now();
+        let result = worker
+            .render(pixels, distance, 35.0, padding, &cancel)
+            .unwrap()
+            .expect("GPU must execute the benchmark");
+        let gpu_time = start.elapsed();
+        let mut expected = original.clone();
+        let start = std::time::Instant::now();
+        xuan::effects::apply_filter(&mut expected, &filter, false).unwrap();
+        let cpu_time = start.elapsed();
+        let expected = expected.active().unwrap().pixels.as_ref().unwrap();
+        assert_eq!(result.dimensions(), expected.dimensions());
+        assert!(
+            result
+                .as_raw()
+                .iter()
+                .zip(expected.as_raw())
+                .all(|(a, b)| a.abs_diff(*b) <= 1)
+        );
+        eprintln!(
+            "Full-resolution Apply distance {distance}: GPU + readback {gpu_time:?}, CPU {cpu_time:?}, {:.1}x faster",
+            cpu_time.as_secs_f64() / gpu_time.as_secs_f64()
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires a GPU; run explicitly for native verification"]
 fn motion_blur_gpu_preview_toggles_cancels_and_applies_full_resolution() {
     let (context, mut app, state) = large_image_benchmark_app();

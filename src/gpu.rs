@@ -1,5 +1,8 @@
 //! wgpu compute compositor. The CPU renderer remains the export/reference path.
 
+mod motion_blur;
+pub use motion_blur::GpuMotionBlur;
+
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Weak},
@@ -62,6 +65,7 @@ pub struct GpuCompositor {
     buffers: [wgpu::Texture; 2],
     display: wgpu::Texture,
     blank: wgpu::Texture,
+    motion_blur: GpuMotionBlur,
 }
 
 impl GpuCompositor {
@@ -94,6 +98,7 @@ impl GpuCompositor {
             std::array::from_fn(|_| target(&device, [1, 1], wgpu::TextureFormat::Rgba16Float, 1));
         let display = target(&device, [1, 1], wgpu::TextureFormat::Rgba8Unorm, 1);
         let blank = target(&device, [1, 1], wgpu::TextureFormat::Rgba8Unorm, 1);
+        let motion_blur = GpuMotionBlur::new(device.clone(), queue.clone());
         Self {
             device,
             queue,
@@ -104,6 +109,7 @@ impl GpuCompositor {
             buffers,
             display,
             blank,
+            motion_blur,
         }
     }
 
@@ -112,6 +118,20 @@ impl GpuCompositor {
     }
     pub fn display_texture(&self) -> &wgpu::Texture {
         &self.display
+    }
+
+    pub fn motion_blur_worker(&self, pixels: &Arc<RgbaImage>) -> GpuMotionBlur {
+        let key = (
+            Arc::as_ptr(pixels) as usize,
+            [pixels.width(), pixels.height()],
+        );
+        match self.sources.get(&key) {
+            Some(source) => self
+                .motion_blur
+                .clone()
+                .with_source(pixels, source.texture.clone()),
+            None => self.motion_blur.clone(),
+        }
     }
 
     pub fn render(&mut self, document: &Document, size: [u32; 2]) {

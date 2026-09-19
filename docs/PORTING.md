@@ -18,6 +18,8 @@ wgpu dispatches an 8×8 compute shader per visible layer, ping-ponging through f
 
 The composition uses a fixed, capped resolution and stays cached during zooming and panning, along with layer thumbnails. The GPU builds a premultiplied mipmap pyramid when the composition changes. The canvas blends between these levels when zoomed out and uses nearest filtering when magnified, avoiding CPU image resizing and texture allocation during zoom gestures. The CPU fallback also reuses its cached composition during zooming.
 
+Motion Blur previews sample cached layer textures directly in the compositor. Apply uses a separate full-resolution compute pass, reusing the original GPU texture when available or uploading original pixels in the worker. It reads straight RGBA back once, then shares the CPU path's selection blending, expanded transform, mask placement, and history handling. Preview scaling never limits the applied image. GPU texture/buffer limits and processing failures use the cancellable CPU fallback. `scripts/check.sh --gpu` checks pixel accuracy, source resolution, selection/mask preservation, fallback, and the native Apply/Cancel/undo workflow.
+
 Selection gestures update the overlay without recompositing image pixels. Lasso masks use scanline filling instead of checking every edge at every image pixel; marquee and selection translation operate on row spans. Layer thumbnails track source asset identity and placement independently, so edits only refresh affected thumbnails. They sample at thumbnail resolution to keep their cost independent of source image size; canvas and export quality filtering remain separate.
 
 Clipboard shortcuts use egui's native Copy/Cut/Paste events and leave focused text fields in control of text editing. A small [egui-winit patch](../vendor/egui-winit/PATCH.md) preserves paste events for image-only clipboards; upstream 0.33.3 otherwise drops the keypress when no text is available.
@@ -56,7 +58,7 @@ The GitHub workflow is supplied for future repository runs; it has not been disp
 - The raster pipeline is 8-bit sRGB. Embedded ICC color profiles are not converted or preserved. Animated input formats import a single frame.
 - Original `.comp` packages are imported, not overwritten or exported. Save uses the portable `.xuan` format; selections and history remain session-only.
 - Perspective transforms retain source pixels in Xuan. Source Compositor often rasterizes such edits. Round trips through native `.xuan` retain the projective metadata.
-- Preview resolution is capped at 4096 px per side, or 1600 px in the CPU fallback. Full-resolution export is independent of that cap. Imports, saves, and some live raster filters are synchronous; the expensive retouching jobs are cancellable background operations.
+- Preview resolution is capped at 4096 px per side, or 1600 px in the CPU fallback. Full-resolution filter Apply and export are independent of that cap. Imports, saves, and raster adjustments are synchronous; raster filters and expensive retouching jobs are cancellable background operations.
 - Vulkan is tested on both window systems. Explicit OpenGL startup on this workstation returned an incompatible-surface adapter error; availability depends on the EGL/driver configuration.
 - The local release archive requires glibc 2.43. For older distributions, build from source on the target distribution. The CI definition uses Ubuntu 24.04 as its packaging baseline.
 

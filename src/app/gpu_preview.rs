@@ -1,5 +1,10 @@
 use eframe::egui_wgpu::RenderState;
-use xuan::{document::Document, gpu::GpuCompositor};
+use image::RgbaImage;
+use std::sync::Arc;
+use xuan::{
+    document::Document,
+    gpu::{GpuCompositor, GpuMotionBlur},
+};
 
 pub(super) struct GpuPreview {
     compositor: GpuCompositor,
@@ -18,6 +23,10 @@ impl GpuPreview {
 
     pub fn render(&mut self, document: &Document, size: [u32; 2]) {
         self.render_with_motion_blur(document, size, None);
+    }
+
+    pub fn motion_blur_worker(&self, pixels: &Arc<RgbaImage>) -> GpuMotionBlur {
+        self.compositor.motion_blur_worker(pixels)
     }
 
     pub fn render_with_motion_blur(

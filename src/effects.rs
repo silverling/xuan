@@ -448,6 +448,28 @@ pub fn apply_filter_cancellable(
     mask_target: bool,
     cancel: &AtomicBool,
 ) -> Result<()> {
+    apply_filter_impl(document, filter, mask_target, cancel, None)
+}
+
+/// Use the GPU for full-resolution Motion Blur, with CPU fallback for device
+/// limits or GPU failures. Selection coverage and document edits are shared.
+pub fn apply_filter_with_gpu(
+    document: &mut Document,
+    filter: &Filter,
+    mask_target: bool,
+    cancel: &AtomicBool,
+    gpu: &crate::gpu::GpuMotionBlur,
+) -> Result<()> {
+    apply_filter_impl(document, filter, mask_target, cancel, Some(gpu))
+}
+
+fn apply_filter_impl(
+    document: &mut Document,
+    filter: &Filter,
+    mask_target: bool,
+    cancel: &AtomicBool,
+    gpu: Option<&crate::gpu::GpuMotionBlur>,
+) -> Result<()> {
     ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
     let selection = document.selection.clone();
     let layer = document
@@ -492,8 +514,6 @@ pub fn apply_filter_cancellable(
         original.height() + padding * 2,
     );
     crate::document::validate_size(w, h)?;
-    let mut expanded = RgbaImage::new(w, h);
-    image::imageops::replace(&mut expanded, &**original, padding as i64, padding as i64);
     let mut transform = original_transform;
     if padding > 0 {
         let width = original.width() as f32;
@@ -507,11 +527,35 @@ pub fn apply_filter_cancellable(
         );
     }
     ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
-    let mut result = match filter {
-        Filter::MotionBlur { distance, angle } => {
-            motion_blur(&expanded, *distance, *angle, cancel)?
+    let accelerated = if let (Some(gpu), Filter::MotionBlur { distance, angle }) = (gpu, filter) {
+        // WGPU can report allocation/validation failures through its panic handler.
+        // An unsuccessful GPU attempt must not discard the user's pending edit.
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            gpu.render(original, *distance, *angle, padding, cancel)
+        }))
+        .unwrap_or_else(|_| Err(anyhow::anyhow!("GPU filter failed unexpectedly")));
+        ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
+        match attempt {
+            Ok(result) => result,
+            Err(error) => {
+                eprintln!("GPU Motion Blur unavailable, using CPU: {error:#}");
+                None
+            }
         }
-        _ => filtered(&expanded, filter),
+    } else {
+        None
+    };
+    let mut result = if let Some(result) = accelerated {
+        result
+    } else {
+        let mut expanded = RgbaImage::new(w, h);
+        image::imageops::replace(&mut expanded, &**original, padding as i64, padding as i64);
+        match filter {
+            Filter::MotionBlur { distance, angle } => {
+                motion_blur(&expanded, *distance, *angle, cancel)?
+            }
+            _ => filtered(&expanded, filter),
+        }
     };
     ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
     if selection.is_some() {
@@ -524,7 +568,13 @@ pub fn apply_filter_cancellable(
                 (y as f32 + 0.5) / h as f32,
             ));
             let amount = selection::coverage(selection.as_deref(), point);
-            let old = expanded.get_pixel(x, y);
+            let old = if (padding..padding + original.width()).contains(&x)
+                && (padding..padding + original.height()).contains(&y)
+            {
+                original.get_pixel(x - padding, y - padding).0
+            } else {
+                [0; 4]
+            };
             for i in 0..4 {
                 pixel[i] =
                     (old[i] as f32 * (1.0 - amount) + pixel[i] as f32 * amount).round() as u8;

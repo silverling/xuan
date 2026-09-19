@@ -133,13 +133,38 @@ impl EditorApp {
             let worker_cancel = cancel.clone();
             let (send, receive) = mpsc::channel();
             let context = self.context.clone();
+            let gpu = if preview.applying
+                && !mask_target
+                && matches!(filter, Filter::MotionBlur { .. })
+            {
+                self.session().and_then(|session| {
+                    Some(
+                        session
+                            .gpu
+                            .as_ref()?
+                            .motion_blur_worker(document.active()?.pixels.as_ref()?),
+                    )
+                })
+            } else {
+                None
+            };
             std::thread::spawn(move || {
-                let result = xuan::effects::apply_filter_cancellable(
-                    &mut document,
-                    &worker_filter,
-                    mask_target,
-                    &worker_cancel,
-                )
+                let result = if let Some(gpu) = gpu {
+                    xuan::effects::apply_filter_with_gpu(
+                        &mut document,
+                        &worker_filter,
+                        mask_target,
+                        &worker_cancel,
+                        &gpu,
+                    )
+                } else {
+                    xuan::effects::apply_filter_cancellable(
+                        &mut document,
+                        &worker_filter,
+                        mask_target,
+                        &worker_cancel,
+                    )
+                }
                 .map(|()| document)
                 .map_err(|error| error.to_string());
                 let _ = send.send(result);
