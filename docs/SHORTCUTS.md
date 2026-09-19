@@ -34,6 +34,8 @@
 
 Copy an image in another app, or copy one or more image files in a file manager, then use Ctrl+V (or Edit → Paste) to add them as layers. External images are centered on the canvas; a new document is created if none is open. Local file URLs and absolute file paths can also be pasted. Multiple files are imported together in one undo step, without changing the source files. When a text field has focus, Ctrl+V pastes text into that field.
 
+For a marquee selection, Ctrl+C copies the active layer's selected pixels. If no layer is active, it copies the visible canvas within the selection. Ctrl+V places those pixels on a new layer at their original position. Ctrl+Shift+C always copies the visible composite; Ctrl+X requires an active layer. Successful copies show the copied dimensions in the status bar.
+
 Shift with a selection adds coverage, Alt subtracts, and Shift+Alt intersects. Drag inside a selection to move its outline; hold Ctrl to move selected pixels, or Ctrl+Alt to duplicate them. The contextual header also offers explicit selection modes.
 
 Move handles scale the selected layers, the circular handle rotates them, and Ctrl-dragging a corner applies perspective distortion. Shift constrains movement or rotation; the Link control toggles the size ratio. Alt-drag duplicates a layer. The mask thumbnail targets the mask for painting and transformations. Its context menu controls linking and visibility.

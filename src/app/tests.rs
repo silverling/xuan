@@ -1,5 +1,8 @@
 use super::*;
 
+// Tests that publish images share the desktop's system clipboard.
+static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 #[ignore = "requires a GPU; optionally set XUAN_ZOOM_BENCH_IMAGE to an image path"]
 fn benchmark_large_image_zoom() {
@@ -352,6 +355,7 @@ fn keyboard_frame(
 
 #[test]
 fn native_clipboard_shortcuts_copy_cut_and_paste_selected_pixels() {
+    let _clipboard_guard = CLIPBOARD_TEST_LOCK.lock().unwrap();
     let (context, mut app) = app();
     let mut document = Document::new(8, 6).unwrap();
     document.layers.clear();
@@ -364,16 +368,27 @@ fn native_clipboard_shortcuts_copy_cut_and_paste_selected_pixels() {
     ));
     document.insert(Layer::image("Source", source.clone()));
     let source_id = document.active.unwrap();
-    document.selection = Some(Arc::new(xuan::selection::rectangle(
-        8,
-        6,
-        Point::new(2.0, 1.0),
-        Point::new(6.0, 4.0),
-        false,
-    )));
     app.sessions
         .push(Session::new(document, "Clipboard".into(), None));
-    frame(&context, &mut app);
+    app.set_tool(Tool::Marquee);
+    drag(
+        &context,
+        &mut app,
+        Point::new(2.0, 1.0),
+        Point::new(6.0, 4.0),
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(
+        xuan::selection::bounds(
+            app.session()
+                .unwrap()
+                .document
+                .selection
+                .as_deref()
+                .unwrap()
+        ),
+        Some((2, 1, 6, 4))
+    );
     let ctrl = egui::Modifiers {
         ctrl: true,
         command: true,
@@ -459,6 +474,92 @@ fn native_clipboard_shortcuts_copy_cut_and_paste_selected_pixels() {
             .0,
         [255, 0, 0, 255]
     );
+}
+
+#[test]
+fn marquee_copy_without_an_active_layer_replaces_the_previous_clipboard() {
+    let _clipboard_guard = CLIPBOARD_TEST_LOCK.lock().unwrap();
+    let (context, mut app) = app();
+    let mut document = Document::new(64, 48).unwrap();
+    let pixels = RgbaImage::from_pixel(64, 48, image::Rgba([31, 120, 200, 255]));
+    let layer = Layer::image("Source", pixels);
+    document.select(layer.id, false);
+    document.layers = vec![layer];
+    app.sessions
+        .push(Session::new(document, "Marquee".into(), None));
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(-10.0, -10.0),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.session().unwrap().document.active.is_none());
+    app.set_tool(Tool::Marquee);
+    drag(
+        &context,
+        &mut app,
+        Point::new(10.0, 8.0),
+        Point::new(30.0, 20.0),
+        egui::Modifiers::NONE,
+    );
+    app.clipboard = Some((RgbaImage::new(1, 1), Point::default()));
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Copy],
+        egui::Modifiers::CTRL,
+    );
+    let (copied, point) = app
+        .clipboard
+        .as_ref()
+        .expect("Marquee copy must replace the old clipboard");
+    assert_eq!(copied.dimensions(), (20, 12));
+    assert_eq!(copied.get_pixel(0, 0).0, [31, 120, 200, 255]);
+    assert_eq!(*point, Point::new(10.0, 8.0));
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Paste(String::new())],
+        egui::Modifiers::CTRL,
+    );
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 2);
+    let pasted = document.active().unwrap();
+    assert_eq!(pasted.pixels.as_deref().unwrap().dimensions(), (20, 12));
+    assert_eq!((pasted.transform.x, pasted.transform.y), (10.0, 8.0));
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+}
+
+#[test]
+fn copy_and_cut_report_missing_targets_without_changing_pixels_or_clipboard() {
+    let (_, mut app) = app();
+    app.dimensions = [32, 24];
+    app.new_document();
+    app.command("fill_fg");
+    let original = app.session().unwrap().document.layers[0].pixels.clone();
+    let old_pixels = RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]));
+    app.clipboard = Some((old_pixels.clone(), Point::default()));
+    let document = &mut app.session_mut().unwrap().document;
+    document.active = None;
+    document.selected.clear();
+    app.command("copy");
+    assert_eq!(
+        app.error.as_deref(),
+        Some("Select a layer or make a selection before copying.")
+    );
+    assert_eq!(app.clipboard.as_ref().unwrap().0, old_pixels);
+
+    app.error = None;
+    app.command("select_all");
+    app.command("cut");
+    assert_eq!(
+        app.error.as_deref(),
+        Some("Select a layer before cutting pixels.")
+    );
+    assert_eq!(app.clipboard.as_ref().unwrap().0, old_pixels);
+    assert_eq!(app.session().unwrap().document.layers[0].pixels, original);
 }
 
 #[test]
@@ -633,6 +734,12 @@ fn system_clipboard_images_and_files_paste_from_another_process() {
                     .unwrap(),
                 "file" => clipboard.set().file_list(&[PathBuf::from(&path)]).unwrap(),
                 "text" => clipboard.set_text("unrelated text").unwrap(),
+                "inspect" => {
+                    let image = clipboard
+                        .get_image()
+                        .expect("Copy must replace the old file list with image pixels");
+                    assert_eq!((image.width, image.height), (4, 3));
+                }
                 _ => panic!("unexpected clipboard test command"),
             }
             println!("clipboard ready");
@@ -649,6 +756,7 @@ fn system_clipboard_images_and_files_paste_from_another_process() {
         }
     }
 
+    let _clipboard_guard = CLIPBOARD_TEST_LOCK.lock().unwrap();
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("external 图片.png");
     pixels.save(&path).unwrap();
@@ -706,7 +814,41 @@ fn system_clipboard_images_and_files_paste_from_another_process() {
     );
     app.command("paste");
     assert_eq!(app.session().unwrap().document.layers.len(), 4);
-    app.command("copy");
+    copy("file");
+    click_canvas(
+        &context,
+        &mut app,
+        Point::new(-1.0, -1.0),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.session().unwrap().document.active.is_none());
+    app.set_tool(Tool::Marquee);
+    drag(
+        &context,
+        &mut app,
+        Point::new(8.0, 6.0),
+        Point::new(12.0, 9.0),
+        egui::Modifiers::NONE,
+    );
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Copy],
+        egui::Modifiers::CTRL,
+    );
+    assert!(app.error.is_none(), "{:?}", app.error);
+    copy("inspect");
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Paste(String::new())],
+        egui::Modifiers::CTRL,
+    );
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 5);
+    let pasted = document.active().unwrap();
+    assert_eq!(pasted.pixels.as_deref().unwrap().dimensions(), (4, 3));
+    assert_eq!((pasted.transform.x, pasted.transform.y), (8.0, 6.0));
     copy("text");
     keyboard_frame(
         &context,
@@ -714,7 +856,7 @@ fn system_clipboard_images_and_files_paste_from_another_process() {
         vec![egui::Event::Paste("unrelated text".into())],
         egui::Modifiers::CTRL,
     );
-    assert_eq!(app.session().unwrap().document.layers.len(), 4);
+    assert_eq!(app.session().unwrap().document.layers.len(), 5);
     assert!(app.clipboard.is_none());
 }
 

@@ -1016,20 +1016,43 @@ impl EditorApp {
                 );
             }
             "copy" | "copy_merged" | "cut" => {
-                if let Some(session) = self.session() {
-                    self.clipboard =
-                        operations::copy_pixels(&session.document, command == "copy_merged");
+                let Some(session) = self.session() else {
+                    return;
+                };
+                let document = &session.document;
+                if command == "cut" && document.active.is_none() {
+                    self.error = Some("Select a layer before cutting pixels.".into());
+                    return;
                 }
+                // A marquee can remain active after the Move tool deselects every layer.
+                // Copy its visible contents when there is no layer to copy from.
+                let merged = command == "copy_merged"
+                    || (document.active.is_none() && document.selection.is_some());
+                let Some((pixels, point)) = operations::copy_pixels(document, merged) else {
+                    self.error = Some(if document.selection.is_some() {
+                        "The selection is empty.".into()
+                    } else {
+                        "Select a layer or make a selection before copying.".into()
+                    });
+                    return;
+                };
                 self.connect_clipboard();
-                if let Some((pixels, _)) = &self.clipboard
-                    && let Some(clipboard) = &mut self.system_clipboard
-                {
-                    let _ = clipboard.set_image(arboard::ImageData {
+                if let Some(clipboard) = &mut self.system_clipboard
+                    && let Err(error) = clipboard.set_image(arboard::ImageData {
                         width: pixels.width() as usize,
                         height: pixels.height() as usize,
                         bytes: std::borrow::Cow::Borrowed(pixels.as_raw()),
-                    });
+                    })
+                {
+                    self.error = Some(format!("Could not copy to the system clipboard\n\n{error}"));
+                    return;
                 }
+                self.status = format!("Copied {} × {} pixels", pixels.width(), pixels.height());
+                if self.system_clipboard.is_none() {
+                    self.status
+                        .push_str(" within Xuan; system clipboard unavailable");
+                }
+                self.clipboard = Some((pixels, point));
                 if command == "cut" {
                     self.command("clear");
                 }
