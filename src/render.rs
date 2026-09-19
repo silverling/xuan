@@ -123,6 +123,9 @@ pub fn paint_order(document: &Document) -> Vec<&Layer> {
 
 /// Filter premultiplied colors so transparent edges never acquire dark halos.
 pub fn resize_quality(image: &RgbaImage, width: u32, height: u32) -> RgbaImage {
+    if let Some(result) = crate::gpu::resize_rgba(image, width, height) {
+        return result;
+    }
     let premultiplied = image::ImageBuffer::from_fn(image.width(), image.height(), |x, y| {
         let p = image.get_pixel(x, y).0.map(|v| v as f32 / 255.0);
         Rgba([p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]])
@@ -180,6 +183,9 @@ pub fn render(document: &Document) -> RgbaImage {
 }
 
 pub fn render_scaled(document: &Document, width: u32, height: u32) -> RgbaImage {
+    if let Some(result) = crate::gpu::compose(document, width, height) {
+        return result;
+    }
     let mut filtered = document.clone();
     for layer in &mut filtered.layers {
         if let Some(pixels) = &layer.pixels {

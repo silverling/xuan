@@ -167,7 +167,8 @@ impl Develop {
         let (send, receive) = mpsc::channel();
         let context = ctx.clone();
         let cancel = self.cancel.clone();
-        std::thread::spawn(move || {
+        xuan::gpu::spawn(move || {
+            let _cancel = xuan::gpu::cancellation(cancel.clone());
             let result =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(&cancel)))
                     .unwrap_or_else(|_| Err(anyhow::anyhow!("RAW processing failed unexpectedly")))
@@ -179,6 +180,18 @@ impl Develop {
     }
 
     fn set_preview(&mut self, ctx: &egui::Context, pixels: RgbaImage) {
+        if let Some(analysis) = xuan::gpu::analyze(&pixels, true) {
+            self.histogram = analysis.channels;
+            self.clipping = analysis.clipping;
+            self.texture = Some(texture(ctx, "raw_develop", &pixels));
+            self.warning = Some(texture(
+                ctx,
+                "raw_clipping",
+                analysis.warnings.as_ref().unwrap(),
+            ));
+            self.preview = Some(pixels);
+            return;
+        }
         self.histogram = [[0; 256]; 3];
         let mut counts = [0_u32; 2];
         let mut visible = 0;

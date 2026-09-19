@@ -34,6 +34,21 @@ fn main() -> eframe::Result {
         height: icon.height(),
         rgba: icon.into_raw(),
     };
+    let mut setup = eframe::egui_wgpu::WgpuSetupCreateNew::default();
+    let default_descriptor = setup.device_descriptor.clone();
+    setup.device_descriptor = std::sync::Arc::new(move |adapter| {
+        let mut descriptor = default_descriptor(adapter);
+        // Full-resolution float processing needs more than wgpu's portable 128 MiB
+        // storage binding default. Request only the limits the adapter supports.
+        let limits = adapter.limits();
+        if limits.max_storage_buffers_per_shader_stage >= 4 {
+            descriptor.required_limits.max_storage_buffer_binding_size =
+                limits.max_storage_buffer_binding_size;
+            descriptor.required_limits.max_buffer_size = limits.max_buffer_size;
+            descriptor.required_limits.max_texture_dimension_2d = limits.max_texture_dimension_2d;
+        }
+        descriptor
+    });
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Xuan")
@@ -44,6 +59,10 @@ fn main() -> eframe::Result {
             .with_inner_size([1280.0, 860.0])
             .with_min_inner_size([850.0, 560.0]),
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(setup),
+            ..Default::default()
+        },
         persist_window: screenshot.is_none(),
         ..Default::default()
     };

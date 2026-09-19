@@ -166,6 +166,11 @@ pub fn render(
     settings: &DevelopSettings,
     cancel: &AtomicBool,
 ) -> Result<RgbaImage> {
+    if let Some(bytes) = accelerated(raw, settings, cancel, 8)? {
+        let [l, t, r, b] =
+            crate::gpu::raw_crop(settings, [raw.camera.width(), raw.camera.height()]);
+        return Ok(RgbaImage::from_raw(r - l, b - t, bytes).unwrap());
+    }
     render_at_depth(raw, settings, cancel, |v| (v * 255.0).round() as u8)
 }
 
@@ -174,7 +179,37 @@ pub fn render_16(
     settings: &DevelopSettings,
     cancel: &AtomicBool,
 ) -> Result<ImageBuffer<Rgba<u16>, Vec<u16>>> {
+    if let Some(bytes) = accelerated(raw, settings, cancel, 16)? {
+        let [l, t, r, b] =
+            crate::gpu::raw_crop(settings, [raw.camera.width(), raw.camera.height()]);
+        let pixels = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|p| u16::from_le_bytes([p[0], p[1]]))
+            .collect();
+        return Ok(ImageBuffer::from_raw(r - l, b - t, pixels).unwrap());
+    }
     render_at_depth(raw, settings, cancel, |v| (v * 65_535.0).round() as u16)
+}
+
+fn accelerated(
+    raw: &DecodedRaw,
+    settings: &DevelopSettings,
+    cancel: &AtomicBool,
+    depth: u32,
+) -> Result<Option<Vec<u8>>> {
+    settings.validate()?;
+    cancelled(cancel)?;
+    let mut wb = match settings.white_balance {
+        WhiteBalance::AsShot => raw.as_shot,
+        WhiteBalance::Temperature => temperature_wb(raw, settings.temperature),
+        WhiteBalance::Custom => settings.custom_wb,
+    };
+    wb[1] *= 2.0_f32.powf(-settings.tint / 150.0);
+    let result = crate::gpu::develop(raw, settings, wb, depth, cancel);
+    cancelled(cancel)?;
+    Ok(result)
 }
 
 fn render_at_depth<T: Primitive + Send + Sync>(

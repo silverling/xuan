@@ -248,6 +248,15 @@ pub fn apply_adjustment(
             .as_ref()
             .and_then(|m| m.placement)
             .unwrap_or(layer.transform);
+        if let Some(result) = crate::gpu::adjust_mask(
+            &layer.mask.as_ref().unwrap().pixels,
+            adjustment,
+            transform,
+            selection.as_deref(),
+        ) {
+            layer.mask.as_mut().unwrap().pixels = Arc::new(result);
+            return Ok(());
+        }
         let pixels = Arc::make_mut(&mut layer.mask.as_mut().unwrap().pixels);
         let (w, h) = pixels.dimensions();
         for (x, y, pixel) in pixels.enumerate_pixels_mut() {
@@ -264,6 +273,15 @@ pub fn apply_adjustment(
     }
     ensure_pixels(layer)?;
     let transform = layer.transform;
+    if let Some(result) = crate::gpu::adjustment(
+        layer.pixels.as_ref().unwrap(),
+        adjustment,
+        transform,
+        selection.as_deref(),
+    ) {
+        layer.pixels = Some(Arc::new(result));
+        return Ok(());
+    }
     let pixels = Arc::make_mut(layer.pixels.as_mut().unwrap());
     let (w, h) = pixels.dimensions();
     pixels
@@ -305,6 +323,12 @@ impl Filter {
 }
 
 pub fn filtered(image: &RgbaImage, filter: &Filter) -> RgbaImage {
+    if let Some(result) = crate::gpu::filter(image, filter) {
+        return result;
+    }
+    if crate::gpu::cancelled() {
+        return image.clone();
+    }
     let (w, h) = image.dimensions();
     match filter {
         Filter::GaussianBlur { radius } => {
@@ -448,7 +472,17 @@ pub fn apply_filter_cancellable(
     mask_target: bool,
     cancel: &AtomicBool,
 ) -> Result<()> {
-    apply_filter_impl(document, filter, mask_target, cancel, None)
+    let processor = crate::gpu::current();
+    let gpu = processor
+        .as_ref()
+        .filter(|_| {
+            document
+                .active()
+                .and_then(|l| l.pixels.as_ref())
+                .is_some_and(|p| u64::from(p.width()) * u64::from(p.height()) >= 16_384)
+        })
+        .map(|p| &p.motion_blur);
+    apply_filter_impl(document, filter, mask_target, cancel, gpu)
 }
 
 /// Use the GPU for full-resolution Motion Blur, with CPU fallback for device
@@ -479,10 +513,28 @@ fn apply_filter_impl(
         crate::paint::prepare_mask(layer)?;
         let mask = layer.mask.as_mut().unwrap();
         if let Filter::GaussianBlur { radius } = filter {
-            let mut result = image::imageops::blur(&*mask.pixels, radius.max(0.01));
+            let mut result = crate::gpu::blur_gray(&mask.pixels, radius.max(0.01));
             ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
             let transform = mask.placement.unwrap_or(layer.transform);
             let (width, height) = result.dimensions();
+            if selection.is_none() {
+                mask.pixels = Arc::new(result);
+                return Ok(());
+            }
+            if let Some(bytes) = crate::gpu::filter_selection(crate::gpu::FilterSelection {
+                image: result.as_raw(),
+                original: mask.pixels.as_raw(),
+                size: [width, height],
+                original_size: [width, height],
+                transform,
+                selection: selection.as_deref().unwrap(),
+                padding: 0,
+                mask: true,
+            }) {
+                ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
+                mask.pixels = Arc::new(image::GrayImage::from_raw(width, height, bytes).unwrap());
+                return Ok(());
+            }
             for (x, y, pixel) in result.enumerate_pixels_mut() {
                 if x == 0 {
                     ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
@@ -558,7 +610,22 @@ fn apply_filter_impl(
         }
     };
     ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
-    if selection.is_some() {
+    let blended = selection.as_deref().and_then(|selection| {
+        crate::gpu::filter_selection(crate::gpu::FilterSelection {
+            image: result.as_raw(),
+            original: original.as_raw(),
+            size: [w, h],
+            original_size: [original.width(), original.height()],
+            transform,
+            selection,
+            padding,
+            mask: false,
+        })
+    });
+    ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
+    if let Some(bytes) = blended {
+        result = RgbaImage::from_raw(w, h, bytes).unwrap();
+    } else if selection.is_some() {
         for (x, y, pixel) in result.enumerate_pixels_mut() {
             if x == 0 {
                 ensure!(!cancel.load(Ordering::Relaxed), "Filter cancelled");
@@ -592,10 +659,16 @@ fn apply_filter_impl(
 }
 
 pub fn histogram(image: &RgbaImage) -> [u32; 256] {
+    // This integer reduction is faster than a GPU upload/readback on CPU-owned
+    // pixels. RAW preview combines RGB histograms and warnings in one GPU pass.
     let mut bins = [0; 256];
     for pixel in image.pixels().filter(|p| p[3] != 0) {
-        let value = (pixel[0] as f32 * 0.2126 + pixel[1] as f32 * 0.7152 + pixel[2] as f32 * 0.0722)
-            .round() as usize;
+        // Integer weights make half-bin rounding identical on CPU and GPU.
+        let value = (u32::from(pixel[0]) * 2126
+            + u32::from(pixel[1]) * 7152
+            + u32::from(pixel[2]) * 722
+            + 5000) as usize
+            / 10000;
         bins[value.min(255)] += 1;
     }
     bins

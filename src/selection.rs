@@ -109,6 +109,9 @@ pub fn wand(image: &RgbaImage, point: Point, tolerance: u8, contiguous: bool) ->
                 .all(|(a, b)| a.abs_diff(b) <= tolerance)
     };
     if !contiguous {
+        if let Some(result) = crate::gpu::match_colors(image, color, tolerance) {
+            return result;
+        }
         for (x, y, pixel) in output.enumerate_pixels_mut() {
             if matches(x, y) {
                 pixel[0] = 255;

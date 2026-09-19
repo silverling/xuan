@@ -71,12 +71,7 @@ pub fn prepare_mask(layer: &mut Layer) -> Result<()> {
     validate_size(width, height)?;
     let mask = layer.mask.get_or_insert_with(Mask::white);
     if mask.pixels.dimensions() != (width, height) {
-        mask.pixels = Arc::new(image::imageops::resize(
-            &*mask.pixels,
-            width,
-            height,
-            image::imageops::FilterType::Triangle,
-        ));
+        mask.pixels = Arc::new(crate::gpu::resize_gray(&mask.pixels, width, height));
     }
     Ok(())
 }
@@ -187,6 +182,23 @@ pub fn stroke(
     let bottom = (local.iter().map(|p| p.y).fold(f32::MIN, f32::max) * height as f32)
         .ceil()
         .min(height as f32) as u32;
+    if crate::gpu::stroke(
+        layer,
+        selection.as_deref(),
+        crate::gpu::Stroke {
+            bounds: [left, top, right, bottom],
+            endpoints: [from, to],
+            brush,
+            options: StrokeOptions {
+                mode,
+                mask_target,
+                source,
+                clone_offset,
+            },
+        },
+    ) {
+        return Ok(());
+    }
     let dx = to.x - from.x;
     let dy = to.y - from.y;
     let length_sq = dx * dx + dy * dy;
@@ -271,13 +283,21 @@ pub fn stroke(
                                         (point.y + sy as f32 * step) / source.height() as f32,
                                     ),
                                 );
-                                for i in 0..4 {
-                                    color[i] += sample[i];
+                                // Average premultiplied samples. Near-zero alpha must
+                                // not amplify roundoff into a visible retouch color.
+                                for i in 0..3 {
+                                    color[i] += sample[i] * sample[3];
                                 }
-                                weight += 1.0;
+                                weight += sample[3];
                             }
                         }
-                        color = color.map(|v| v / weight);
+                        // Sub-byte coverage is invisible in the 8-bit source. Avoid
+                        // normalizing numerical dust at fully transparent samples.
+                        color = if weight < 0.5 / 255.0 {
+                            [0.0; 4]
+                        } else {
+                            color.map(|v| v / weight)
+                        };
                         // Retouching preserves alpha and interpolates the original color.
                         for i in 0..3 {
                             pixel[i] = ((old[i] * (1.0 - amount) + color[i] * amount) * 255.0)
@@ -307,6 +327,19 @@ pub fn fill(document: &mut Document, color: [u8; 4], erase: bool, mask_target: b
         prepare_mask(layer)?;
     } else {
         ensure_pixels(layer)?;
+    }
+    if crate::gpu::paint(
+        layer,
+        selection.as_deref(),
+        mask_target,
+        &crate::gpu::Paint {
+            mode: if erase { 1 } else { 0 },
+            opacity: 1.0,
+            colors: [color; 2],
+            points: [Point::default(); 2],
+        },
+    ) {
+        return Ok(());
     }
     let transform = if mask_target {
         layer
@@ -387,6 +420,19 @@ pub fn gradient(
         ensure_pixels(layer)?;
         (layer.transform, layer.pixels.as_ref().unwrap().dimensions())
     };
+    if crate::gpu::paint(
+        layer,
+        selection.as_deref(),
+        mask_target,
+        &crate::gpu::Paint {
+            mode: if radial { 3 } else { 2 },
+            opacity,
+            colors: [foreground, background],
+            points: [start, end],
+        },
+    ) {
+        return Ok(());
+    }
     let dx = end.x - start.x;
     let dy = end.y - start.y;
     let length_sq = (dx * dx + dy * dy).max(0.01);
@@ -446,37 +492,39 @@ pub fn shape(
     let height = (end.y - start.y).abs().round().max(1.0) as u32;
     validate_size(width, height)?;
     let radius = corner_radius.min(width.min(height) as f32 * 0.5);
-    let image = RgbaImage::from_fn(width, height, |x, y| {
-        // Four subpixel samples produce antialiased shape edges.
-        let mut coverage = 0.0;
-        for oy in [0.25, 0.75] {
-            for ox in [0.25, 0.75] {
-                let px = x as f32 + ox;
-                let py = y as f32 + oy;
-                let inside = match kind {
-                    ShapeKind::Rectangle => true,
-                    ShapeKind::Ellipse => {
-                        ((px / width as f32 - 0.5) * 2.0).powi(2)
-                            + ((py / height as f32 - 0.5) * 2.0).powi(2)
-                            <= 1.0
+    let image = crate::gpu::shape([width, height], kind, color, radius).unwrap_or_else(|| {
+        RgbaImage::from_fn(width, height, |x, y| {
+            // Four subpixel samples produce antialiased shape edges.
+            let mut coverage = 0.0;
+            for oy in [0.25, 0.75] {
+                for ox in [0.25, 0.75] {
+                    let px = x as f32 + ox;
+                    let py = y as f32 + oy;
+                    let inside = match kind {
+                        ShapeKind::Rectangle => true,
+                        ShapeKind::Ellipse => {
+                            ((px / width as f32 - 0.5) * 2.0).powi(2)
+                                + ((py / height as f32 - 0.5) * 2.0).powi(2)
+                                <= 1.0
+                        }
+                        ShapeKind::RoundedRectangle => {
+                            let cx = px.clamp(radius, width as f32 - radius);
+                            let cy = py.clamp(radius, height as f32 - radius);
+                            (px - cx).hypot(py - cy) <= radius
+                        }
+                    };
+                    if inside {
+                        coverage += 0.25;
                     }
-                    ShapeKind::RoundedRectangle => {
-                        let cx = px.clamp(radius, width as f32 - radius);
-                        let cy = py.clamp(radius, height as f32 - radius);
-                        (px - cx).hypot(py - cy) <= radius
-                    }
-                };
-                if inside {
-                    coverage += 0.25;
                 }
             }
-        }
-        Rgba([
-            color[0],
-            color[1],
-            color[2],
-            (color[3] as f32 * coverage).round() as u8,
-        ])
+            Rgba([
+                color[0],
+                color[1],
+                color[2],
+                (color[3] as f32 * coverage).round() as u8,
+            ])
+        })
     });
     let mut layer = Layer::image(
         match kind {
@@ -527,6 +575,11 @@ pub fn mask_from_selection(document: &Document, layer: &Layer) -> GrayImage {
         .pixels
         .as_ref()
         .map_or((document.width, document.height), |p| p.dimensions());
+    if let Some(result) =
+        crate::gpu::project_selection([w, h], layer.transform, document.selection.as_deref())
+    {
+        return result;
+    }
     GrayImage::from_fn(w, h, |x, y| {
         let point = layer.transform.point(Point::new(
             (x as f32 + 0.5) / w as f32,

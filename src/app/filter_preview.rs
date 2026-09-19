@@ -148,7 +148,8 @@ impl EditorApp {
             } else {
                 None
             };
-            std::thread::spawn(move || {
+            xuan::gpu::spawn(move || {
+                let _cancel = xuan::gpu::cancellation(worker_cancel.clone());
                 let result = if let Some(gpu) = gpu {
                     xuan::effects::apply_filter_with_gpu(
                         &mut document,

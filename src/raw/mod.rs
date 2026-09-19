@@ -80,11 +80,10 @@ impl DecodedRaw {
         let scale =
             (max_side as f32 / self.camera.width().max(self.camera.height()) as f32).min(1.0);
         Self {
-            camera: image::imageops::resize(
+            camera: crate::gpu::resize_rgb(
                 &self.camera,
                 (self.camera.width() as f32 * scale).round().max(1.0) as u32,
                 (self.camera.height() as f32 * scale).round().max(1.0) as u32,
-                image::imageops::FilterType::Triangle,
             ),
             as_shot: self.as_shot,
             camera_to_rgb: self.camera_to_rgb,

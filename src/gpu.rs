@@ -1,7 +1,26 @@
-//! wgpu compute compositor. The CPU renderer remains the export/reference path.
+//! GPU composition and image processing, with CPU reference fallbacks.
 
+mod analysis;
+mod coverage;
+pub use analysis::{Analysis, analyze};
+pub(crate) use coverage::{CoverageMode, bake_alpha, bake_mask, coverage_image};
 mod motion_blur;
+mod paint;
+mod processor;
+mod raster;
+mod raw;
+pub(crate) use paint::{
+    FilterSelection, Paint, Stroke, adjust_mask, filter_selection, match_colors, paint,
+    project_selection, shape, stroke,
+};
+pub(crate) use raw::{crop as raw_crop, develop};
+#[cfg(test)]
+mod processing_tests;
 pub use motion_blur::GpuMotionBlur;
+pub(crate) use processor::cancelled;
+pub use processor::{Processor, cancellation, current, scope, spawn};
+pub(crate) use raster::{adjustment, filter, resize_rgba};
+pub use raster::{blur_gray, resize_gray, resize_rgb};
 
 use std::{
     collections::{HashMap, HashSet},
@@ -20,7 +39,7 @@ use crate::{
 };
 
 /// Selections and layers clipped to the edited pixels need the materialized result.
-/// Keep those cases on the cancellable CPU path until coverage is also GPU resident.
+/// Use the cancellable materialized-filter worker for those cases.
 pub fn can_preview_motion_blur(document: &Document) -> bool {
     document.selection.is_none()
         && document.active().is_some_and(|layer| {
@@ -72,7 +91,13 @@ impl GpuCompositor {
     pub fn new(device: wgpu::Device, queue: wgpu::Queue) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("xuan layer compositor"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("composite.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(
+                    include_str!("gpu/adjustments.wgsl"),
+                    include_str!("composite.wgsl")
+                )
+                .into(),
+            ),
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("xuan compositor"),
@@ -145,6 +170,16 @@ impl GpuCompositor {
         document: &Document,
         size: [u32; 2],
         motion_blur: Option<[f32; 2]>,
+    ) {
+        self.render_internal(document, size, motion_blur, false);
+    }
+
+    fn render_internal(
+        &mut self,
+        document: &Document,
+        size: [u32; 2],
+        motion_blur: Option<[f32; 2]>,
+        straight_output: bool,
     ) {
         let motion_blur = motion_blur.filter(|_| can_preview_motion_blur(document));
         if size != self.size {
@@ -225,7 +260,17 @@ impl GpuCompositor {
             let needs_coverage = layer.parent.is_some()
                 || layer.mask.as_ref().is_some_and(|m| m.enabled)
                 || layer.clip_to.is_some();
-            let coverage = if needs_coverage {
+            let accelerated_coverage = needs_coverage
+                .then(|| {
+                    processor::attempt(u64::from(size[0]) * u64::from(size[1]), 16_384, |gpu| {
+                        gpu.coverage(document, layer, size)
+                    })
+                })
+                .flatten();
+            let coverage = if accelerated_coverage.is_some() {
+                params.flags[2] = 1;
+                accelerated_coverage
+            } else if needs_coverage {
                 params.flags[2] = 1;
                 let mut pixels = vec![0_u8; size[0] as usize * size[1] as usize];
                 pixels
@@ -310,9 +355,11 @@ impl GpuCompositor {
             document.width as f32,
             document.height as f32,
         ];
-        params.flags[1] = 100;
+        params.flags[1] = if straight_output { 101 } else { 100 };
         self.dispatch(&mut encoder, current, &self.blank, &self.blank, &params);
-        self.generate_mipmaps(&mut encoder);
+        if !straight_output {
+            self.generate_mipmaps(&mut encoder);
+        }
         self.queue.submit([encoder.finish()]);
         self.sources
             .retain(|key, source| retained.contains(key) && source.pixels.strong_count() > 0);
@@ -591,6 +638,73 @@ fn parameters(document: &Document, layer: &Layer, size: [u32; 2]) -> Parameters 
         }
     }
     p
+}
+
+/// Full-resolution straight-alpha composition for exports, merges and retouching.
+pub(crate) fn compose(document: &Document, width: u32, height: u32) -> Option<RgbaImage> {
+    processor::attempt(u64::from(width) * u64::from(height), 16_384, |gpu| {
+        gpu.compose(document, width, height)
+    })
+}
+
+impl Processor {
+    fn compose(&self, document: &Document, width: u32, height: u32) -> anyhow::Result<RgbaImage> {
+        let limits = self.device.limits();
+        anyhow::ensure!(
+            width > 0 && height > 0 && width.max(height) <= limits.max_texture_dimension_2d,
+            "Composition exceeds GPU texture limits"
+        );
+        anyhow::ensure!(
+            document
+                .layers
+                .iter()
+                .filter_map(|l| l.pixels.as_ref())
+                .all(|p| p.width().max(p.height()) <= limits.max_texture_dimension_2d),
+            "Layer exceeds GPU texture limits"
+        );
+        let stride = (u64::from(width) * 4).div_ceil(256) * 256;
+        anyhow::ensure!(
+            stride * u64::from(height) <= limits.max_buffer_size,
+            "Composition exceeds GPU readback limits"
+        );
+        let mut compositor = self.compositor.lock().unwrap_or_else(|p| p.into_inner());
+        let compositor = compositor
+            .get_or_insert_with(|| GpuCompositor::new(self.device.clone(), self.queue.clone()));
+        compositor.render_internal(document, [width, height], None, true);
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("composition readback"),
+            size: stride * u64::from(height),
+            mapped_at_creation: false,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        });
+        let mut encoder = self.encoder();
+        encoder.copy_texture_to_buffer(
+            compositor.display.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride as u32),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        let bytes = self.map(&staging)?;
+        let mut image = RgbaImage::new(width, height);
+        for (source, target) in bytes
+            .chunks_exact(stride as usize)
+            .zip(image.as_mut().chunks_exact_mut(width as usize * 4))
+        {
+            target.copy_from_slice(&source[..width as usize * 4]);
+        }
+        Ok(image)
+    }
 }
 
 #[cfg(test)]

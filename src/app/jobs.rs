@@ -36,7 +36,8 @@ impl EditorApp {
         let worker_cancel = cancel.clone();
         let (send, receive) = mpsc::channel();
         let context = self.context.clone();
-        std::thread::spawn(move || {
+        xuan::gpu::spawn(move || {
+            let _cancel = xuan::gpu::cancellation(worker_cancel.clone());
             let result = operation(&mut document, &worker_cancel)
                 .map(|()| document)
                 .map_err(|e| e.to_string());

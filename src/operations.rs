@@ -135,16 +135,20 @@ pub fn copy_layers(source: &Document, destination: &mut Document, root: Uuid) ->
             && let Some(pixels) = &layer.pixels
         {
             let base = source.layers.iter().find(|l| l.id == clip).unwrap();
-            let mut baked = (**pixels).clone();
-            let (width, height) = baked.dimensions();
-            for (x, y, pixel) in baked.enumerate_pixels_mut() {
-                let point = layer.transform.point(Point::new(
-                    (x as f32 + 0.5) / width as f32,
-                    (y as f32 + 0.5) / height as f32,
-                ));
-                pixel[3] =
-                    (pixel[3] as f32 * render::layer_alpha(source, base, point, 0)).round() as u8;
-            }
+            let baked = crate::gpu::bake_alpha(source, base, pixels, layer.transform)
+                .unwrap_or_else(|| {
+                    let mut baked = (**pixels).clone();
+                    let (width, height) = baked.dimensions();
+                    for (x, y, pixel) in baked.enumerate_pixels_mut() {
+                        let point = layer.transform.point(Point::new(
+                            (x as f32 + 0.5) / width as f32,
+                            (y as f32 + 0.5) / height as f32,
+                        ));
+                        pixel[3] = (pixel[3] as f32 * render::layer_alpha(source, base, point, 0))
+                            .round() as u8;
+                    }
+                    baked
+                });
             copy.pixels = Some(Arc::new(baked));
             copy.shape = None;
             copy.text = None;
@@ -336,12 +340,7 @@ pub fn image_size(document: &mut Document, width: u32, height: u32) -> Result<()
     document.width = width;
     document.height = height;
     if let Some(selection) = &document.selection {
-        document.selection = Some(Arc::new(image::imageops::resize(
-            &**selection,
-            width,
-            height,
-            image::imageops::FilterType::Triangle,
-        )));
+        document.selection = Some(Arc::new(crate::gpu::resize_gray(selection, width, height)));
     }
     Ok(())
 }
@@ -406,6 +405,20 @@ pub fn selection_from_layer(document: &mut Document, mask_target: bool) {
     let Some(layer) = document.active() else {
         return;
     };
+    if let Some(mask) = crate::gpu::coverage_image(
+        document,
+        layer,
+        [document.width, document.height],
+        if mask_target {
+            crate::gpu::CoverageMode::Mask
+        } else {
+            crate::gpu::CoverageMode::Alpha
+        },
+        None,
+    ) {
+        document.selection = Some(Arc::new(mask));
+        return;
+    }
     let mask = GrayImage::from_fn(document.width, document.height, |x, y| {
         let point = Point::new(x as f32 + 0.5, y as f32 + 0.5);
         let value = if mask_target {

@@ -323,13 +323,17 @@ pub fn remove_background(
             }
         }
     }
-    let mut matte = image::imageops::blur(&matte, 0.65);
-    for (x, y, pixel) in matte.enumerate_pixels_mut() {
-        let point = layer.transform.point(Point::new(
-            (x as f32 + 0.5) / width as f32,
-            (y as f32 + 0.5) / height as f32,
-        ));
-        pixel[0] = (pixel[0] as f32 * render::own_mask(layer, point)).round() as u8;
+    let mut matte = crate::gpu::blur_gray(&matte, 0.65);
+    if let Some(result) = crate::gpu::bake_mask(layer, &matte) {
+        matte = result;
+    } else {
+        for (x, y, pixel) in matte.enumerate_pixels_mut() {
+            let point = layer.transform.point(Point::new(
+                (x as f32 + 0.5) / width as f32,
+                (y as f32 + 0.5) / height as f32,
+            ));
+            pixel[0] = (pixel[0] as f32 * render::own_mask(layer, point)).round() as u8;
+        }
     }
     layer.mask = Some(Mask {
         pixels: Arc::new(matte),

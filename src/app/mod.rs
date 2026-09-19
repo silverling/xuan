@@ -230,7 +230,8 @@ impl Session {
         });
         self.preview_size = size;
         if let Some(state) = state.filter(|s| {
-            s.device.limits().max_compute_workgroups_per_dimension > 0
+            s.adapter.get_info().device_type != wgpu::DeviceType::Cpu
+                && s.device.limits().max_compute_workgroups_per_dimension > 0
                 && self.document.layers.iter().all(|l| {
                     l.pixels.as_ref().is_none_or(|p| {
                         p.width().max(p.height()) <= s.device.limits().max_texture_dimension_2d
@@ -351,6 +352,7 @@ pub struct EditorApp {
     raw_queue: std::collections::VecDeque<(PathBuf, develop::DevelopTarget)>,
     develop_close_requested: bool,
     gpu_state: Option<eframe::egui_wgpu::RenderState>,
+    processor: Option<Arc<xuan::gpu::Processor>>,
     sessions: Vec<Session>,
     current: usize,
     tool: Tool,
@@ -414,7 +416,18 @@ impl EditorApp {
         demo: bool,
         screenshot: Option<PathBuf>,
     ) -> Self {
-        let mut app = Self::with_context(&cc.egui_ctx, paths, demo, screenshot);
+        let processor = cc
+            .wgpu_render_state
+            .as_ref()
+            .filter(|state| {
+                state.adapter.get_info().device_type != wgpu::DeviceType::Cpu
+                    && state.device.limits().max_storage_buffers_per_shader_stage >= 4
+            })
+            .map(|state| xuan::gpu::Processor::new(state.device.clone(), state.queue.clone()));
+        let mut app = xuan::gpu::scope(processor.clone(), || {
+            Self::with_context(&cc.egui_ctx, paths, demo, screenshot)
+        });
+        app.processor = processor;
         app.gpu_state = cc.wgpu_render_state.clone();
         app
     }
@@ -456,6 +469,7 @@ impl EditorApp {
             raw_queue: Default::default(),
             develop_close_requested: false,
             gpu_state: None,
+            processor: None,
             sessions: Vec::new(),
             current: 0,
             tool: Tool::Move,
@@ -1058,7 +1072,7 @@ impl EditorApp {
             }
             "feather" => self.edit_selection("Feather Selection", |doc| {
                 if let Some(selection) = &doc.selection {
-                    doc.selection = Some(Arc::new(image::imageops::blur(&**selection, 3.0)));
+                    doc.selection = Some(Arc::new(xuan::gpu::blur_gray(selection, 3.0)));
                 }
             }),
             "fill_fg" | "fill_bg" | "clear" => {
@@ -1193,6 +1207,20 @@ impl eframe::App for EditorApp {
 
 impl EditorApp {
     fn show(&mut self, ctx: &egui::Context) {
+        if self.processor.is_none() {
+            self.processor = self
+                .gpu_state
+                .as_ref()
+                .filter(|state| {
+                    state.adapter.get_info().device_type != wgpu::DeviceType::Cpu
+                        && state.device.limits().max_storage_buffers_per_shader_stage >= 4
+                })
+                .map(|state| xuan::gpu::Processor::new(state.device.clone(), state.queue.clone()));
+        }
+        xuan::gpu::scope(self.processor.clone(), || self.show_with_processor(ctx));
+    }
+
+    fn show_with_processor(&mut self, ctx: &egui::Context) {
         self.poll_job();
         self.poll_develop(ctx);
         self.frames += 1;
