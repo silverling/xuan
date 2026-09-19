@@ -61,13 +61,13 @@ cargo run --release -- --demo --screenshot /tmp/levels.png --screenshot-panel le
 
 The screenshot helper also supports `hue`, `curves`, `export`, `new`, `brush`, `selection`, `gradient`, and `shape`. It captures the real native window and exits.
 
-To benchmark zoom updates on a GPU, run:
+To benchmark large-image zoom and editing updates on a GPU, run:
 
 ```sh
-cargo test --release --locked --bin xuan benchmark_large_image_zoom -- --ignored --nocapture
+cargo test --release --locked --bin xuan benchmark_large_image -- --ignored --nocapture --test-threads=1
 ```
 
-This measures UI updates, tessellation, and compositor completion over 48 zoom steps on a 3000×3000 image. Set `XUAN_ZOOM_BENCH_IMAGE` to use a local image instead of the generated image. Window presentation is not included.
+These measure UI updates, tessellation, and compositor completion on a 3000×3000 image: 48 zoom steps and 24 pointer updates each for moving a layer, marquee, lasso, brush, and eraser, plus gesture release. Set `XUAN_ZOOM_BENCH_IMAGE` to use a local image instead of the generated image. Window presentation is not included.
 
 ## Port differences
 

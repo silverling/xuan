@@ -1,4 +1,6 @@
 use super::widgets;
+use std::sync::{Arc, Weak};
+
 use egui::{Color32, RichText, Sense, Stroke, StrokeKind, TextureOptions, vec2};
 use uuid::Uuid;
 use xuan::{
@@ -7,6 +9,32 @@ use xuan::{
 };
 
 use super::{EditorApp, LayerDrag, icons, menus, theme};
+
+pub(super) struct LayerThumbnail {
+    texture: egui::TextureHandle,
+    canvas: [u32; 2],
+    transform: xuan::document::Transform,
+    // Weak references identify assets without copying a large image on every brush dab.
+    pixels: Option<Weak<image::RgbaImage>>,
+    mask: Option<Weak<image::GrayImage>>,
+}
+
+impl LayerThumbnail {
+    pub(super) fn id(&self) -> egui::TextureId {
+        self.texture.id()
+    }
+
+    fn matches(&self, document: &Document, layer: &Layer, mask: bool) -> bool {
+        if mask {
+            self.mask.as_ref().map(Weak::as_ptr)
+                == layer.mask.as_ref().map(|mask| Arc::as_ptr(&mask.pixels))
+        } else {
+            self.canvas == [document.width, document.height]
+                && self.transform == layer.transform
+                && self.pixels.as_ref().map(Weak::as_ptr) == layer.pixels.as_ref().map(Arc::as_ptr)
+        }
+    }
+}
 
 #[derive(Default)]
 struct Actions {
@@ -343,46 +371,65 @@ impl EditorApp {
         } else {
             canvas_size * (side / canvas_size.max_elem())
         };
-        let thumbnail = session
+        let key = (layer.id, mask);
+        if session
             .thumbnails
-            .entry((layer.id, mask))
-            .or_insert_with(|| {
-                let color = if mask {
-                    let image = image::imageops::resize(
-                        &*layer.mask.as_ref().unwrap().pixels,
-                        28,
-                        28,
-                        image::imageops::FilterType::Triangle,
-                    );
-                    egui::ColorImage::from_gray([28, 28], image.as_raw())
-                } else if layer.pixels.is_some() {
-                    let mut thumbnail_document = document.clone();
-                    let mut thumbnail_layer = layer.clone();
-                    thumbnail_layer.visible = true;
-                    thumbnail_layer.opacity = 1.0;
-                    thumbnail_layer.blend = BlendMode::Normal;
-                    thumbnail_layer.parent = None;
-                    thumbnail_layer.clip_to = None;
-                    thumbnail_layer.mask = None;
-                    thumbnail_document.layers = vec![thumbnail_layer];
-                    let image = xuan::render::render_scaled(
-                        &thumbnail_document,
-                        (size.x * 2.0).round().max(1.0) as u32,
-                        (size.y * 2.0).round().max(1.0) as u32,
-                    );
-                    egui::ColorImage::from_rgba_unmultiplied(
-                        [image.width() as usize, image.height() as usize],
-                        image.as_raw(),
+            .get(&key)
+            .is_some_and(|thumbnail| !thumbnail.matches(document, layer, mask))
+        {
+            session.thumbnails.remove(&key);
+        }
+        let thumbnail = session.thumbnails.entry(key).or_insert_with(|| {
+            let color = if mask {
+                let pixels = &layer.mask.as_ref().unwrap().pixels;
+                let sampled = image::GrayImage::from_fn(56, 56, |x, y| {
+                    *pixels.get_pixel(
+                        (x * 2 + 1) * pixels.width() / 112,
+                        (y * 2 + 1) * pixels.height() / 112,
                     )
-                } else {
-                    egui::ColorImage::filled([38, 30], Color32::from_gray(48))
-                };
-                ui.ctx().load_texture(
-                    format!("thumbnail-{}-{mask}", layer.id),
-                    color,
-                    TextureOptions::LINEAR,
+                });
+                let image = image::imageops::resize(
+                    &sampled,
+                    28,
+                    28,
+                    image::imageops::FilterType::Triangle,
+                );
+                egui::ColorImage::from_gray([28, 28], image.as_raw())
+            } else if layer.pixels.is_some() {
+                let mut thumbnail_document = document.clone();
+                let mut thumbnail_layer = layer.clone();
+                thumbnail_layer.visible = true;
+                thumbnail_layer.opacity = 1.0;
+                thumbnail_layer.blend = BlendMode::Normal;
+                thumbnail_layer.parent = None;
+                thumbnail_layer.clip_to = None;
+                thumbnail_layer.mask = None;
+                thumbnail_document.layers = vec![thumbnail_layer];
+                let image = xuan::render::render_thumbnail(
+                    &thumbnail_document,
+                    (size.x * 2.0).round().max(1.0) as u32,
+                    (size.y * 2.0).round().max(1.0) as u32,
+                );
+                egui::ColorImage::from_rgba_unmultiplied(
+                    [image.width() as usize, image.height() as usize],
+                    image.as_raw(),
                 )
-            });
+            } else {
+                egui::ColorImage::filled([38, 30], Color32::from_gray(48))
+            };
+            let texture = ui.ctx().load_texture(
+                format!("thumbnail-{}-{mask}", layer.id),
+                color,
+                TextureOptions::LINEAR,
+            );
+            LayerThumbnail {
+                texture,
+                canvas: [document.width, document.height],
+                transform: layer.transform,
+                pixels: layer.pixels.as_ref().map(Arc::downgrade),
+                mask: layer.mask.as_ref().map(|mask| Arc::downgrade(&mask.pixels)),
+            }
+        });
         let (slot, response) = ui.allocate_exact_size(vec2(side, 36.0), Sense::click_and_drag());
         response.dnd_set_drag_payload(LayerDrag {
             project: document.id,

@@ -13,22 +13,24 @@ pub enum SelectionMode {
     Intersect,
 }
 
-pub fn combine(document: &mut Document, incoming: GrayImage, mode: SelectionMode) {
-    let mask = if let Some(old) = &document.selection {
-        GrayImage::from_fn(document.width, document.height, |x, y| {
-            let a = old.get_pixel(x, y)[0];
-            let b = incoming.get_pixel(x, y)[0];
-            Luma([match mode {
-                SelectionMode::Replace => b,
-                SelectionMode::Add => a.max(b),
-                SelectionMode::Subtract => a.saturating_sub(b),
-                SelectionMode::Intersect => a.min(b),
-            }])
-        })
-    } else {
-        incoming
-    };
-    document.selection = Some(Arc::new(mask));
+pub fn combine(document: &mut Document, mut incoming: GrayImage, mode: SelectionMode) {
+    if mode != SelectionMode::Replace
+        && let Some(old) = &document.selection
+    {
+        for (b, &a) in incoming.as_mut().iter_mut().zip(old.as_raw()) {
+            *b = match mode {
+                SelectionMode::Replace => *b,
+                SelectionMode::Add => a.max(*b),
+                SelectionMode::Subtract => a.saturating_sub(*b),
+                SelectionMode::Intersect => a.min(*b),
+            };
+        }
+    }
+    document.selection = Some(Arc::new(incoming));
+}
+
+fn pixel_bound(coordinate: f32, limit: u32) -> u32 {
+    (coordinate - 0.5).ceil().clamp(0.0, limit as f32) as u32
 }
 
 pub fn rectangle(width: u32, height: u32, start: Point, end: Point, ellipse: bool) -> GrayImage {
@@ -38,35 +40,56 @@ pub fn rectangle(width: u32, height: u32, start: Point, end: Point, ellipse: boo
     let bottom = start.y.max(end.y);
     let rx = ((right - left) * 0.5).max(0.5);
     let ry = ((bottom - top) * 0.5).max(0.5);
-    GrayImage::from_fn(width, height, |x, y| {
-        let px = x as f32 + 0.5;
-        let py = y as f32 + 0.5;
-        let inside = px >= left
-            && px < right
-            && py >= top
-            && py < bottom
-            && (!ellipse
-                || ((px - left - rx) / rx).powi(2) + ((py - top - ry) / ry).powi(2) <= 1.0);
-        Luma([if inside { 255 } else { 0 }])
-    })
+    let mut mask = GrayImage::new(width, height);
+    let start = pixel_bound(left, width) as usize;
+    let end = pixel_bound(right, width) as usize;
+    for y in pixel_bound(top, height)..pixel_bound(bottom, height) {
+        let row =
+            &mut mask.as_mut()[y as usize * width as usize..(y + 1) as usize * width as usize];
+        if ellipse {
+            let py = y as f32 + 0.5;
+            for (x, pixel) in row.iter_mut().enumerate().take(end).skip(start) {
+                let px = x as f32 + 0.5;
+                if ((px - left - rx) / rx).powi(2) + ((py - top - ry) / ry).powi(2) <= 1.0 {
+                    *pixel = 255;
+                }
+            }
+        } else {
+            row[start..end].fill(255);
+        }
+    }
+    mask
 }
 
 pub fn polygon(width: u32, height: u32, points: &[Point]) -> GrayImage {
-    GrayImage::from_fn(width, height, |x, y| {
-        let px = x as f32 + 0.5;
+    let mut mask = GrayImage::new(width, height);
+    if points.len() < 3 {
+        return mask;
+    }
+    let top = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+    let bottom = points.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
+    let mut crossings = Vec::with_capacity(points.len());
+    // Find edge intersections once per row, then fill spans using the even-odd
+    // rule. Checking every edge for every image pixel makes long lassos stall.
+    for y in pixel_bound(top, height)..pixel_bound(bottom, height) {
         let py = y as f32 + 0.5;
-        let mut inside = false;
-        if points.len() >= 3 {
-            for i in 0..points.len() {
-                let a = points[i];
-                let b = points[(i + 1) % points.len()];
-                if (a.y > py) != (b.y > py) && px < (b.x - a.x) * (py - a.y) / (b.y - a.y) + a.x {
-                    inside = !inside;
-                }
+        crossings.clear();
+        for i in 0..points.len() {
+            let a = points[i];
+            let b = points[(i + 1) % points.len()];
+            if (a.y > py) != (b.y > py) {
+                crossings.push((b.x - a.x) * (py - a.y) / (b.y - a.y) + a.x);
             }
         }
-        Luma([if inside { 255 } else { 0 }])
-    })
+        crossings.sort_unstable_by(f32::total_cmp);
+        let offset = y as usize * width as usize;
+        for &[left, right] in crossings.as_chunks::<2>().0 {
+            let start = offset + pixel_bound(left, width) as usize;
+            let end = offset + pixel_bound(right, width) as usize;
+            mask.as_mut()[start..end].fill(255);
+        }
+    }
+    mask
 }
 
 pub fn wand(image: &RgbaImage, point: Point, tolerance: u8, contiguous: bool) -> GrayImage {
@@ -135,15 +158,24 @@ pub fn coverage(selection: Option<&GrayImage>, point: Point) -> f32 {
 }
 
 pub fn translate(mask: &GrayImage, dx: i32, dy: i32) -> GrayImage {
-    GrayImage::from_fn(mask.width(), mask.height(), |x, y| {
-        let sx = x as i32 - dx;
-        let sy = y as i32 - dy;
-        if sx >= 0 && sy >= 0 && sx < mask.width() as i32 && sy < mask.height() as i32 {
-            *mask.get_pixel(sx as u32, sy as u32)
-        } else {
-            Luma([0])
-        }
-    })
+    let (width, height) = mask.dimensions();
+    let mut translated = GrayImage::new(width, height);
+    let dx = i64::from(dx);
+    let dy = i64::from(dy);
+    let left = dx.max(0).min(i64::from(width));
+    let right = (i64::from(width) + dx).clamp(left, i64::from(width));
+    let top = dy.max(0).min(i64::from(height));
+    let bottom = (i64::from(height) + dy).clamp(top, i64::from(height));
+    if left == right {
+        return translated;
+    }
+    let count = (right - left) as usize;
+    for y in top..bottom {
+        let dst = (y * i64::from(width) + left) as usize;
+        let src = ((y - dy) * i64::from(width) + left - dx) as usize;
+        translated.as_mut()[dst..dst + count].copy_from_slice(&mask.as_raw()[src..src + count]);
+    }
+    translated
 }
 
 pub fn bounds(mask: &GrayImage) -> Option<(u32, u32, u32, u32)> {
@@ -166,6 +198,97 @@ pub fn bounds(mask: &GrayImage) -> Option<(u32, u32, u32, u32)> {
 mod tests {
     use super::*;
     use image::Rgba;
+
+    #[test]
+    fn scanline_lasso_matches_pixel_reference_for_concave_and_crossing_paths() {
+        for seed in 0..48 {
+            let mut state = seed + 1_u32;
+            let mut points: Vec<_> = (0..12)
+                .map(|_| {
+                    state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let x = (state % 96) as f32 * 0.5 - 8.0;
+                    state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let y = (state % 80) as f32 * 0.5 - 8.0;
+                    Point::new(x, y)
+                })
+                .collect();
+            // Repeated vertices and horizontal/vertical edges are valid lasso input.
+            points.extend([points[0], points[0], Point::new(points[0].x, points[1].y)]);
+            let expected = GrayImage::from_fn(32, 24, |x, y| {
+                let px = x as f32 + 0.5;
+                let py = y as f32 + 0.5;
+                let mut inside = false;
+                for i in 0..points.len() {
+                    let a = points[i];
+                    let b = points[(i + 1) % points.len()];
+                    if (a.y > py) != (b.y > py) && px < (b.x - a.x) * (py - a.y) / (b.y - a.y) + a.x
+                    {
+                        inside = !inside;
+                    }
+                }
+                Luma([if inside { 255 } else { 0 }])
+            });
+            assert_eq!(polygon(32, 24, &points), expected, "path {seed}");
+        }
+        assert!(
+            polygon(8, 8, &[Point::default(); 2])
+                .as_raw()
+                .iter()
+                .all(|v| *v == 0)
+        );
+    }
+
+    #[test]
+    fn marquee_and_translation_preserve_pixel_center_and_clipping_rules() {
+        for (start, end) in [
+            (Point::new(-3.5, -2.0), Point::new(10.5, 8.0)),
+            (Point::new(13.2, 11.5), Point::new(1.5, 2.5)),
+            (Point::new(4.5, 5.5), Point::new(4.5, 5.5)),
+            (Point::new(1.1, 2.2), Point::new(1.9, 2.8)),
+        ] {
+            for ellipse in [false, true] {
+                let left = start.x.min(end.x);
+                let top = start.y.min(end.y);
+                let right = start.x.max(end.x);
+                let bottom = start.y.max(end.y);
+                let rx = ((right - left) * 0.5).max(0.5);
+                let ry = ((bottom - top) * 0.5).max(0.5);
+                let expected = GrayImage::from_fn(12, 10, |x, y| {
+                    let px = x as f32 + 0.5;
+                    let py = y as f32 + 0.5;
+                    let inside = px >= left
+                        && px < right
+                        && py >= top
+                        && py < bottom
+                        && (!ellipse
+                            || ((px - left - rx) / rx).powi(2) + ((py - top - ry) / ry).powi(2)
+                                <= 1.0);
+                    Luma([if inside { 255 } else { 0 }])
+                });
+                assert_eq!(rectangle(12, 10, start, end, ellipse), expected);
+            }
+        }
+        let mask = GrayImage::from_fn(12, 10, |x, y| Luma([(x + y * 12) as u8]));
+        for (dx, dy) in [
+            (0, 0),
+            (3, -4),
+            (-5, 2),
+            (12, 10),
+            (-20, -30),
+            (i32::MIN, i32::MAX),
+        ] {
+            let expected = GrayImage::from_fn(12, 10, |x, y| {
+                let sx = i64::from(x) - i64::from(dx);
+                let sy = i64::from(y) - i64::from(dy);
+                if (0..12).contains(&sx) && (0..10).contains(&sy) {
+                    *mask.get_pixel(sx as u32, sy as u32)
+                } else {
+                    Luma([0])
+                }
+            });
+            assert_eq!(translate(&mask, dx, dy), expected);
+        }
+    }
 
     #[test]
     fn wand_respects_connectivity_and_transparent_rgb() {

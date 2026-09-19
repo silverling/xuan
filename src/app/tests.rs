@@ -3,6 +3,31 @@ use super::*;
 #[test]
 #[ignore = "requires a GPU; optionally set XUAN_ZOOM_BENCH_IMAGE to an image path"]
 fn benchmark_large_image_zoom() {
+    let (context, mut app, state) = large_image_benchmark_app();
+    app.tool = Tool::Hand;
+    for _ in 0..3 {
+        frame(&context, &mut app);
+    }
+    state
+        .device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
+    let mut durations = Vec::new();
+    for step in (0..12).chain((0..12).rev()).cycle().take(48) {
+        app.session_mut().unwrap().zoom = 0.8_f32.powi(step);
+        let start = std::time::Instant::now();
+        let output = frame(&context, &mut app);
+        let _ = context.tessellate(output.shapes, output.pixels_per_point);
+        state
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+        durations.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    report_benchmark("Zoom UI + compositor", durations);
+}
+
+fn large_image_benchmark_app() -> (egui::Context, EditorApp, eframe::egui_wgpu::RenderState) {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -29,35 +54,92 @@ fn benchmark_large_image_zoom() {
     );
     let mut document = Document::new(pixels.width(), pixels.height()).unwrap();
     document.layers = vec![Layer::image("Large image", pixels)];
+    document.select(document.layers[0].id, false);
     let (context, mut app) = app();
     app.gpu_state = Some(state.clone());
     app.sessions
         .push(Session::new(document, "Zoom benchmark".into(), None));
-    app.tool = Tool::Hand;
-    for _ in 0..3 {
-        frame(&context, &mut app);
-    }
-    state
-        .device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .unwrap();
-    let mut durations = Vec::new();
-    for step in (0..12).chain((0..12).rev()).cycle().take(48) {
-        app.session_mut().unwrap().zoom = 0.8_f32.powi(step);
-        let start = std::time::Instant::now();
-        let output = frame(&context, &mut app);
-        let _ = context.tessellate(output.shapes, output.pixels_per_point);
+    (context, app, state)
+}
+
+fn report_benchmark(name: &str, mut durations: Vec<f64>) {
+    durations.sort_by(f64::total_cmp);
+    let count = durations.len();
+    eprintln!(
+        "{name} ({count} frames): median {:.2} ms, p95 {:.2} ms, max {:.2} ms",
+        durations[count / 2],
+        durations[count * 95 / 100],
+        durations[count - 1],
+    );
+}
+
+#[test]
+#[ignore = "requires a GPU; optionally set XUAN_ZOOM_BENCH_IMAGE to an image path"]
+fn benchmark_large_image_editing() {
+    let (context, mut app, state) = large_image_benchmark_app();
+    let document = app.session().unwrap().document.clone();
+    for tool in [
+        Tool::Move,
+        Tool::Marquee,
+        Tool::Lasso,
+        Tool::Brush,
+        Tool::Erase,
+    ] {
+        app.sessions = vec![Session::new(
+            document.clone(),
+            "Editing benchmark".into(),
+            None,
+        )];
+        app.tool = tool;
+        app.snap = false;
+        for _ in 0..3 {
+            frame(&context, &mut app);
+        }
+        let rect = app.canvas_rect.unwrap();
+        let start = rect.min + rect.size() * Vec2::new(0.25, 0.4);
+        pointer_frame(&context, &mut app, start, Some(true), egui::Modifiers::NONE);
+        let mut durations = Vec::new();
+        let mut position = start;
+        for step in 1..=24 {
+            let progress = step as f32 / 24.0;
+            position = start
+                + rect.size()
+                    * Vec2::new(
+                        progress * 0.4,
+                        (progress * std::f32::consts::TAU).sin() * 0.15,
+                    );
+            let now = std::time::Instant::now();
+            let output = pointer_frame(&context, &mut app, position, None, egui::Modifiers::NONE);
+            let _ = context.tessellate(output.shapes, output.pixels_per_point);
+            state
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+            durations.push(now.elapsed().as_secs_f64() * 1000.0);
+        }
+        report_benchmark(tool.label(), durations);
+        let now = std::time::Instant::now();
+        pointer_frame(
+            &context,
+            &mut app,
+            position,
+            Some(false),
+            egui::Modifiers::NONE,
+        );
+        for _ in 0..2 {
+            frame(&context, &mut app);
+        }
         state
             .device
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
-        durations.push(start.elapsed().as_secs_f64() * 1000.0);
+        eprintln!(
+            "{} release + settle: {:.2} ms",
+            tool.label(),
+            now.elapsed().as_secs_f64() * 1000.0
+        );
+        assert!(app.error.is_none(), "{:?}", app.error);
     }
-    durations.sort_by(f64::total_cmp);
-    eprintln!(
-        "Zoom UI + compositor (48 frames): median {:.2} ms, p95 {:.2} ms, max {:.2} ms",
-        durations[24], durations[45], durations[47],
-    );
 }
 
 #[test]
@@ -108,6 +190,138 @@ fn zoom_reuses_preview_and_thumbnails_until_document_changes() {
     for (key, id) in thumbnails {
         assert_ne!(session.thumbnails[&key].id(), id);
     }
+}
+
+#[test]
+fn selection_gestures_and_commands_reuse_the_composition_and_remain_undoable() {
+    for tool in [Tool::Marquee, Tool::Lasso] {
+        let (context, mut app) = app();
+        app.dimensions = [64, 48];
+        app.new_document();
+        app.command("fill_fg");
+        app.tool = tool;
+        for _ in 0..3 {
+            frame(&context, &mut app);
+        }
+        let session = app.session().unwrap();
+        let composite = session.composite.clone().unwrap();
+        let thumbnails: HashMap<_, _> = session
+            .thumbnails
+            .iter()
+            .map(|(key, texture)| (*key, texture.id()))
+            .collect();
+        let origin = app.canvas_rect.unwrap().min;
+        let zoom = session.zoom;
+        let positions = [(10.0, 10.0), (40.0, 12.0), (45.0, 35.0)]
+            .map(|(x, y)| origin + Vec2::new(x, y) * zoom);
+        pointer_frame(
+            &context,
+            &mut app,
+            positions[0],
+            Some(true),
+            egui::Modifiers::NONE,
+        );
+        for position in &positions[1..] {
+            pointer_frame(&context, &mut app, *position, None, egui::Modifiers::NONE);
+            frame(&context, &mut app);
+            assert!(!app.session().unwrap().dirty_preview);
+        }
+        pointer_frame(
+            &context,
+            &mut app,
+            positions[2],
+            Some(false),
+            egui::Modifiers::NONE,
+        );
+        frame(&context, &mut app);
+        let session = app.session().unwrap();
+        assert!(session.document.selection.is_some());
+        assert!(Arc::ptr_eq(session.composite.as_ref().unwrap(), &composite));
+        for (key, id) in &thumbnails {
+            assert_eq!(session.thumbnails[key].id(), *id);
+        }
+        app.command("undo");
+        assert!(app.session().unwrap().document.selection.is_none());
+        app.command("redo");
+        assert!(app.session().unwrap().document.selection.is_some());
+        frame(&context, &mut app);
+        let composite = app.session().unwrap().composite.clone().unwrap();
+        for command in ["select_all", "invert_selection", "deselect"] {
+            app.command(command);
+            frame(&context, &mut app);
+            assert!(Arc::ptr_eq(
+                app.session().unwrap().composite.as_ref().unwrap(),
+                &composite
+            ));
+        }
+    }
+}
+
+#[test]
+fn painting_refreshes_only_the_changed_layer_thumbnail() {
+    let (context, mut app) = app();
+    app.dimensions = [64, 48];
+    app.new_document();
+    app.command("fill_fg");
+    app.command("duplicate");
+    for _ in 0..3 {
+        frame(&context, &mut app);
+    }
+    let session = app.session().unwrap();
+    let base = session.document.layers[0].id;
+    let painted = session.document.active.unwrap();
+    let original_base = session.thumbnails[&(base, false)].id();
+    let original_painted = session.thumbnails[&(painted, false)].id();
+    app.tool = Tool::Brush;
+    app.brush.color = [255, 0, 0, 255];
+    app.brush.diameter = 4.0;
+    drag(
+        &context,
+        &mut app,
+        Point::new(12.0, 12.0),
+        Point::new(30.0, 20.0),
+        egui::Modifiers::NONE,
+    );
+    frame(&context, &mut app);
+    let session = app.session().unwrap();
+    assert_eq!(session.thumbnails[&(base, false)].id(), original_base);
+    assert_ne!(session.thumbnails[&(painted, false)].id(), original_painted);
+    assert_eq!(
+        session.document.layers[0]
+            .pixels
+            .as_ref()
+            .unwrap()
+            .get_pixel(20, 16)
+            .0,
+        [0, 0, 0, 255]
+    );
+    assert_eq!(
+        session
+            .document
+            .active()
+            .unwrap()
+            .pixels
+            .as_ref()
+            .unwrap()
+            .get_pixel(20, 16)
+            .0,
+        [255, 0, 0, 255]
+    );
+    app.command("undo");
+    frame(&context, &mut app);
+    assert_eq!(
+        app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .pixels
+            .as_ref()
+            .unwrap()
+            .get_pixel(20, 16)
+            .0,
+        [0, 0, 0, 255]
+    );
 }
 
 fn app() -> (egui::Context, EditorApp) {

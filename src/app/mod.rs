@@ -165,7 +165,7 @@ struct Session {
     gpu: Option<gpu_preview::GpuPreview>,
     preview_size: [u32; 2],
     composite: Option<Arc<RgbaImage>>,
-    thumbnails: HashMap<(Uuid, bool), TextureHandle>,
+    thumbnails: HashMap<(Uuid, bool), layers::LayerThumbnail>,
     collapsed: HashSet<Uuid>,
 }
 
@@ -199,7 +199,7 @@ impl Session {
             s.device.limits().max_texture_dimension_2d.min(4096)
         });
         // Zoom only changes how the cached composition is drawn. Rebuilding it here
-        // also resizes source images and regenerates thumbnails on the UI thread.
+        // can also resize source images on the UI thread.
         let factor =
             (max_side as f32 / self.document.width.max(self.document.height) as f32).min(1.0);
         let size = [
@@ -209,6 +209,12 @@ impl Session {
         if !self.dirty_preview && size == self.preview_size {
             return;
         }
+        self.thumbnails.retain(|(id, mask), _| {
+            self.document
+                .layers
+                .iter()
+                .any(|layer| layer.id == *id && (!mask || layer.mask.is_some()))
+        });
         self.preview_size = size;
         if let Some(state) = state.filter(|s| {
             s.device.limits().max_compute_workgroups_per_dimension > 0
@@ -224,7 +230,6 @@ impl Session {
             preview.render(&self.document, size);
             self.texture = None;
             self.composite = None;
-            self.thumbnails.clear();
             self.dirty_preview = false;
             return;
         }
@@ -244,7 +249,6 @@ impl Session {
             ));
         }
         self.composite = Some(Arc::new(image));
-        self.thumbnails.clear();
         self.dirty_preview = false;
     }
 }
@@ -299,6 +303,23 @@ struct Gesture {
     clone_offset: Point,
     source: Option<Arc<RgbaImage>>,
     reference: Option<Transform>,
+}
+
+impl Gesture {
+    fn changes_composition(&self, tool: Tool) -> bool {
+        !self.panning
+            && (matches!(self.kind, TransformDrag::Pixels)
+                || matches!(
+                    tool,
+                    Tool::Move
+                        | Tool::Brush
+                        | Tool::Erase
+                        | Tool::Clone
+                        | Tool::Blur
+                        | Tool::Gradient
+                        | Tool::Shape
+                ))
+    }
 }
 
 pub struct EditorApp {
@@ -482,6 +503,16 @@ impl EditorApp {
                 self.error = Some(error.to_string());
             }
         }
+    }
+
+    fn edit_selection(&mut self, name: &str, operation: impl FnOnce(&mut Document)) {
+        let Some(session) = self.session_mut() else {
+            return;
+        };
+        session.history.begin(name, &session.document);
+        operation(&mut session.document);
+        session.history.commit();
+        self.status = name.into();
     }
 
     fn edit_continuous(&mut self, name: &str, operation: impl FnOnce(&mut Document) -> Result<()>) {
@@ -937,38 +968,33 @@ impl EditorApp {
                 }
                 Ok(())
             }),
-            "select_all" => self.edit("Select All", |doc| {
+            "select_all" => self.edit_selection("Select All", |doc| {
                 doc.selection = Some(Arc::new(GrayImage::from_pixel(
                     doc.width,
                     doc.height,
                     image::Luma([255]),
                 )));
-                Ok(())
             }),
-            "deselect" => self.edit("Deselect", |doc| {
+            "deselect" => self.edit_selection("Deselect", |doc| {
                 doc.selection = None;
-                Ok(())
             }),
-            "invert_selection" => self.edit("Invert Selection", |doc| {
+            "invert_selection" => self.edit_selection("Invert Selection", |doc| {
                 if let Some(selection) = &doc.selection {
                     let mut pixels = (**selection).clone();
                     image::imageops::invert(&mut pixels);
                     doc.selection = Some(Arc::new(pixels));
                 }
-                Ok(())
             }),
             "load_selection" => {
                 let mask = self.mask_target;
-                self.edit("Load Selection", |doc| {
+                self.edit_selection("Load Selection", |doc| {
                     operations::selection_from_layer(doc, mask);
-                    Ok(())
                 });
             }
-            "feather" => self.edit("Feather Selection", |doc| {
+            "feather" => self.edit_selection("Feather Selection", |doc| {
                 if let Some(selection) = &doc.selection {
                     doc.selection = Some(Arc::new(image::imageops::blur(&**selection, 3.0)));
                 }
-                Ok(())
             }),
             "fill_fg" | "fill_bg" | "clear" => {
                 let color = if command == "fill_bg" {

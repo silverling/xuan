@@ -189,7 +189,20 @@ pub fn render_scaled(document: &Document, width: u32, height: u32) -> RgbaImage 
             }
         }
     }
-    let document = &filtered;
+    render_pixels(&filtered, width, height)
+}
+
+/// Small UI thumbnails must not resize every full-resolution source on each edit.
+/// Supersample the thumbnail itself; exports still use the filtered renderer above.
+pub fn render_thumbnail(document: &Document, width: u32, height: u32) -> RgbaImage {
+    resize_quality(
+        &render_pixels(document, width * 2, height * 2),
+        width,
+        height,
+    )
+}
+
+fn render_pixels(document: &Document, width: u32, height: u32) -> RgbaImage {
     let mut output = RgbaImage::new(width, height);
     let layers = paint_order(document);
     output
@@ -271,6 +284,27 @@ mod tests {
     use super::*;
     use crate::document::Mask;
     use std::sync::Arc;
+
+    #[test]
+    fn thumbnails_preserve_layer_placement_and_transparent_color() {
+        let mut document = Document::new(64, 48).unwrap();
+        let mut layer = Layer::image(
+            "Thumbnail",
+            RgbaImage::from_pixel(256, 128, Rgba([255, 0, 0, 128])),
+        );
+        layer.transform = crate::document::Transform::new(32, 16);
+        layer.transform.x = 16.0;
+        layer.transform.y = 16.0;
+        document.layers = vec![layer];
+        let thumbnail = render_thumbnail(&document, 32, 24);
+        assert_eq!(thumbnail.dimensions(), (32, 24));
+        assert_eq!(thumbnail.get_pixel(16, 12).0, [255, 0, 0, 128]);
+        assert_eq!(thumbnail.get_pixel(0, 0)[3], 0);
+        assert_eq!(thumbnail.get_pixel(31, 23)[3], 0);
+        for pixel in thumbnail.pixels().filter(|p| p[3] > 0) {
+            assert_eq!(&pixel.0[..3], &[255, 0, 0]);
+        }
+    }
 
     #[test]
     fn downsampling_filters_fine_detail_and_preserves_transparent_edge_color() {

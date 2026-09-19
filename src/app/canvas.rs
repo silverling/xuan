@@ -575,14 +575,13 @@ impl EditorApp {
                 let tolerance = self.tolerance;
                 let contiguous = self.contiguous;
                 let mode = self.selection_mode(modifiers);
-                self.edit("Magic Wand", |doc| {
+                self.edit_selection("Magic Wand", |doc| {
                     let pixels = render::render(doc);
                     selection::combine(
                         doc,
                         selection::wand(&pixels, point, tolerance, contiguous),
                         mode,
                     );
-                    Ok(())
                 });
             }
             Tool::Dropper => {
@@ -663,13 +662,12 @@ impl EditorApp {
         }
         let points = std::mem::take(&mut self.polygon);
         let mode = self.selection_mode;
-        self.edit("Polygonal Lasso", |doc| {
+        self.edit_selection("Polygonal Lasso", |doc| {
             selection::combine(
                 doc,
                 selection::polygon(doc.width, doc.height, &points),
                 mode,
             );
-            Ok(())
         });
     }
 
@@ -1011,7 +1009,11 @@ impl EditorApp {
             return;
         }
         gesture.last = point;
-        session.invalidate();
+        if gesture.changes_composition(self.tool)
+            && !matches!(self.tool, Tool::Gradient | Tool::Shape)
+        {
+            session.invalidate();
+        }
         self.gesture = Some(gesture);
     }
 
@@ -1035,6 +1037,7 @@ impl EditorApp {
         }
         let start = gesture.start;
         let end = gesture.last;
+        let changes_composition = gesture.changes_composition(self.tool);
         let result = if matches!(
             gesture.kind,
             TransformDrag::Selection | TransformDrag::Pixels
@@ -1100,6 +1103,10 @@ impl EditorApp {
                 _ => Ok(()),
             }
         };
+        if !changes_composition && result.is_ok() {
+            session.history.commit();
+            return;
+        }
         match result {
             Ok(()) => match paint::refresh_shapes(&mut session.document) {
                 Ok(()) => session.history.commit(),

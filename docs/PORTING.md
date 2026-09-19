@@ -18,6 +18,8 @@ wgpu dispatches an 8×8 compute shader per visible layer, ping-ponging through f
 
 The composition uses a fixed, capped resolution and stays cached during zooming and panning, along with layer thumbnails. The GPU builds a premultiplied mipmap pyramid when the composition changes. The canvas blends between these levels when zoomed out and uses nearest filtering when magnified, avoiding CPU image resizing and texture allocation during zoom gestures. The CPU fallback also reuses its cached composition during zooming.
 
+Selection gestures update the overlay without recompositing image pixels. Lasso masks use scanline filling instead of checking every edge at every image pixel; marquee and selection translation operate on row spans. Layer thumbnails track source asset identity and placement independently, so edits only refresh affected thumbnails. They sample at thumbnail resolution to keep their cost independent of source image size; canvas and export quality filtering remain separate.
+
 ## UI preservation
 
 The port uses the source's neutral 0.14-gray panels, darker canvas, 56 px tool rail, 36 px rounded tool buttons, 42 px contextual header, 252 px Layers panel (202–352 px resize range), 30 px status bar, restrained 11–13 px type, subtle dividers, and compact rounded controls. Icons are drawn as vectors. A new layered Xuan icon replaces the application identity. A client-side titlebar integrates the menu bar and traffic-light window controls; it supports window-manager dragging, all eight resize directions, minimize, maximize/restore, and the existing save-on-close flow. File dialogs continue to use the desktop portal.
@@ -31,7 +33,7 @@ The demo composition is generated locally and contains five editable layers; it 
 Verified locally on **2026-09-19**, Linux x86_64, Rust 1.98.0, glibc 2.43:
 
 - `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings` pass.
-- `cargo test --all-targets`: **54 tests pass**, with two hardware-dependent GPU tests and a zoom benchmark ignored in this default run.
+- `cargo test --all-targets`: **59 tests pass**, with two hardware-dependent GPU tests and two interaction benchmarks ignored in this default run.
 - `cargo test --lib gpu::tests -- --ignored`: **2 GPU tests pass**, comparing all blend modes, color/channel adjustments, film grain, masks, and perspective transforms against CPU output within two premultiplied 8-bit units, and verifying mipmap filtering, transparency, odd dimensions, and updates after editing.
 - Tests cover project round trips and atomic overwrite, original Swift dictionaries/transforms, unsafe asset paths, hierarchy and clipping validation, PNG/JPEG/TIFF/WebP export, PNG DPI, selection connectivity and coverage, copy-on-write pixels, expanded paint/blur bounds, live shape redraw, group transforms, linked mask placement, and history revisions.
 - egui input tests exercise brush/selection/pixel-move gestures, scale/distort handles, independent tabs, layer copying between projects, adjustment cancellation, export preview, and worker commit/cancellation. Style regression tests cover titlebar dragging, double-click maximize/restore, and unsaved-close handling, floating-panel dragging and minimum-size bounds, keyboard/disabled slider behavior, and Levels handle clamping.
