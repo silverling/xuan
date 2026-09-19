@@ -709,7 +709,25 @@ impl EditorApp {
         if self.gesture.is_some() || self.sessions.is_empty() {
             return;
         }
-        if self.tool == Tool::Text && !panning {
+        if panning {
+            // View navigation must not start an edit or run tool-specific setup.
+            let session = &self.sessions[self.current];
+            self.gesture = Some(Gesture {
+                start: point,
+                last: point,
+                screen_start: screen,
+                pan_start: session.pan,
+                points: Vec::new(),
+                original: session.document.clone(),
+                kind: TransformDrag::Move,
+                panning: true,
+                clone_offset: Point::default(),
+                source: None,
+                reference: None,
+            });
+            return;
+        }
+        if self.tool == Tool::Text {
             return;
         }
         if self.tool == Tool::Clone && modifiers.alt {
@@ -751,7 +769,6 @@ impl EditorApp {
         }
         let mut kind = handle.unwrap_or(TransformDrag::Move);
         if self.tool == Tool::Move
-            && !panning
             && (self.auto_select || modifiers.ctrl)
             && handle.is_none()
             && !self.select_canvas_layer(point, modifiers.shift, true)
@@ -759,11 +776,11 @@ impl EditorApp {
             return;
         }
         let session = &mut self.sessions[self.current];
-        if self.tool == Tool::Move && !panning && session.document.active.is_none() {
+        if self.tool == Tool::Move && session.document.active.is_none() {
             return;
         }
         session.history.begin(self.tool.label(), &session.document);
-        if self.tool == Tool::Move && modifiers.alt && !panning {
+        if self.tool == Tool::Move && modifiers.alt {
             operations::duplicate(&mut session.document);
         }
         if self.tool.is_selection()
@@ -830,7 +847,7 @@ impl EditorApp {
             points: vec![point],
             original: session.document.clone(),
             kind,
-            panning,
+            panning: false,
             clone_offset: offset,
             source,
             reference: operations::transform_box(&session.document, self.mask_target),
@@ -1051,7 +1068,10 @@ impl EditorApp {
         let Some(gesture) = self.gesture.take() else {
             return;
         };
-        if self.tool == Tool::Heal && !gesture.panning {
+        if gesture.panning {
+            return;
+        }
+        if self.tool == Tool::Heal {
             let points = gesture.points;
             let brush = self.brush.clone();
             self.start_job("Spot Healing", move |document, cancel| {
@@ -1061,10 +1081,6 @@ impl EditorApp {
         }
         let mode = self.selection_mode(modifiers);
         let session = &mut self.sessions[self.current];
-        if gesture.panning {
-            session.history.cancel(&mut session.document);
-            return;
-        }
         let start = gesture.start;
         let end = gesture.last;
         let changes_composition = gesture.changes_composition(self.tool);

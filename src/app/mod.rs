@@ -735,7 +735,8 @@ impl EditorApp {
     }
 
     fn cancel_gesture(&mut self) {
-        if self.gesture.take().is_some()
+        if let Some(gesture) = self.gesture.take()
+            && !gesture.panning
             && let Some(session) = self.session_mut()
         {
             session.history.cancel(&mut session.document);

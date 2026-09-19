@@ -1813,6 +1813,88 @@ fn empty_canvas_drags_and_panning_do_not_move_or_select_layers() {
 }
 
 #[test]
+fn panning_preserves_saved_state_and_history_throughout_the_drag() {
+    for (tool, button, space) in [
+        (Tool::Move, egui::PointerButton::Middle, false),
+        (Tool::Move, egui::PointerButton::Primary, true),
+        (Tool::Hand, egui::PointerButton::Primary, false),
+        (Tool::Clone, egui::PointerButton::Middle, false),
+    ] {
+        for dirty in [false, true] {
+            let (context, mut app) = app();
+            app.dimensions = [64, 48];
+            app.new_document();
+            app.command("fill_fg");
+            if !dirty {
+                app.session_mut().unwrap().history.mark_saved();
+            }
+            app.command("fill_bg");
+            app.command("undo");
+            app.set_tool(tool);
+            frame(&context, &mut app);
+            let session = app.session().unwrap();
+            let pan = session.pan;
+            let revision = session.history.revision;
+            let undo = session.history.undo_name().map(str::to_owned);
+            let redo = session.history.redo_name().map(str::to_owned);
+            let document = session.document.clone();
+            let title = app.window_title.clone();
+            let start = app.canvas_rect.unwrap().center();
+            if space {
+                keyboard_frame(
+                    &context,
+                    &mut app,
+                    vec![text_key(egui::Key::Space, egui::Modifiers::NONE)],
+                    egui::Modifiers::NONE,
+                );
+            }
+            for (delta, pressed) in [
+                (Vec2::ZERO, Some(true)),
+                (Vec2::new(15.0, 10.0), None),
+                (Vec2::new(30.0, 20.0), None),
+                (Vec2::new(30.0, 20.0), Some(false)),
+            ] {
+                let pos = start + delta;
+                let mut events = vec![egui::Event::PointerMoved(pos)];
+                if let Some(pressed) = pressed {
+                    events.push(egui::Event::PointerButton {
+                        pos,
+                        button,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                keyboard_frame(&context, &mut app, events, egui::Modifiers::NONE);
+                let session = app.session().unwrap();
+                assert_eq!(session.history.dirty(), dirty);
+                assert_eq!(session.history.revision, revision);
+                assert_eq!(session.history.undo_name(), undo.as_deref());
+                assert_eq!(session.history.redo_name(), redo.as_deref());
+                assert_eq!(session.history.names().count(), 1);
+                assert_eq!(app.window_title, title);
+                assert_eq!(session.pan, pan + delta);
+                assert_eq!(session.document.active, document.active);
+                assert_eq!(session.document.selected, document.selected);
+                assert_eq!(session.document.layers.len(), document.layers.len());
+                assert_eq!(session.document.layers[0].pixels, document.layers[0].pixels);
+                assert_eq!(
+                    session.document.layers[0].transform,
+                    document.layers[0].transform
+                );
+                if pressed.is_none() {
+                    assert!(app.gesture.as_ref().is_some_and(|gesture| gesture.panning));
+                }
+            }
+            assert!(app.gesture.is_none());
+            assert!(app.clone_source.is_none());
+            assert!(app.clone_offset.is_none());
+            app.command("redo");
+            assert_eq!(app.session().unwrap().history.names().count(), 2);
+        }
+    }
+}
+
+#[test]
 fn gradient_gestures_respect_the_mask_target_and_undo() {
     for radial in [false, true] {
         for mask_target in [true, false] {
