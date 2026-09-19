@@ -198,8 +198,10 @@ impl Session {
         let max_side = state.map_or(1600, |s| {
             s.device.limits().max_texture_dimension_2d.min(4096)
         });
-        let factor = (max_side as f32 / self.document.width.max(self.document.height) as f32)
-            .min((self.zoom * ctx.pixels_per_point()).clamp(0.01, 1.0));
+        // Zoom only changes how the cached composition is drawn. Rebuilding it here
+        // also resizes source images and regenerates thumbnails on the UI thread.
+        let factor =
+            (max_side as f32 / self.document.width.max(self.document.height) as f32).min(1.0);
         let size = [
             (self.document.width as f32 * factor).round().max(1.0) as u32,
             (self.document.height as f32 * factor).round().max(1.0) as u32,
@@ -219,7 +221,7 @@ impl Session {
             let preview = self
                 .gpu
                 .get_or_insert_with(|| gpu_preview::GpuPreview::new(state));
-            preview.render(&self.document, size, self.zoom >= 1.0);
+            preview.render(&self.document, size);
             self.texture = None;
             self.composite = None;
             self.thumbnails.clear();

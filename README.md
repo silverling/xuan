@@ -61,6 +61,14 @@ cargo run --release -- --demo --screenshot /tmp/levels.png --screenshot-panel le
 
 The screenshot helper also supports `hue`, `curves`, `export`, `new`, `brush`, `selection`, `gradient`, and `shape`. It captures the real native window and exits.
 
+To benchmark zoom updates on a GPU, run:
+
+```sh
+cargo test --release --locked --bin xuan benchmark_large_image_zoom -- --ignored --nocapture
+```
+
+This measures UI updates, tessellation, and compositor completion over 48 zoom steps on a 3000×3000 image. Set `XUAN_ZOOM_BENCH_IMAGE` to use a local image instead of the generated image. Window presentation is not included.
+
 ## Port differences
 
 The editor uses an 8-bit sRGB raster pipeline. Embedded ICC profiles are not converted or preserved. `.comp` versions 1–7 can be imported; Xuan does not write the original macOS format. Selections and undo history are session state and are not saved in project archives.

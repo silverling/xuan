@@ -7,7 +7,7 @@ The Linux port is implemented in Rust with egui 0.33 and wgpu 27. The source bas
 | Module | Responsibility |
 | --- | --- |
 | `document`, `geometry`, `history` | Validated layered document, affine/projective transforms, shared pixel assets, bounded snapshot undo/redo |
-| `blend`, `render`, `gpu`, `composite.wgsl` | CPU reference/export compositor and wgpu compute preview, thirteen blend modes, inherited masks and clipping, premultiplied Lanczos downsampling |
+| `blend`, `render`, `gpu`, `composite.wgsl`, `mipmap.wgsl` | CPU reference/export compositor and wgpu compute preview, thirteen blend modes, inherited masks and clipping, premultiplied Lanczos downsampling and preview mipmaps |
 | `selection`, `paint`, `retouch` | Selection coverage, swept brush strokes, clone/blur/smudge, gradients, live shapes, texture-based healing/fill, border-color background masks |
 | `color`, `effects` | Selective hue ranges, RGB channel levels/curves, linear-light exposure, gradient mapping, film grain, raster filters |
 | `operations`, `io` | Group/layer commands, canvas sizing/crop, cross-project copies, clipboard rasters, atomic project storage, Compositor import, image export |
@@ -15,6 +15,8 @@ The Linux port is implemented in Rust with egui 0.33 and wgpu 27. The source bas
 | `packaging`, `scripts`, `.github/workflows` | Desktop and MIME integration, install/archive/check scripts, Linux CI |
 
 wgpu dispatches an 8×8 compute shader per visible layer, ping-ponging through floating-point targets and registering the final texture with egui's renderer. Mask/clip coverage is prepared on the CPU; pixel compositing and adjustments run on the GPU. CPU export uses full document dimensions, and remains the preview fallback when compute or source texture limits prevent GPU composition. Preview source textures are cached by shared asset identity and scale.
+
+The composition uses a fixed, capped resolution and stays cached during zooming and panning, along with layer thumbnails. The GPU builds a premultiplied mipmap pyramid when the composition changes. The canvas blends between these levels when zoomed out and uses nearest filtering when magnified, avoiding CPU image resizing and texture allocation during zoom gestures. The CPU fallback also reuses its cached composition during zooming.
 
 ## UI preservation
 
@@ -29,8 +31,8 @@ The demo composition is generated locally and contains five editable layers; it 
 Verified locally on **2026-09-19**, Linux x86_64, Rust 1.98.0, glibc 2.43:
 
 - `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings` pass.
-- `cargo test --all-targets`: **43 tests pass**, with one hardware-dependent GPU test ignored in this default run.
-- `cargo test --lib gpu::tests -- --ignored`: **1 GPU test passes**, comparing all blend modes, color/channel adjustments, film grain, masks, and perspective transforms against CPU output within two premultiplied 8-bit units.
+- `cargo test --all-targets`: **54 tests pass**, with two hardware-dependent GPU tests and a zoom benchmark ignored in this default run.
+- `cargo test --lib gpu::tests -- --ignored`: **2 GPU tests pass**, comparing all blend modes, color/channel adjustments, film grain, masks, and perspective transforms against CPU output within two premultiplied 8-bit units, and verifying mipmap filtering, transparency, odd dimensions, and updates after editing.
 - Tests cover project round trips and atomic overwrite, original Swift dictionaries/transforms, unsafe asset paths, hierarchy and clipping validation, PNG/JPEG/TIFF/WebP export, PNG DPI, selection connectivity and coverage, copy-on-write pixels, expanded paint/blur bounds, live shape redraw, group transforms, linked mask placement, and history revisions.
 - egui input tests exercise brush/selection/pixel-move gestures, scale/distort handles, independent tabs, layer copying between projects, adjustment cancellation, export preview, and worker commit/cancellation. Style regression tests cover titlebar dragging, double-click maximize/restore, and unsaved-close handling, floating-panel dragging and minimum-size bounds, keyboard/disabled slider behavior, and Levels handle clamping.
 - Release binary builds and starts on **Wayland** (DISPLAY unset) and **X11** (WAYLAND_DISPLAY unset). Real native screenshots were inspected for editor, welcome, Levels, Hue/Saturation, and export layouts.

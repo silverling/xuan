@@ -1,5 +1,115 @@
 use super::*;
 
+#[test]
+#[ignore = "requires a GPU; optionally set XUAN_ZOOM_BENCH_IMAGE to an image path"]
+fn benchmark_large_image_zoom() {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .unwrap();
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    let target_format = wgpu::TextureFormat::Rgba8Unorm;
+    let renderer = eframe::egui_wgpu::Renderer::new(&device, target_format, Default::default());
+    let state = eframe::egui_wgpu::RenderState {
+        adapter,
+        available_adapters: Vec::new(),
+        device,
+        queue,
+        target_format,
+        renderer: Arc::new(egui::mutex::RwLock::new(renderer)),
+    };
+    let pixels = std::env::var_os("XUAN_ZOOM_BENCH_IMAGE").map_or_else(
+        || {
+            RgbaImage::from_fn(3000, 3000, |x, y| {
+                image::Rgba([x as u8, y as u8, (x + y) as u8, 255])
+            })
+        },
+        |path| io::import_image(Path::new(&path)).unwrap(),
+    );
+    let mut document = Document::new(pixels.width(), pixels.height()).unwrap();
+    document.layers = vec![Layer::image("Large image", pixels)];
+    let (context, mut app) = app();
+    app.gpu_state = Some(state.clone());
+    app.sessions
+        .push(Session::new(document, "Zoom benchmark".into(), None));
+    app.tool = Tool::Hand;
+    for _ in 0..3 {
+        frame(&context, &mut app);
+    }
+    state
+        .device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .unwrap();
+    let mut durations = Vec::new();
+    for step in (0..12).chain((0..12).rev()).cycle().take(48) {
+        app.session_mut().unwrap().zoom = 0.8_f32.powi(step);
+        let start = std::time::Instant::now();
+        let output = frame(&context, &mut app);
+        let _ = context.tessellate(output.shapes, output.pixels_per_point);
+        state
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+        durations.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    durations.sort_by(f64::total_cmp);
+    eprintln!(
+        "Zoom UI + compositor (48 frames): median {:.2} ms, p95 {:.2} ms, max {:.2} ms",
+        durations[24], durations[45], durations[47],
+    );
+}
+
+#[test]
+fn zoom_reuses_preview_and_thumbnails_until_document_changes() {
+    let (context, mut app) = app();
+    app.dimensions = [64, 48];
+    app.new_document();
+    for _ in 0..3 {
+        frame(&context, &mut app);
+    }
+    let session = app.session().unwrap();
+    let composite = session.composite.clone().unwrap();
+    let texture = session.texture.as_ref().unwrap().id();
+    let thumbnails: HashMap<_, _> = session
+        .thumbnails
+        .iter()
+        .map(|(key, texture)| (*key, texture.id()))
+        .collect();
+    assert!(!thumbnails.is_empty());
+
+    for zoom in [1.0, 0.51, 0.25, 0.05, 8.0, 0.01, 64.0] {
+        app.session_mut().unwrap().zoom = zoom;
+        let output = frame(&context, &mut app);
+        let session = app.session().unwrap();
+        assert_eq!(session.preview_size, [64, 48]);
+        assert!(Arc::ptr_eq(session.composite.as_ref().unwrap(), &composite));
+        assert!(
+            !output
+                .textures_delta
+                .set
+                .iter()
+                .any(|(id, _)| *id == texture)
+        );
+        assert_eq!(session.thumbnails.len(), thumbnails.len());
+        for (key, id) in &thumbnails {
+            assert_eq!(session.thumbnails[key].id(), *id);
+        }
+    }
+
+    app.command("fill_fg");
+    frame(&context, &mut app);
+    frame(&context, &mut app);
+    let session = app.session().unwrap();
+    assert!(!Arc::ptr_eq(
+        session.composite.as_ref().unwrap(),
+        &composite
+    ));
+    for (key, id) in thumbnails {
+        assert_ne!(session.thumbnails[&key].id(), id);
+    }
+}
+
 fn app() -> (egui::Context, EditorApp) {
     let context = egui::Context::default();
     let app = EditorApp::with_context(&context, Vec::new(), false, None);

@@ -39,6 +39,7 @@ pub struct GpuCompositor {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
+    mipmap_pipeline: wgpu::ComputePipeline,
     sources: HashMap<(usize, [u32; 2]), Source>,
     size: [u32; 2],
     buffers: [wgpu::Texture; 2],
@@ -60,14 +61,27 @@ impl GpuCompositor {
             compilation_options: Default::default(),
             cache: None,
         });
+        let mipmap_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("xuan preview mipmaps"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("mipmap.wgsl").into()),
+        });
+        let mipmap_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("xuan preview mipmaps"),
+            layout: None,
+            module: &mipmap_shader,
+            entry_point: Some("downsample"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
         let buffers =
-            std::array::from_fn(|_| target(&device, [1, 1], wgpu::TextureFormat::Rgba16Float));
-        let display = target(&device, [1, 1], wgpu::TextureFormat::Rgba8Unorm);
-        let blank = target(&device, [1, 1], wgpu::TextureFormat::Rgba8Unorm);
+            std::array::from_fn(|_| target(&device, [1, 1], wgpu::TextureFormat::Rgba16Float, 1));
+        let display = target(&device, [1, 1], wgpu::TextureFormat::Rgba8Unorm, 1);
+        let blank = target(&device, [1, 1], wgpu::TextureFormat::Rgba8Unorm, 1);
         Self {
             device,
             queue,
             pipeline,
+            mipmap_pipeline,
             sources: HashMap::new(),
             size: [1, 1],
             buffers,
@@ -87,9 +101,14 @@ impl GpuCompositor {
         if size != self.size {
             self.size = size;
             self.buffers = std::array::from_fn(|_| {
-                target(&self.device, size, wgpu::TextureFormat::Rgba16Float)
+                target(&self.device, size, wgpu::TextureFormat::Rgba16Float, 1)
             });
-            self.display = target(&self.device, size, wgpu::TextureFormat::Rgba8Unorm);
+            self.display = target(
+                &self.device,
+                size,
+                wgpu::TextureFormat::Rgba8Unorm,
+                size[0].max(size[1]).ilog2() + 1,
+            );
         }
         let mut retained = HashSet::new();
         let mut encoder = self
@@ -233,9 +252,47 @@ impl GpuCompositor {
         ];
         params.flags[1] = 100;
         self.dispatch(&mut encoder, current, &self.blank, &self.blank, &params);
+        self.generate_mipmaps(&mut encoder);
         self.queue.submit([encoder.finish()]);
         self.sources
             .retain(|key, source| retained.contains(key) && source.pixels.strong_count() > 0);
+    }
+
+    fn generate_mipmaps(&self, encoder: &mut wgpu::CommandEncoder) {
+        for level in 1..self.display.mip_level_count() {
+            let views = [level - 1, level].map(|level| {
+                self.display.create_view(&wgpu::TextureViewDescriptor {
+                    base_mip_level: level,
+                    mip_level_count: Some(1),
+                    ..Default::default()
+                })
+            });
+            let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("xuan preview mipmap inputs"),
+                layout: &self.mipmap_pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&views[0]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&views[1]),
+                    },
+                ],
+            });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("xuan preview mipmap"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.mipmap_pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.dispatch_workgroups(
+                (self.size[0] >> level).max(1).div_ceil(8),
+                (self.size[1] >> level).max(1).div_ceil(8),
+                1,
+            );
+        }
     }
 
     fn dispatch(
@@ -260,7 +317,12 @@ impl GpuCompositor {
             &self.buffers[1 - current],
             &self.display,
         ]
-        .map(|texture| texture.create_view(&Default::default()));
+        .map(|texture| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
+        });
         let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("xuan composite inputs"),
             layout: &self.pipeline.get_bind_group_layout(0),
@@ -301,7 +363,12 @@ impl GpuCompositor {
     }
 }
 
-fn target(device: &wgpu::Device, size: [u32; 2], format: wgpu::TextureFormat) -> wgpu::Texture {
+fn target(
+    device: &wgpu::Device,
+    size: [u32; 2],
+    format: wgpu::TextureFormat,
+    mip_level_count: u32,
+) -> wgpu::Texture {
     device.create_texture(&wgpu::TextureDescriptor {
         label: Some("xuan canvas target"),
         size: wgpu::Extent3d {
@@ -309,7 +376,7 @@ fn target(device: &wgpu::Device, size: [u32; 2], format: wgpu::TextureFormat) ->
             height: size[1],
             depth_or_array_layers: 1,
         },
-        mip_level_count: 1,
+        mip_level_count,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format,
@@ -472,7 +539,11 @@ mod tests {
     use image::Rgba;
 
     fn readback(compositor: &GpuCompositor) -> Vec<u8> {
-        let [width, height] = compositor.size;
+        readback_mip(compositor, 0)
+    }
+
+    fn readback_mip(compositor: &GpuCompositor, level: u32) -> Vec<u8> {
+        let [width, height] = compositor.size.map(|side| (side >> level).max(1));
         let stride = (width * 4).div_ceil(256) * 256;
         let buffer = compositor.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("compositor verification"),
@@ -484,7 +555,10 @@ mod tests {
             .device
             .create_command_encoder(&Default::default());
         encoder.copy_texture_to_buffer(
-            compositor.display.as_image_copy(),
+            wgpu::TexelCopyTextureInfo {
+                mip_level: level,
+                ..compositor.display.as_image_copy()
+            },
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
                 layout: wgpu::TexelCopyBufferLayout {
@@ -516,6 +590,68 @@ mod tests {
             .chunks_exact(stride as usize)
             .flat_map(|row| row[..width as usize * 4].iter().copied())
             .collect()
+    }
+
+    #[test]
+    #[ignore = "requires a Vulkan or OpenGL compute adapter; run explicitly for native verification"]
+    fn preview_mipmaps_filter_detail_and_preserve_transparency_and_edges() {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .unwrap();
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let mut compositor = GpuCompositor::new(device, queue);
+        let mut document = Document::new(64, 32).unwrap();
+        document.layers = vec![Layer::image(
+            "Fine detail",
+            RgbaImage::from_fn(64, 32, |x, y| {
+                let value = if (x + y) % 2 == 0 { 0 } else { 255 };
+                Rgba([value, value, value, 255])
+            }),
+        )];
+        compositor.render(&document, [64, 32]);
+        compare(&document, &readback(&compositor), "full resolution");
+        assert_eq!(compositor.display.mip_level_count(), 7);
+        for level in 1..compositor.display.mip_level_count() {
+            for pixel in readback_mip(&compositor, level).as_chunks::<4>().0 {
+                assert!(pixel[..3].iter().all(|v| (127..=128).contains(v)));
+                assert_eq!(pixel[3], 255);
+            }
+        }
+
+        for (width, height) in [(3, 5), (1, 7), (7, 1), (1, 1)] {
+            document = Document::new(width, height).unwrap();
+            document.layers = vec![Layer::image(
+                "Transparent edge",
+                RgbaImage::from_fn(width, height, |x, y| {
+                    if x == width - 1 && y == height - 1 {
+                        Rgba([255, 0, 0, 255])
+                    } else {
+                        Rgba([0, 0, 255, 0])
+                    }
+                }),
+            )];
+            compositor.render(&document, [width, height]);
+            let level = compositor.display.mip_level_count() - 1;
+            let pixel = readback_mip(&compositor, level);
+            let coverage = (255.0 / (width * height) as f32).round() as u8;
+            assert!(
+                pixel[0].abs_diff(coverage) <= 1,
+                "{width} x {height}: {pixel:?}"
+            );
+            assert!(
+                pixel[3].abs_diff(coverage) <= 1,
+                "{width} x {height}: {pixel:?}"
+            );
+            assert_eq!(&pixel[1..3], &[0, 0]);
+
+            // Editing must update every level, including the one used when fit to screen.
+            let pixels = document.layers[0].pixels.as_mut().unwrap();
+            Arc::make_mut(pixels).fill(255);
+            compositor.render(&document, [width, height]);
+            assert_eq!(readback_mip(&compositor, level), vec![255; 4]);
+        }
     }
 
     #[test]

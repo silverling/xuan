@@ -16,20 +16,29 @@ impl GpuPreview {
         }
     }
 
-    pub fn render(&mut self, document: &Document, size: [u32; 2], nearest: bool) {
+    pub fn render(&mut self, document: &Document, size: [u32; 2]) {
         self.compositor.render(document, size);
         let view = self.compositor.display_view();
-        let filter = if nearest {
-            wgpu::FilterMode::Nearest
-        } else {
-            wgpu::FilterMode::Linear
+        let sampler = wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
         };
         let mut renderer = self.state.renderer.write();
         if let Some(id) = self.texture {
-            renderer.update_egui_texture_from_wgpu_texture(&self.state.device, &view, filter, id);
+            renderer.update_egui_texture_from_wgpu_texture_with_sampler_options(
+                &self.state.device,
+                &view,
+                sampler,
+                id,
+            );
         } else {
-            self.texture =
-                Some(renderer.register_native_texture(&self.state.device, &view, filter));
+            self.texture = Some(renderer.register_native_texture_with_sampler_options(
+                &self.state.device,
+                &view,
+                sampler,
+            ));
         }
     }
 }
