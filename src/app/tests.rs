@@ -330,6 +330,165 @@ fn app() -> (egui::Context, EditorApp) {
     (context, app)
 }
 
+fn keyboard_frame(
+    context: &egui::Context,
+    app: &mut EditorApp,
+    events: Vec<egui::Event>,
+    modifiers: egui::Modifiers,
+) -> egui::FullOutput {
+    context.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                Pos2::ZERO,
+                Vec2::new(1280.0, 860.0),
+            )),
+            events,
+            modifiers,
+            ..Default::default()
+        },
+        |ctx| app.show(ctx),
+    )
+}
+
+#[test]
+fn native_clipboard_shortcuts_copy_cut_and_paste_selected_pixels() {
+    let (context, mut app) = app();
+    let mut document = Document::new(8, 6).unwrap();
+    document.layers.clear();
+    let source = RgbaImage::from_fn(8, 6, |x, _| {
+        image::Rgba(if x < 4 { [255, 0, 0, 255] } else { [0; 4] })
+    });
+    document.insert(Layer::image(
+        "Background",
+        RgbaImage::from_pixel(8, 6, image::Rgba([0, 0, 255, 255])),
+    ));
+    document.insert(Layer::image("Source", source.clone()));
+    let source_id = document.active.unwrap();
+    document.selection = Some(Arc::new(xuan::selection::rectangle(
+        8,
+        6,
+        Point::new(2.0, 1.0),
+        Point::new(6.0, 4.0),
+        false,
+    )));
+    app.sessions
+        .push(Session::new(document, "Clipboard".into(), None));
+    frame(&context, &mut app);
+    let ctrl = egui::Modifiers {
+        ctrl: true,
+        command: true,
+        ..Default::default()
+    };
+
+    // egui-winit emits clipboard events instead of C/X/V key presses.
+    keyboard_frame(&context, &mut app, vec![egui::Event::Copy], ctrl);
+    let (pixels, point) = app.clipboard.as_ref().expect("copy shortcut must run");
+    assert_eq!(pixels.dimensions(), (4, 3));
+    assert_eq!(*point, Point::new(2.0, 1.0));
+    assert_eq!(pixels.get_pixel(0, 0).0, [255, 0, 0, 255]);
+    assert_eq!(pixels.get_pixel(3, 0).0, [0; 4]);
+
+    // An image-only system clipboard has no text payload.
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Paste(String::new())],
+        ctrl,
+    );
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 3);
+    let pasted = document.active().unwrap();
+    assert_eq!(pasted.name, "Pasted image");
+    assert_eq!(pasted.pixels.as_deref().unwrap().dimensions(), (4, 3));
+    assert_eq!((pasted.transform.x, pasted.transform.y), (2.0, 1.0));
+    assert_eq!(
+        document
+            .layers
+            .iter()
+            .find(|layer| layer.id == source_id)
+            .unwrap()
+            .pixels
+            .as_deref()
+            .unwrap(),
+        &source
+    );
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 2);
+
+    app.session_mut().unwrap().document.select(source_id, false);
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Copy],
+        ctrl | egui::Modifiers::SHIFT,
+    );
+    assert_eq!(
+        app.clipboard.as_ref().unwrap().0.get_pixel(3, 0).0,
+        [0, 0, 255, 255]
+    );
+
+    keyboard_frame(&context, &mut app, vec![egui::Event::Cut], ctrl);
+    let document = &app.session().unwrap().document;
+    let pixels = document
+        .layers
+        .iter()
+        .find(|layer| layer.id == source_id)
+        .unwrap()
+        .pixels
+        .as_deref()
+        .unwrap();
+    assert_eq!(pixels.get_pixel(2, 1).0[3], 0);
+    assert_eq!(pixels.get_pixel(0, 0).0, [255, 0, 0, 255]);
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Paste(String::new())],
+        ctrl,
+    );
+    assert_eq!(app.session().unwrap().document.layers.len(), 3);
+    assert_eq!(
+        app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .pixels
+            .as_deref()
+            .unwrap()
+            .get_pixel(0, 0)
+            .0,
+        [255, 0, 0, 255]
+    );
+}
+
+#[test]
+fn native_clipboard_shortcuts_leave_text_editing_to_the_focused_field() {
+    let (context, mut app) = app();
+    app.dimensions = [8, 6];
+    app.new_document();
+    let layer_id = app.session().unwrap().document.active.unwrap();
+    let layer_count = app.session().unwrap().document.layers.len();
+    app.rename = Some((layer_id, String::new()));
+    frame(&context, &mut app);
+    assert!(context.wants_keyboard_input());
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Paste("Layer name".into())],
+        egui::Modifiers::CTRL,
+    );
+    assert_eq!(app.rename.as_ref().unwrap().1, "Layer name");
+    for event in [
+        egui::Event::Copy,
+        egui::Event::Cut,
+        egui::Event::Paste(String::new()),
+    ] {
+        keyboard_frame(&context, &mut app, vec![event], egui::Modifiers::CTRL);
+        assert!(app.clipboard.is_none());
+        assert_eq!(app.session().unwrap().document.layers.len(), layer_count);
+    }
+}
+
 fn frame(context: &egui::Context, app: &mut EditorApp) -> egui::FullOutput {
     let output = context.run(
         egui::RawInput {

@@ -26,6 +26,10 @@ zip = { version = "2.4", default-features = false, features = ["deflate"] }
 [dev-dependencies]
 pollster = "0.4"
 
+[patch.crates-io]
+# Preserve paste events when the clipboard contains an image without text.
+egui-winit = { path = "vendor/egui-winit" }
+
 [profile.dev]
 opt-level = 1
 

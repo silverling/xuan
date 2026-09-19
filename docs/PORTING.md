@@ -20,6 +20,8 @@ The composition uses a fixed, capped resolution and stays cached during zooming 
 
 Selection gestures update the overlay without recompositing image pixels. Lasso masks use scanline filling instead of checking every edge at every image pixel; marquee and selection translation operate on row spans. Layer thumbnails track source asset identity and placement independently, so edits only refresh affected thumbnails. They sample at thumbnail resolution to keep their cost independent of source image size; canvas and export quality filtering remain separate.
 
+Clipboard shortcuts use egui's native Copy/Cut/Paste events and leave focused text fields in control of text editing. A small [egui-winit patch](../vendor/egui-winit/PATCH.md) preserves paste events for image-only clipboards; upstream 0.33.3 otherwise drops the keypress when no text is available.
+
 ## UI preservation
 
 The port uses the source's neutral 0.14-gray panels, darker canvas, 56 px tool rail, 36 px rounded tool buttons, 42 px contextual header, 252 px Layers panel (202–352 px resize range), 30 px status bar, restrained 11–13 px type, subtle dividers, and compact rounded controls. Icons are drawn as vectors. A new layered Xuan icon replaces the application identity. A client-side titlebar integrates the menu bar and traffic-light window controls; it supports window-manager dragging, all eight resize directions, minimize, maximize/restore, and the existing save-on-close flow. File dialogs continue to use the desktop portal.

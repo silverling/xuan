@@ -17,6 +17,9 @@ install -Dm644 "$xuan_root/packaging/org.xuan.Editor.desktop" "$xuan_prefix/shar
 install -Dm644 "$xuan_root/packaging/org.xuan.Editor.xml" "$xuan_prefix/share/mime/packages/org.xuan.Editor.xml"
 install -Dm644 "$xuan_root/LICENSE" "$xuan_prefix/share/licenses/xuan/LICENSE"
 install -Dm644 "$xuan_root/assets/fonts/Inter-LICENSE.txt" "$xuan_prefix/share/licenses/xuan/Inter-LICENSE.txt"
+for xuan_license in LICENSE-MIT LICENSE-APACHE; do
+    install -Dm644 "$xuan_root/vendor/egui-winit/$xuan_license" "$xuan_prefix/share/licenses/xuan/egui-winit/$xuan_license"
+done
 if command -v update-desktop-database >/dev/null; then
     update-desktop-database "$xuan_prefix/share/applications"
 fi

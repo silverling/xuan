@@ -1,11 +1,36 @@
 use super::{EditorApp, Tool};
-use egui::{Key, Modifiers};
+use egui::{Event, Key, Modifiers};
 
 impl EditorApp {
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.wants_keyboard_input() {
             return;
         }
+
+        // Native backends translate clipboard shortcuts into these events,
+        // including Ctrl+Shift+C. Leave them alone when a text field has focus.
+        let clipboard_commands = ctx.input_mut(|input| {
+            let mut commands = Vec::new();
+            input.events.retain(|event| {
+                let command = match event {
+                    Event::Copy if input.modifiers.shift => "copy_merged",
+                    Event::Copy => "copy",
+                    Event::Cut => "cut",
+                    Event::Paste(_) => "paste",
+                    _ => return true,
+                };
+                commands.push(command);
+                false
+            });
+            commands
+        });
+        if !clipboard_commands.is_empty() {
+            for command in clipboard_commands {
+                self.command(command);
+            }
+            return;
+        }
+
         let pressed = |key| ctx.input(|i| i.key_pressed(key));
         let modifiers = ctx.input(|i| i.modifiers);
         let consume = |mods, key| ctx.input_mut(|i| i.consume_key(mods, key));
