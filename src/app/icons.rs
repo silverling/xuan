@@ -8,7 +8,7 @@ pub fn tool_button(ui: &mut Ui, tool: Tool, selected: bool) -> egui::Response {
     if selected || response.hovered() {
         painter.rect(
             rect,
-            7.0,
+            theme::BUTTON_RADIUS,
             Color32::from_gray(if selected { 62 } else { 48 }),
             Stroke::new(
                 1.0_f32,

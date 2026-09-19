@@ -9,6 +9,7 @@ pub const MUTED: Color32 = Color32::from_rgb(154, 154, 157);
 pub const TEXT: Color32 = Color32::from_rgb(235, 235, 237);
 pub const ACCENT: Color32 = Color32::from_rgb(10, 132, 255);
 pub const TITLEBAR: Color32 = Color32::from_rgb(45, 45, 45);
+pub const BUTTON_RADIUS: u8 = 5;
 
 pub fn window_corner_radius(ctx: &egui::Context) -> u8 {
     let fills_screen = ctx.input(|i| {
@@ -64,7 +65,7 @@ pub fn apply(ctx: &egui::Context) {
         &mut style.visuals.widgets.active,
         &mut style.visuals.widgets.open,
     ] {
-        widget.corner_radius = CornerRadius::same(11);
+        widget.corner_radius = CornerRadius::same(BUTTON_RADIUS);
         widget.fg_stroke = Stroke::new(1.0_f32, TEXT);
         widget.expansion = 0.0;
     }

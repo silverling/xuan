@@ -112,13 +112,19 @@ impl EditorApp {
         let title = self.session().map_or("Xuan".into(), |s| {
             format!("{}{}", s.title, if s.history.dirty() { "  •" } else { "" })
         });
-        if rect.width() > 180.0 {
-            let painter = ui.painter().with_clip_rect(rect.shrink2(vec2(12.0, 0.0)));
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                title,
+        let center = pos2(ui.ctx().content_rect().center().x, rect.center().y);
+        // Keep the title centered on the window and ellipsize before it reaches the menus.
+        let half_width = (center.x - rect.left()).min(rect.right() - center.x) - 12.0;
+        if half_width > 0.0 {
+            let galley = egui::WidgetText::from(title).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                half_width * 2.0,
                 FontId::proportional(12.0),
+            );
+            ui.painter().galley_with_override_text_color(
+                center - galley.size() / 2.0,
+                galley,
                 theme::MUTED,
             );
         }

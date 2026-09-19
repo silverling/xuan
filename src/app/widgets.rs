@@ -126,7 +126,7 @@ impl Widget for Button {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &self.label)
         });
         if ui.is_rect_visible(rect) {
-            bezel(ui, &response, rect.height() / 2.0, self.primary);
+            bezel(ui, &response, theme::BUTTON_RADIUS as f32, self.primary);
             ui.painter()
                 .galley(rect.center() - galley.size() / 2.0, galley, theme::TEXT);
         }
@@ -141,7 +141,7 @@ pub fn primary_button(ui: &mut Ui, label: impl Into<String>) -> Response {
     ui.add(Button::new(label).primary())
 }
 
-/// A recessed field, not the raised capsule that DragValue normally uses.
+/// A recessed field in place of DragValue's raised button.
 pub struct Number<'a> {
     inner: egui::DragValue<'a>,
 }
@@ -466,7 +466,7 @@ pub fn segmented<T: Copy + PartialEq>(
     result.inner
 }
 
-/// Capsule pop-up with the paired AppKit chevrons; the menu itself stays native egui.
+/// Rounded pop-up with the paired AppKit chevrons; the menu itself stays native egui.
 pub struct PopUp {
     id: egui::Id,
     text: String,
@@ -498,7 +498,7 @@ impl PopUp {
         response.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), &self.text)
         });
-        bezel(ui, &response, 11.0, false);
+        bezel(ui, &response, theme::BUTTON_RADIUS as f32, false);
         let painter = ui.painter().with_clip_rect(Rect::from_min_max(
             rect.min + vec2(10.0, 0.0),
             rect.max - vec2(26.0, 0.0),
@@ -604,7 +604,7 @@ pub fn project_tab(ui: &mut Ui, title: &str, dirty: bool, selected: bool) -> (Re
     });
     ui.painter().rect_filled(
         rect,
-        14.0,
+        theme::BUTTON_RADIUS,
         Color32::from_white_alpha(if selected {
             31
         } else if response.hovered() {
@@ -615,7 +615,7 @@ pub fn project_tab(ui: &mut Ui, title: &str, dirty: bool, selected: bool) -> (Re
     );
     ui.painter().rect_stroke(
         rect,
-        14.0,
+        theme::BUTTON_RADIUS,
         Stroke::new(
             1.0_f32,
             Color32::from_white_alpha(if selected { 56 } else { 20 }),

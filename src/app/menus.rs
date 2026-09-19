@@ -85,8 +85,6 @@ impl EditorApp {
                     .ui(ui, |ui| {
                         self.window_controls(ui);
                         ui.add_enabled_ui(!blocked, |ui| {
-                            ui.label(RichText::new("Xuan").strong().size(13.0));
-                            ui.add_space(10.0);
                             ui.menu_button("File", |ui| {
                                 item(ui, "New Canvas…", "Ctrl+N", "new", &mut action);
                                 item(ui, "Open…", "Ctrl+O", "open", &mut action);
@@ -399,7 +397,7 @@ impl EditorApp {
                                         {
                                             ui.painter().rect_stroke(
                                                 response.rect,
-                                                14.0,
+                                                theme::BUTTON_RADIUS,
                                                 egui::Stroke::new(2.0_f32, theme::ACCENT),
                                                 egui::StrokeKind::Inside,
                                             );
