@@ -3,7 +3,7 @@
   <mime-type type="application/x-xuan-project">
     <comment>xuan image project</comment>
     <glob pattern="*.xuan"/>
-    <icon name="org.xuan.Editor"/>
+    <icon name="me.silverl.xuan"/>
     <sub-class-of type="application/zip"/>
   </mime-type>
 </mime-info>

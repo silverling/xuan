@@ -55,7 +55,7 @@ fn main() -> eframe::Result {
             .with_decorations(false)
             .with_transparent(true)
             .with_icon(icon)
-            .with_app_id("org.xuan.Editor")
+            .with_app_id("me.silverl.xuan")
             .with_inner_size([1280.0, 860.0])
             .with_min_inner_size([850.0, 560.0]),
         renderer: eframe::Renderer::Wgpu,

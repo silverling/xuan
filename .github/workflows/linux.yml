@@ -25,7 +25,7 @@ jobs:
       - name: Check and test
         run: scripts/check.sh --gpu
       - name: Validate desktop integration
-        run: desktop-file-validate packaging/org.xuan.Editor.desktop
+        run: desktop-file-validate packaging/me.silverl.xuan.desktop
       - name: Package
         run: scripts/package.sh
       - name: Native X11 smoke test

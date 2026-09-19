@@ -12,9 +12,9 @@ if [[ ! -f "$xuan_binary" ]]; then
     exit 1
 fi
 install -Dm755 "$xuan_binary" "$xuan_prefix/bin/xuan"
-install -Dm644 "$xuan_root/assets/org.xuan.Editor.svg" "$xuan_prefix/share/icons/hicolor/scalable/apps/org.xuan.Editor.svg"
-install -Dm644 "$xuan_root/packaging/org.xuan.Editor.desktop" "$xuan_prefix/share/applications/org.xuan.Editor.desktop"
-install -Dm644 "$xuan_root/packaging/org.xuan.Editor.xml" "$xuan_prefix/share/mime/packages/org.xuan.Editor.xml"
+install -Dm644 "$xuan_root/assets/me.silverl.xuan.svg" "$xuan_prefix/share/icons/hicolor/scalable/apps/me.silverl.xuan.svg"
+install -Dm644 "$xuan_root/packaging/me.silverl.xuan.desktop" "$xuan_prefix/share/applications/me.silverl.xuan.desktop"
+install -Dm644 "$xuan_root/packaging/me.silverl.xuan.xml" "$xuan_prefix/share/mime/packages/me.silverl.xuan.xml"
 install -Dm644 "$xuan_root/LICENSE" "$xuan_prefix/share/licenses/xuan/LICENSE"
 install -Dm644 "$xuan_root/THIRD_PARTY.md" "$xuan_prefix/share/licenses/xuan/THIRD_PARTY.md"
 install -Dm644 "$xuan_root/licenses/rawler-LGPL-2.1.txt" "$xuan_prefix/share/licenses/xuan/rawler-LGPL-2.1.txt"

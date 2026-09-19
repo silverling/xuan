@@ -109,7 +109,7 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
         let options =
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         let manifest = Manifest {
-            format: "org.xuan.project".into(),
+            format: "me.silverl.xuan".into(),
             version: if document.layers.iter().any(|l| l.raw.is_some()) {
                 2
             } else {
@@ -177,7 +177,7 @@ pub fn load(path: &Path) -> Result<Document> {
     let mut manifest: Manifest =
         serde_json::from_slice(&zip_read(&mut archive, "manifest.json", MAX_MANIFEST)?)?;
     ensure!(
-        manifest.format == "org.xuan.project" && (1..=2).contains(&manifest.version),
+        manifest.format == "me.silverl.xuan" && (1..=2).contains(&manifest.version),
         "Unsupported xuan project version"
     );
     let mut used_pixels = 0;
