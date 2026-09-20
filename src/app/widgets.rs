@@ -10,27 +10,34 @@ use egui::{
 use super::theme;
 
 pub fn gradient(ui: &Ui, rect: Rect, radius: f32, top: Color32, bottom: Color32) {
-    let radius = radius.min(rect.height() / 2.0).min(rect.width() / 2.0);
+    if !rect.is_positive() {
+        return;
+    }
+
+    // Reuse egui's rounded outline and pixel-scaled feathering. Raw triangle
+    // meshes are passed through unchanged by the UI renderer.
     let mut mesh = egui::Mesh::default();
-    let steps = 32;
-    for i in 0..=steps {
-        let t = i as f32 / steps as f32;
-        let y = rect.top() + t * rect.height();
-        let dy = (radius - (y - rect.top()).min(rect.bottom() - y)).max(0.0);
-        let inset = radius - (radius * radius - dy * dy).max(0.0).sqrt();
+    let mut tessellator = egui::epaint::Tessellator::new(
+        ui.pixels_per_point(),
+        ui.ctx().tessellation_options(|options| *options),
+        [1, 1],
+        Vec::new(),
+    );
+    tessellator.tessellate_rect(
+        &egui::epaint::RectShape::filled(rect, radius, Color32::WHITE),
+        &mut mesh,
+    );
+
+    for vertex in &mut mesh.vertices {
+        let t = ((vertex.pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
         let color = Color32::from_rgba_premultiplied(
             egui::lerp(top.r() as f32..=bottom.r() as f32, t) as u8,
             egui::lerp(top.g() as f32..=bottom.g() as f32, t) as u8,
             egui::lerp(top.b() as f32..=bottom.b() as f32, t) as u8,
             egui::lerp(top.a() as f32..=bottom.a() as f32, t) as u8,
         );
-        mesh.colored_vertex(pos2(rect.left() + inset, y), color);
-        mesh.colored_vertex(pos2(rect.right() - inset, y), color);
-        if i > 0 {
-            let n = (i * 2) as u32;
-            mesh.add_triangle(n - 2, n - 1, n);
-            mesh.add_triangle(n - 1, n + 1, n);
-        }
+        // Preserve edge coverage when tinting the white fill with the gradient.
+        vertex.color = color.gamma_multiply_u8(vertex.color.a());
     }
     ui.painter().add(mesh);
 }
