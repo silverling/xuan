@@ -1817,7 +1817,7 @@ fn canvas_clicks_select_visible_layers_and_deselect_empty_space() {
     let (context, mut app) = app();
     let [bottom, top] = canvas_layers(&mut app);
     assert!(app.auto_select);
-    app.ignore_transparent_pixels = true;
+    assert!(app.ignore_transparent_pixels);
     click_canvas(
         &context,
         &mut app,
@@ -1874,7 +1874,7 @@ fn canvas_clicks_select_visible_layers_and_deselect_empty_space() {
 fn move_tool_can_select_and_drag_through_transparent_pixels() {
     let (context, mut app) = app();
     let [bottom, top] = canvas_layers(&mut app);
-    assert!(!app.ignore_transparent_pixels);
+    app.ignore_transparent_pixels = false;
 
     let hole = Point::new(25.5, 25.5);
     click_canvas(&context, &mut app, hole, egui::Modifiers::NONE);

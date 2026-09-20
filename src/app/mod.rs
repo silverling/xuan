@@ -490,7 +490,7 @@ impl EditorApp {
             text_edit: None,
             blur_mode: PaintMode::Blur,
             auto_select: true,
-            ignore_transparent_pixels: false,
+            ignore_transparent_pixels: true,
             show_controls: true,
             snap: true,
             lock_ratio: true,
