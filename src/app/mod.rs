@@ -1257,6 +1257,12 @@ impl EditorApp {
                 }
             }
         }
+        // Keep antialiased panel seams opaque while preserving the rounded window corners.
+        ctx.layer_painter(egui::LayerId::background()).rect_filled(
+            ctx.content_rect(),
+            theme::window_corner_radius(ctx),
+            theme::PANEL,
+        );
         self.window_resize(ctx);
         if self.develop.is_some() {
             self.develop_workspace(ctx);
