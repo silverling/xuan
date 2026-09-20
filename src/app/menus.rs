@@ -6,6 +6,25 @@ use xuan::{
 
 use super::{EditorApp, theme, widgets};
 
+fn menu_bar_button(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::Ui)) {
+    let background = ui.painter().add(egui::Shape::Noop);
+    let response = ui.add(Button::new(label).fill(egui::Color32::TRANSPARENT));
+    let rect = response.rect.expand2(egui::vec2(4.0, 0.0));
+    let config = egui::containers::menu::MenuConfig::find(ui);
+    egui::Popup::menu(&response)
+        .anchor(rect)
+        .close_behavior(config.close_behavior)
+        .style(config.style)
+        .show(content);
+    let visuals = ui.style().interact(&response);
+
+    // The dropdown and the expanded highlight share the same left edge.
+    ui.painter().set(
+        background,
+        egui::epaint::RectShape::filled(rect, visuals.corner_radius, visuals.weak_bg_fill),
+    );
+}
+
 fn item(
     ui: &mut egui::Ui,
     label: &str,
@@ -85,7 +104,9 @@ impl EditorApp {
                     .ui(ui, |ui| {
                         self.window_controls(ui);
                         ui.add_enabled_ui(!blocked, |ui| {
-                            ui.menu_button("File", |ui| {
+                            // Leave a small gap between the expanded highlights.
+                            ui.spacing_mut().item_spacing.x += 2.0;
+                            menu_bar_button(ui, "File", |ui| {
                                 item(ui, "New Canvas…", "Ctrl+N", "new", &mut action);
                                 item(ui, "Open…", "Ctrl+O", "open", &mut action);
                                 item(ui, "Open Compositor Package…", "", "open_comp", &mut action);
@@ -111,7 +132,7 @@ impl EditorApp {
                                     item(ui, "Close Project", "Ctrl+W", "close", &mut action);
                                 });
                             });
-                            ui.menu_button("Edit", |ui| {
+                            menu_bar_button(ui, "Edit", |ui| {
                                 let undo = self.session().and_then(|s| s.history.undo_name());
                                 let redo = self.session().and_then(|s| s.history.redo_name());
                                 ui.add_enabled_ui(undo.is_some(), |ui| {
@@ -171,7 +192,7 @@ impl EditorApp {
                                     );
                                 });
                             });
-                            ui.menu_button("Image", |ui| {
+                            menu_bar_button(ui, "Image", |ui| {
                                 ui.add_enabled_ui(has_doc, |ui| {
                                     ui.menu_button("Adjustments", |ui| {
                                         adjustment = adjustment_menu(ui);
@@ -198,7 +219,7 @@ impl EditorApp {
                                     );
                                 });
                             });
-                            ui.menu_button("Layer", |ui| {
+                            menu_bar_button(ui, "Layer", |ui| {
                                 ui.add_enabled_ui(has_doc, |ui| {
                                     item(ui, "New Layer", "Ctrl+Shift+N", "new_layer", &mut action);
                                     item(
@@ -276,7 +297,7 @@ impl EditorApp {
                                     item(ui, "Flip Vertical", "", "flip_v", &mut action);
                                 });
                             });
-                            ui.menu_button("Select", |ui| {
+                            menu_bar_button(ui, "Select", |ui| {
                                 ui.add_enabled_ui(has_doc, |ui| {
                                     item(ui, "All", "Ctrl+A", "select_all", &mut action);
                                     item(ui, "Deselect", "Ctrl+D", "deselect", &mut action);
@@ -297,7 +318,7 @@ impl EditorApp {
                                     item(ui, "Feather 3 px", "", "feather", &mut action);
                                 });
                             });
-                            ui.menu_button("Filter", |ui| {
+                            menu_bar_button(ui, "Filter", |ui| {
                                 ui.add_enabled_ui(has_doc, |ui| {
                                     item(
                                         ui,
@@ -329,7 +350,7 @@ impl EditorApp {
                                     }
                                 });
                             });
-                            ui.menu_button("View", |ui| {
+                            menu_bar_button(ui, "View", |ui| {
                                 item(ui, "Fit Canvas", "Ctrl+0", "fit", &mut action);
                                 item(ui, "Actual Pixels", "Ctrl+1", "actual", &mut action);
                                 item(ui, "Zoom In", "Ctrl++", "zoom_in", &mut action);
@@ -342,7 +363,7 @@ impl EditorApp {
                                 );
                                 widgets::checkbox(ui, &mut self.snap, "Snap to Canvas and Layers");
                             });
-                            ui.menu_button("Help", |ui| {
+                            menu_bar_button(ui, "Help", |ui| {
                                 item(ui, "Keyboard Shortcuts", "F1", "shortcuts", &mut action);
                                 item(ui, "About Xuan", "", "about", &mut action);
                             });
