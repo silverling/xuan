@@ -45,6 +45,7 @@ struct Actions {
     deselect: bool,
     collapse: Option<Uuid>,
     reorder: Option<(LayerDrag, Uuid, DropPosition, bool)>,
+    drop_indicator: Option<egui::Shape>,
     appearance: Option<(BlendMode, f32, bool)>,
     rename: Option<(Uuid, String)>,
     edit_adjustment: Option<Uuid>,
@@ -124,12 +125,14 @@ impl EditorApp {
                                 Sense::click(),
                             );
                             actions.deselect = background.clicked();
-                            ui.spacing_mut().item_spacing.y = 2.0;
                             if let Some(session) = self.session() {
+                                // Adjacent rows share a single insertion boundary.
+                                ui.spacing_mut().item_spacing.y = 0.0;
                                 for (layer, depth) in rows(&session.document, &session.collapsed) {
                                     self.layer_row(ui, &layer, depth, &mut actions);
                                 }
                             } else {
+                                ui.spacing_mut().item_spacing.y = 2.0;
                                 ui.add_space((height * 0.5 - 48.0).max(10.0));
                                 ui.vertical_centered(|ui| {
                                     ui.label(RichText::new("No layers yet").color(theme::MUTED));
@@ -139,6 +142,10 @@ impl EditorApp {
                                             .color(theme::MUTED),
                                     );
                                 });
+                            }
+                            // Paint last so the next row cannot cover half of the line.
+                            if let Some(indicator) = actions.drop_indicator.take() {
+                                ui.painter().add(indicator);
                             }
                         });
                     ui.separator();
@@ -417,24 +424,19 @@ impl EditorApp {
         {
             let position = DropPosition::at(response.rect, pointer.y, layer.group);
             let stroke = Stroke::new(2.0_f32, theme::ACCENT);
-            match position {
-                DropPosition::Above => {
-                    ui.painter().line_segment(
-                        [response.rect.left_top(), response.rect.right_top()],
-                        stroke,
-                    );
-                }
-                DropPosition::Below => {
-                    ui.painter().line_segment(
-                        [response.rect.left_bottom(), response.rect.right_bottom()],
-                        stroke,
-                    );
-                }
+            actions.drop_indicator = Some(match position {
+                DropPosition::Above => egui::Shape::line_segment(
+                    [response.rect.left_top(), response.rect.right_top()],
+                    stroke,
+                ),
+                DropPosition::Below => egui::Shape::line_segment(
+                    [response.rect.left_bottom(), response.rect.right_bottom()],
+                    stroke,
+                ),
                 DropPosition::Inside => {
-                    ui.painter()
-                        .rect_stroke(response.rect, 2.0, stroke, StrokeKind::Inside);
+                    egui::Shape::rect_stroke(response.rect, 2.0, stroke, StrokeKind::Inside)
                 }
-            }
+            });
             if let Some(source) = response.dnd_release_payload::<LayerDrag>() {
                 actions.reorder =
                     Some((*source, layer.id, position, ui.input(|i| i.modifiers.alt)));

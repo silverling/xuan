@@ -1725,6 +1725,94 @@ fn layer_rows_and_thumbnails_reorder_in_both_directions_and_undo() {
 }
 
 #[test]
+fn layer_drop_indicator_stays_on_the_shared_boundary_between_rows() {
+    let (context, mut app) = app();
+    app.dimensions = [32, 24];
+    app.new_document();
+    let document = &mut app.session_mut().unwrap().document;
+    document.layers = ["Bottom", "Middle", "Top"]
+        .map(|name| Layer::blank(name, 32, 24))
+        .into();
+    document.select(document.layers[2].id, false);
+
+    let top = layer_label(&context, &mut app, "Top") + Vec2::new(60.0, 15.0);
+    let middle = layer_label(&context, &mut app, "Middle");
+    let bottom = layer_label(&context, &mut app, "Bottom");
+    pointer_frame(&context, &mut app, top, Some(true), egui::Modifiers::NONE);
+    pointer_frame(
+        &context,
+        &mut app,
+        top + Vec2::new(0.0, 10.0),
+        None,
+        egui::Modifiers::NONE,
+    );
+    let indicator = |output: egui::FullOutput| {
+        let lines: Vec<_> = output
+            .shapes
+            .into_iter()
+            .filter_map(|shape| match shape.shape {
+                egui::Shape::LineSegment { points, stroke }
+                    if stroke.color == theme::ACCENT
+                        && stroke.width == 2.0
+                        && points[0].y == points[1].y
+                        && (middle.y..bottom.y + 36.0).contains(&points[0].y) =>
+                {
+                    Some(points)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines.len(), 1, "Expected one insertion line: {lines:?}");
+        lines[0]
+    };
+
+    let below_middle = indicator(pointer_frame(
+        &context,
+        &mut app,
+        middle + Vec2::new(60.0, 30.0),
+        None,
+        egui::Modifiers::NONE,
+    ));
+    let above_bottom = indicator(pointer_frame(
+        &context,
+        &mut app,
+        bottom + Vec2::new(60.0, 0.0),
+        None,
+        egui::Modifiers::NONE,
+    ));
+    assert_eq!(below_middle, above_bottom);
+
+    let boundary = Pos2::new(middle.x + 60.0, below_middle[0].y);
+    for offset in [-1.0, 0.0, 1.0] {
+        assert_eq!(
+            indicator(pointer_frame(
+                &context,
+                &mut app,
+                boundary + Vec2::new(0.0, offset),
+                None,
+                egui::Modifiers::NONE,
+            )),
+            below_middle,
+        );
+    }
+    pointer_frame(
+        &context,
+        &mut app,
+        boundary,
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+    let document = &app.session().unwrap().document;
+    let names: Vec<_> = document
+        .layers
+        .iter()
+        .map(|layer| layer.name.as_str())
+        .collect();
+    assert_eq!(names, ["Bottom", "Top", "Middle"]);
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+#[test]
 fn layer_drops_nest_duplicate_and_reject_descendants() {
     let (context, mut app) = app();
     app.dimensions = [32, 24];
