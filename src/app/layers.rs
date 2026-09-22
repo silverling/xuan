@@ -223,9 +223,14 @@ impl EditorApp {
                     });
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Opacity").size(11.0));
-                        ui.spacing_mut().slider_width = (ui.available_width() - 72.0).max(40.0);
+                        ui.spacing_mut().slider_width =
+                            (ui.available_width() - 50.0 - widgets::SLIDER_SPACING).max(40.0);
                         changed |= ui
-                            .add(widgets::Slider::new(&mut opacity, 0.0..=1.0).percentage())
+                            .add(
+                                widgets::Slider::new(&mut opacity, 0.0..=1.0)
+                                    .value_width(50.0)
+                                    .percentage(),
+                            )
                             .changed();
                     });
                     if changed {

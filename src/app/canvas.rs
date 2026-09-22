@@ -543,16 +543,16 @@ impl EditorApp {
                     ui.label("Height");
                     ui.end_row();
 
-                    ui.add_sized(
-                        vec2(180.0, 36.0),
+                    ui.add(
                         widgets::Number::new(&mut self.dimensions[0])
+                            .size(vec2(180.0, 36.0))
                             .range(1..=30_000)
                             .suffix(" px"),
                     );
                     ui.label("×");
-                    ui.add_sized(
-                        vec2(180.0, 36.0),
+                    ui.add(
                         widgets::Number::new(&mut self.dimensions[1])
+                            .size(vec2(180.0, 36.0))
                             .range(1..=30_000)
                             .suffix(" px"),
                     );

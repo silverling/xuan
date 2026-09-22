@@ -9,6 +9,11 @@ use egui::{
 
 use super::theme;
 
+pub const NUMBER_WIDTH: f32 = 80.0;
+pub const SLIDER_LABEL_WIDTH: f32 = 82.0;
+pub const SLIDER_SPACING: f32 = 6.0;
+pub const SLIDER_FIELD_WIDTH: f32 = SLIDER_LABEL_WIDTH + 2.0 * SLIDER_SPACING + NUMBER_WIDTH;
+
 pub fn gradient(ui: &Ui, rect: Rect, radius: f32, top: Color32, bottom: Color32) {
     if !rect.is_positive() {
         return;
@@ -205,6 +210,21 @@ pub(super) fn wheel_value<N: egui::emath::Numeric>(
     }
 }
 
+/// Reserve the control's footprint even when its text grows during editing.
+pub fn fixed_size(ui: &mut Ui, size: egui::Vec2, widget: impl Widget) -> Response {
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    child.set_clip_rect(ui.clip_rect().intersect(rect));
+    let mut response = child.add(widget);
+    response.rect = rect;
+    response.interact_rect = response.interact_rect.intersect(rect);
+    response
+}
+
 /// A recessed field in place of DragValue's raised button.
 pub struct Number<'a, N> {
     value: &'a mut N,
@@ -212,6 +232,7 @@ pub struct Number<'a, N> {
     range: RangeInclusive<f64>,
     suffix: String,
     max_decimals: Option<usize>,
+    size: egui::Vec2,
 }
 impl<'a, N: egui::emath::Numeric> Number<'a, N> {
     pub fn new(value: &'a mut N) -> Self {
@@ -221,6 +242,7 @@ impl<'a, N: egui::emath::Numeric> Number<'a, N> {
             range: N::MIN.to_f64()..=N::MAX.to_f64(),
             suffix: String::new(),
             max_decimals: N::INTEGRAL.then_some(0),
+            size: vec2(NUMBER_WIDTH, 22.0),
         }
     }
     pub fn speed(mut self, speed: impl Into<f64>) -> Self {
@@ -240,12 +262,16 @@ impl<'a, N: egui::emath::Numeric> Number<'a, N> {
         self.max_decimals = Some(decimals);
         self
     }
+    pub fn size(mut self, size: egui::Vec2) -> Self {
+        self.size = size;
+        self
+    }
 }
 impl<N: egui::emath::Numeric> Widget for Number<'_, N> {
     fn ui(self, ui: &mut Ui) -> Response {
         ui.scope(|ui| {
             ui.spacing_mut().button_padding = vec2(6.0, 3.0);
-            ui.spacing_mut().interact_size = vec2(44.0, 22.0);
+            ui.spacing_mut().interact_size = self.size;
             let visuals = ui.visuals_mut();
             visuals.selection.bg_fill = theme::ACCENT.gamma_multiply(0.5);
             for widget in [
@@ -266,7 +292,7 @@ impl<N: egui::emath::Numeric> Widget for Number<'_, N> {
             if let Some(decimals) = self.max_decimals {
                 number = number.max_decimals(decimals);
             }
-            let mut response = ui.add(number);
+            let mut response = fixed_size(ui, self.size, number);
             wheel_value(
                 ui,
                 &mut response,
@@ -344,6 +370,7 @@ pub struct Slider<'a, N> {
     suffix: String,
     logarithmic: bool,
     percentage: bool,
+    value_size: egui::Vec2,
 }
 impl<'a, N: egui::emath::Numeric> Slider<'a, N> {
     pub fn new(value: &'a mut N, range: RangeInclusive<N>) -> Self {
@@ -354,6 +381,7 @@ impl<'a, N: egui::emath::Numeric> Slider<'a, N> {
             suffix: String::new(),
             logarithmic: false,
             percentage: false,
+            value_size: vec2(NUMBER_WIDTH, 22.0),
         }
     }
     pub fn text(mut self, label: impl ToString) -> Self {
@@ -373,6 +401,11 @@ impl<'a, N: egui::emath::Numeric> Slider<'a, N> {
         self.suffix = "%".into();
         self
     }
+    /// Set the numeric field width for this slider; defaults to `NUMBER_WIDTH`.
+    pub fn value_width(mut self, width: f32) -> Self {
+        self.value_size.x = width;
+        self
+    }
 }
 impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
     fn ui(self, ui: &mut Ui) -> Response {
@@ -387,10 +420,11 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
         };
         let speed = if decimals == 0 { 1.0 } else { 0.01 };
         let result = ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.set_min_height(self.value_size.y.max(ui.spacing().interact_size.y));
+            ui.spacing_mut().item_spacing.x = SLIDER_SPACING;
             if !self.label.is_empty() {
                 ui.add_sized(
-                    [82.0, 22.0],
+                    [SLIDER_LABEL_WIDTH, 22.0],
                     egui::Label::new(&self.label).halign(egui::Align::Min),
                 );
             }
@@ -468,6 +502,7 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
             let mut display = value * scale;
             let number = ui.add(
                 Number::new(&mut display)
+                    .size(self.value_size)
                     .range(range.start() * scale..=range.end() * scale)
                     .speed(speed)
                     .suffix(self.suffix)
@@ -835,7 +870,8 @@ impl<'a> Window<'a> {
                 }
                 egui::Frame::new().inner_margin(24).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 12.0;
-                    ui.spacing_mut().slider_width = (self.width - 48.0 - 152.0).max(90.0);
+                    ui.spacing_mut().slider_width =
+                        (self.width - 48.0 - SLIDER_FIELD_WIDTH).max(90.0);
                     ui.set_width(self.width - 48.0);
                     egui::ScrollArea::vertical()
                         .max_height((ctx.content_rect().height() - 98.0).max(120.0))

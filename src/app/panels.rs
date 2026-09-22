@@ -7,22 +7,35 @@ use xuan::{
 
 use super::{EditorApp, Tool, icons, theme};
 
-fn value(
-    ui: &mut egui::Ui,
-    label: &str,
-    number: &mut f32,
-    range: std::ops::RangeInclusive<f32>,
-    unit: &str,
-) -> bool {
-    ui.label(RichText::new(label).color(theme::MUTED));
-    ui.add(
-        widgets::Number::new(number)
-            .speed(1.0)
-            .range(range)
-            .suffix(unit)
-            .max_decimals(1),
-    )
-    .changed()
+const DEFAULT_VALUE_WIDTH: f32 = 74.0;
+const DEFAULT_VALUE_HEIGHT: f32 = 22.0;
+const DEFAULT_PERCENT_VALUE_WIDTH: f32 = 50.0;
+
+/// Draw a toolbar field with optional `width = ...` and `height = ...` overrides.
+macro_rules! value {
+    (@dimension $default:expr) => { $default };
+    (@dimension $default:expr, $custom:expr) => { $custom };
+    (
+        $ui:expr, $label:expr, $number:expr, $range:expr, $unit:expr
+        $(, width = $width:expr)?
+        $(, height = $height:expr)?
+        $(,)?
+    ) => {{
+        let ui = &mut *($ui);
+        ui.label(RichText::new($label).color(theme::MUTED));
+        ui.add(
+            widgets::Number::new($number)
+                .size(egui::vec2(
+                    value!(@dimension DEFAULT_VALUE_WIDTH $(, $width)?),
+                    value!(@dimension DEFAULT_VALUE_HEIGHT $(, $height)?),
+                ))
+                .speed(1.0)
+                .range($range)
+                .suffix($unit)
+                .max_decimals(1),
+        )
+        .changed()
+    }};
 }
 
 impl EditorApp {
@@ -32,7 +45,7 @@ impl EditorApp {
             .and_then(|s| xuan::operations::transform_box(&s.document, self.transforming_mask()));
         let mut changed = false;
         egui::TopBottomPanel::top("tool_options")
-            .exact_height(42.0)
+            .min_height(42.0)
             .frame(theme::frame())
             .show(ctx, |ui| {
                 ui.add_enabled_ui(self.dialog.is_none() && self.job.is_none(), |ui| {
@@ -68,14 +81,14 @@ impl EditorApp {
                                         );
                                         ui.separator();
                                         if let Some(t) = &mut transform {
-                                            changed |= value(
+                                            changed |= value!(
                                                 ui,
                                                 "X",
                                                 &mut t.x,
                                                 -1_000_000.0..=1_000_000.0,
                                                 " px",
                                             );
-                                            changed |= value(
+                                            changed |= value!(
                                                 ui,
                                                 "Y",
                                                 &mut t.y,
@@ -83,21 +96,27 @@ impl EditorApp {
                                                 " px",
                                             );
                                             let old = *t;
-                                            if value(ui, "W", &mut t.width, 1.0..=300_000.0, " px") {
+                                            if value!(ui, "W", &mut t.width, 1.0..=300_000.0, " px") {
                                                 if self.lock_ratio {
                                                     t.height *= t.width / old.width;
                                                 }
                                                 changed = true;
                                             }
-                                            if value(ui, "H", &mut t.height, 1.0..=300_000.0, " px") {
+                                            if value!(ui, "H", &mut t.height, 1.0..=300_000.0, " px") {
                                                 if self.lock_ratio {
                                                     t.width *= t.height / old.height;
                                                 }
                                                 changed = true;
                                             }
                                             widgets::checkbox(ui, &mut self.lock_ratio, "Link");
-                                            changed |=
-                                                value(ui, "Angle", &mut t.rotation, -360.0..=360.0, "°");
+                                            changed |= value!(
+                                                ui,
+                                                "Angle",
+                                                &mut t.rotation,
+                                                -360.0..=360.0,
+                                                "°",
+                                                width = DEFAULT_PERCENT_VALUE_WIDTH,
+                                            );
                                         } else {
                                             ui.label(
                                                 RichText::new("Select a layer to transform")
@@ -140,13 +159,14 @@ impl EditorApp {
                                                 &[(false, "This Layer"), (true, "All Layers")],
                                             );
                                         }
-                                        value(ui, "Size", &mut self.brush.diameter, 1.0..=2000.0, " px");
+                                        value!(ui, "Size", &mut self.brush.diameter, 1.0..=2000.0, " px", width = 62.0);
                                         ui.label("Hardness");
                                         ui.add(
                                             widgets::Slider::new(
                                                 &mut self.brush.hardness,
                                                 0.0..=1.0,
                                             )
+                                            .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
                                             .percentage(),
                                         );
                                         ui.label("Opacity");
@@ -155,6 +175,7 @@ impl EditorApp {
                                                 &mut self.brush.opacity,
                                                 0.01..=1.0,
                                             )
+                                            .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
                                             .percentage(),
                                         );
                                         widgets::color_well(ui, &mut self.brush.color);
@@ -190,6 +211,7 @@ impl EditorApp {
                                                 ui.label("Tolerance");
                                                 ui.add(
                                                     widgets::Number::new(&mut self.tolerance)
+                                                        .size(egui::vec2(DEFAULT_PERCENT_VALUE_WIDTH, DEFAULT_VALUE_HEIGHT))
                                                         .range(0..=255),
                                                 );
                                                 widgets::checkbox(
@@ -217,6 +239,7 @@ impl EditorApp {
                                                 &mut self.brush.opacity,
                                                 0.0..=1.0,
                                             )
+                                            .value_width(50.0)
                                             .percentage(),
                                         );
                                     }
@@ -234,7 +257,7 @@ impl EditorApp {
                                         ui.label("Fill");
                                         widgets::color_well(ui, &mut self.brush.color);
                                         if self.shape_kind == ShapeKind::RoundedRectangle {
-                                            value(
+                                            value!(
                                                 ui,
                                                 "Radius",
                                                 &mut self.corner_radius,

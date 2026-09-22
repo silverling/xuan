@@ -12,7 +12,13 @@ use super::{develop::Develop, theme, widgets};
 fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: RangeInclusive<f32>, unit: &str) {
     ui.horizontal(|ui| {
         ui.add_sized([105.0, 20.0], egui::Label::new(label));
-        ui.add(
+        ui.spacing_mut().interact_size = vec2(widgets::NUMBER_WIDTH, 22.0);
+        let field_width = widgets::NUMBER_WIDTH + ui.spacing().item_spacing.x;
+        ui.spacing_mut().slider_width = (ui.available_width() - field_width).max(40.0);
+        let size = vec2(ui.spacing().slider_width + field_width, 22.0);
+        widgets::fixed_size(
+            ui,
+            size,
             egui::Slider::new(value, range)
                 .clamping(egui::SliderClamping::Edits)
                 .suffix(unit)

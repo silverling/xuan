@@ -732,7 +732,8 @@ impl EditorApp {
                             }
                         });
                     if self.export_format == "jpg" {
-                        ui.spacing_mut().slider_width = (ui.available_width() - 164.0).max(90.0);
+                        ui.spacing_mut().slider_width =
+                            (ui.available_width() - widgets::SLIDER_FIELD_WIDTH).max(90.0);
                         self.export_changed |= ui
                             .add(
                                 widgets::Slider::new(&mut self.jpeg_quality, 1..=100)

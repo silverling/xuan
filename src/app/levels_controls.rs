@@ -77,8 +77,7 @@ fn field(
         |ui| {
             ui.spacing_mut().item_spacing.y = 5.0;
             ui.label(egui::RichText::new(label).size(11.0).color(theme::MUTED));
-            ui.add_sized(
-                [80.0, 22.0],
+            ui.add(
                 widgets::Number::new(value)
                     .range(range)
                     .max_decimals(decimals)
