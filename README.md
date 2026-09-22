@@ -1,8 +1,8 @@
 # Xuan
 
-A native Linux image editor for layered compositions, photo retouching, and Nikon RAW development.
+A native image editor for layered compositions, photo retouching, and Nikon RAW development on Linux and Windows.
 
-This project is inspired by [Compositor](https://github.com/robbietilton/Compositor) and is a Rust port of its core features for supporting Linux. It is a work in progress, and the current release is a demo with basic functionality.
+This project is inspired by [Compositor](https://github.com/robbietilton/Compositor) and is a Rust port of its core features for Linux and Windows. It is a work in progress, and the current release is a demo with basic functionality.
 
 ![Xuan editing a layered composition](docs/screenshots/editor.png)
 
@@ -16,13 +16,13 @@ This project is inspired by [Compositor](https://github.com/robbietilton/Composi
 
 ## Get started
 
-Download a `.deb`, `.rpm`, or portable archive from [Releases](https://github.com/silverling/xuan/releases). Follow the [installation instructions](docs/USAGE.md#install-and-launch), then launch the demo:
+Download a Linux `.deb`, `.rpm`, portable archive, or Windows `.zip` from [Releases](https://github.com/silverling/xuan/releases). Follow the [installation instructions](docs/USAGE.md#install-and-launch), then launch the demo:
 
 ```sh
 xuan --demo
 ```
 
-Xuan supports Wayland and X11 and requires working Vulkan drivers. See the [user guide](docs/USAGE.md) for installation, file formats, and editing tools. To build from source, follow the [development guide](docs/DEVELOPMENT.md).
+On Windows, extract the ZIP and launch `xuan.exe`. Windows uses DirectX 12 or Vulkan; Linux supports Wayland and X11 with working Vulkan drivers. See the [user guide](docs/USAGE.md) for installation, file formats, and editing tools. To build from source, follow the [development guide](docs/DEVELOPMENT.md).
 
 [Keyboard shortcuts](docs/SHORTCUTS.md) · [RAW workflow](docs/RAW.md) · [Project format](docs/FORMAT.md)
 

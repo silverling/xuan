@@ -1,8 +1,10 @@
 # Xuan
 
-A native Linux image editor for layered compositions, photo retouching, and Nikon RAW development.
+A native image editor for layered compositions, photo retouching, and Nikon RAW development on Linux and Windows.
 
-Launch Xuan from your application menu or run `xuan --demo` to explore a sample composition. In a portable archive, run `bin/xuan` directly or use `scripts/install.sh` to install under `~/.local`.
+On Windows, extract the entire ZIP and double-click `xuan.exe`, or run `.\xuan.exe --demo` in PowerShell to explore a sample composition.
+
+On Linux, launch Xuan from your application menu or run `xuan --demo`. In a portable Linux archive, run `bin/xuan` directly or use `scripts/install.sh` to install under `~/.local`.
 
 - [Installation and editing](../docs/USAGE.md)
 - [Keyboard shortcuts](../docs/SHORTCUTS.md)

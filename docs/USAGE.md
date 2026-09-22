@@ -2,9 +2,29 @@
 
 ## Install and launch
 
-Xuan runs on Linux with Wayland or X11 and working Vulkan drivers. Mesa software Vulkan can also run the editor. Native file dialogs use the desktop portal; install the portal backend for your desktop if dialogs do not appear.
+Xuan runs on Windows 10/11 (x86_64) with DirectX 12 or Vulkan, and on Linux with Wayland or X11 and working Vulkan drivers. Mesa software Vulkan can also run the editor. On Linux, native file dialogs use the desktop portal; install the portal backend for your desktop if dialogs do not appear.
 
-Download the package for your distribution from [Releases](https://github.com/silverling/xuan/releases). GitHub releases provide x86_64 builds.
+Download the package for your operating system from [Releases](https://github.com/silverling/xuan/releases). GitHub releases provide x86_64 builds.
+
+### Windows
+
+Extract `xuan-<version>-windows-x86_64.zip` into a writable folder and double-click `xuan.exe`. To open a sample composition or specific files from PowerShell:
+
+```powershell
+.\xuan.exe --demo
+.\xuan.exe photograph.png composition.xuan
+```
+
+The portable package needs no installer or administrator access. Keep the accompanying `share` directory for documentation and licenses. To remove the application, delete the extracted folder. Releases are unsigned.
+
+To verify a download in PowerShell, compare the hash to the matching `.sha256` file:
+
+```powershell
+Get-FileHash .\xuan-<version>-windows-x86_64.zip -Algorithm SHA256
+Get-Content .\xuan-<version>-windows-x86_64.zip.sha256
+```
+
+### Linux
 
 On Debian or Ubuntu, install the downloaded `.deb` with APT so runtime dependencies are installed too:
 
@@ -29,7 +49,9 @@ scripts/install.sh                 # installs under ~/.local
 
 The installer adds a desktop launcher, icons, and the `.xuan` file association. Use `scripts/install.sh /custom/prefix` to choose another location, and add the installation prefix's `bin` directory to `PATH`. You can also run `bin/xuan` directly from the extracted archive.
 
-Each download has a matching `.sha256` file. From the download directory, verify it with `sha256sum --check <package-file>.sha256`.
+Each Linux download has a matching `.sha256` file. From the download directory, verify it with `sha256sum --check <package-file>.sha256`.
+
+### Sources and documentation
 
 The separate `xuan-<version>-source.tar.gz` download is for rebuilding the application. The binary packages include a `SOURCES.md` notice under `share/doc/xuan` (`/usr/share/doc/xuan` for Debian/RPM installations) with a link to the matching source release.
 
@@ -40,7 +62,7 @@ xuan --demo
 xuan photograph.png composition.xuan
 ```
 
-To compile the application or produce a release archive, see the [development guide](DEVELOPMENT.md). Archives built on newer distributions may require a newer glibc; build from source on your target distribution if needed.
+To compile the application or produce a release archive, see the [development guide](DEVELOPMENT.md). Linux archives built on newer distributions may require a newer glibc; build from source on your target distribution if needed.
 
 ## Workspace
 
@@ -86,9 +108,9 @@ shown as children when a project is opened. Save as `.xuan` to preserve the stac
 
 ## Files and export
 
-Use **File → Open Compositor Project…** to import an original `.comp` folder package. Save it as `.xuan` to keep editing on Linux. Image export supports PNG, JPEG, TIFF, and WebP; JPEG has a quality preview and PNG/JPEG carry print resolution.
+Use **File → Open Compositor Project…** to import an original `.comp` folder package. Save it as `.xuan` to keep editing in Xuan. Image export supports PNG, JPEG, TIFF, and WebP; JPEG has a quality preview and PNG/JPEG carry print resolution.
 
-HEIC/HEIF import uses the optional `heif-convert` executable from `libheif-examples`. Nikon NEF/NRW import uses the bundled Rawler library and needs no external converter. Other image formats are decoded directly in Rust. See the [project format](FORMAT.md) for details about saved documents.
+HEIC/HEIF import uses the optional `heif-convert` executable on `PATH` (`libheif-examples` on Linux); it is not bundled in the Windows ZIP. Nikon NEF/NRW import uses the bundled Rawler library and needs no external converter. Other image formats are decoded directly in Rust. See the [project format](FORMAT.md) for details about saved documents.
 
 ## Current limits
 

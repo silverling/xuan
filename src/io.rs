@@ -74,7 +74,7 @@ pub fn import_image(path: &Path) -> Result<RgbaImage> {
             .arg(path.canonicalize()?)
             .arg(&output)
             .output()
-            .context("HEIC import requires heif-convert (install the libheif-examples package)")?;
+            .context("HEIC import requires heif-convert on PATH (libheif-examples on Linux)")?;
         ensure!(
             result.status.success(),
             "HEIC conversion failed: {}",

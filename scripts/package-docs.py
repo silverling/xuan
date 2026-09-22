@@ -37,7 +37,7 @@ def main():
     for relative, name in DOCUMENTS.items():
         source = ROOT / relative
 
-        def rewrite_link(match):
+        def rewrite_link(match, source=source):
             target = urlsplit(match[2])
             if target.scheme or target.netloc or not target.path:
                 return match[0]
@@ -49,8 +49,10 @@ def main():
                 destination += f"#{target.fragment}"
             return f"{match[1]}{destination})"
 
-        content = re.sub(r"(\[[^\]]*\]\()([^)]+)\)", rewrite_link, source.read_text())
-        (args.destination / name).write_text(content)
+        content = re.sub(
+            r"(\[[^\]]*\]\()([^)]+)\)", rewrite_link, source.read_text(encoding="utf-8")
+        )
+        (args.destination / name).write_text(content, encoding="utf-8", newline="\n")
 
     archive = f"xuan-{args.version}-source.tar.gz"
     (args.destination / "SOURCES.md").write_text(
@@ -65,12 +67,16 @@ def main():
         "To rebuild or relink with a modified Rawler, extract the archive into a writable "
         f"directory, enter `xuan-{args.version}-source`, edit `vendor/rawler` if desired, "
         "and run `cargo build --release --locked`. Build prerequisites and further "
-        "instructions are in `docs/DEVELOPMENT.md` inside the source archive.\n"
+        "instructions are in `docs/DEVELOPMENT.md` inside the source archive.\n",
+        encoding="utf-8",
+        newline="\n",
     )
     (args.destination / "copyright").write_text(
-        (ROOT / "LICENSE").read_text()
+        (ROOT / "LICENSE").read_text(encoding="utf-8")
         + "\nDependency licenses are under share/licenses/xuan in this installation.\n\n"
-        + (args.destination / "THIRD_PARTY.md").read_text()
+        + (args.destination / "THIRD_PARTY.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+        newline="\n",
     )
 
 

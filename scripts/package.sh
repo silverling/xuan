@@ -44,36 +44,7 @@ install -m755 scripts/install.sh "$xuan_stage/scripts/"
 chmod -R u=rwX,go=rX "$xuan_stage"
 
 # Distribute matching rebuildable sources alongside every binary format.
-xuan_source_name="xuan-${xuan_version}-source"
-xuan_source="$xuan_temporary/$xuan_source_name"
-mkdir -p "$xuan_source"
-tar --exclude='*.env' --exclude='__pycache__' --exclude='*.pyc' --exclude='.git' \
-    -cf - src assets vendor licenses scripts packaging docs .github |
-    tar -xf - -C "$xuan_source"
-install -m644 Cargo.toml Cargo.lock LICENSE README.md THIRD_PARTY.md "$xuan_source/"
-xuan_host=$(rustc -vV | sed -n 's/^host: //p')
-xuan_rawler_manifest=$(cargo metadata --locked --format-version 1 --filter-platform "$xuan_host" |
-    python3 -c 'import json, sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "rawler"))')
-mkdir -p "$xuan_source/vendor/rawler"
-cp -R "$(dirname -- "$xuan_rawler_manifest")/." "$xuan_source/vendor/rawler/"
-python3 - "$xuan_source/Cargo.toml" <<'PYTHON'
-import sys
-import tomllib
-from pathlib import Path
-
-manifest = Path(sys.argv[1])
-text = manifest.read_text()
-if "rawler" not in tomllib.loads(text).get("patch", {}).get("crates-io", {}):
-    text = text.replace('[patch.crates-io]\n', '[patch.crates-io]\nrawler = { path = "vendor/rawler" }\n', 1)
-manifest.write_text(text)
-PYTHON
-# Resolve the path patch now so recipients can rebuild with --locked.
-cargo metadata --offline --format-version 1 --filter-platform "$xuan_host" \
-    --manifest-path "$xuan_source/Cargo.toml" > /dev/null
-tar -C "$xuan_temporary" -czf "dist/$xuan_source_name.tar.gz" "$xuan_source_name"
-chmod 644 "dist/$xuan_source_name.tar.gz"
-(cd dist && sha256sum "$xuan_source_name.tar.gz" > "$xuan_source_name.tar.gz.sha256")
-printf 'Created %s/dist/%s.tar.gz\n' "$xuan_root" "$xuan_source_name"
+python3 scripts/package-source.py
 if [[ "$xuan_format" == archive || "$xuan_format" == all ]]; then
     tar -C "$xuan_temporary" -czf "dist/$xuan_name.tar.gz" "$xuan_name"
     chmod 644 "dist/$xuan_name.tar.gz"

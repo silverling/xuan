@@ -49,6 +49,7 @@ fn native_file_paths(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
             {
                 path = PathBuf::from(text);
             }
+            #[cfg(unix)]
             if let Ok(local) = path.strip_prefix("localhost") {
                 path = PathBuf::from("/").join(local);
             }
@@ -214,6 +215,7 @@ impl EditorApp {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn file_lists_decode_local_uris_and_file_manager_headers() {
         let paths = file_paths(
@@ -234,14 +236,13 @@ mod tests {
     }
 
     #[test]
-    fn file_lists_reject_remote_urls_and_unrelated_text() {
+    fn file_lists_reject_unrelated_text() {
         for text in [
             "",
             "copy",
             "notes",
             "relative.png",
             "https://example.com/a.png",
-            "file://remote-host/tmp/a.png",
             "/tmp/a.png\nnotes",
         ] {
             assert!(file_paths(text).is_none(), "{text}");
@@ -254,6 +255,12 @@ mod tests {
             read_clipboard(None, Some("")).unwrap(),
             ClipboardContent::Unavailable
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_file_lists_normalize_native_uris_and_reject_remote_hosts() {
+        assert!(file_paths("file://remote-host/tmp/a.png").is_none());
         assert!(matches!(
             read_clipboard(None, Some("file:///tmp/a.png")).unwrap(),
             ClipboardContent::Files(_)
@@ -267,5 +274,40 @@ mod tests {
             [PathBuf::from("/tmp/a.png"), PathBuf::from("/tmp/b.png")]
         );
         assert!(native_file_paths(vec![PathBuf::from("remote-host/tmp/a.png")]).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_file_lists_accept_drive_paths_file_urls_and_unc_paths() {
+        let expected = [
+            PathBuf::from(r"C:\Pictures\a b.png"),
+            PathBuf::from(r"C:\Pictures\图片#.png"),
+        ];
+        assert_eq!(
+            file_paths("file:///C:/Pictures/a%20b.png\r\nfile://localhost/C:/Pictures/%E5%9B%BE%E7%89%87%23.png\r\nfile:///C:/Pictures/a%20b.png").unwrap(),
+            expected
+        );
+        assert_eq!(
+            file_paths("C:\\Pictures\\a b.png\r\nC:\\Pictures\\图片#.png").unwrap(),
+            expected
+        );
+        assert_eq!(native_file_paths(expected.to_vec()).unwrap(), expected);
+        assert!(matches!(
+            read_clipboard(None, Some("file:///C:/Pictures/a.png")).unwrap(),
+            ClipboardContent::Files(_)
+        ));
+        let network_path = PathBuf::from(r"\\server\share\a.png");
+        assert_eq!(
+            file_paths("file://server/share/a.png").unwrap(),
+            std::slice::from_ref(&network_path)
+        );
+        assert_eq!(
+            native_file_paths(vec![network_path.clone()]).unwrap(),
+            [network_path]
+        );
+        for path in [r"C:a.png", r"\Pictures\a.png", "relative.png"] {
+            assert!(file_paths(path).is_none(), "{path}");
+            assert!(native_file_paths(vec![PathBuf::from(path)]).is_err());
+        }
     }
 }

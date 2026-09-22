@@ -3,7 +3,7 @@ name = "xuan"
 version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
-description = "A native Linux image compositor, built with Rust, wgpu and egui"
+description = "A native image compositor for Linux and Windows, built with Rust, wgpu and egui"
 license = "MIT"
 
 [dependencies]
@@ -26,6 +26,9 @@ url = "2.5"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 wgpu = { version = "27.0.1", default-features = false, features = ["vulkan", "gles", "wgsl"] }
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies]
+wgpu = { version = "27.0.1", default-features = false, features = ["dx12"] }
 
 [dev-dependencies]
 pollster = "0.4"

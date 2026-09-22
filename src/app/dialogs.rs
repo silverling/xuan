@@ -93,7 +93,7 @@ impl EditorApp {
                             ui.heading("Xuan");
                             ui.label("A space for your next composition.");
                             ui.add_space(12.0);
-                            ui.label("Native Linux image editor · Rust + egui + wgpu");
+                            ui.label("Native image editor · Rust + egui + wgpu");
                             ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
                             ui.add_space(12.0);
                             ui.label("Ported from Compositor by Wonder Assembly LLC.");

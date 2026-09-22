@@ -4,7 +4,11 @@ Run the commands below from the repository root. For installation and editing, s
 
 ## Prerequisites
 
-Requires Rust **1.88+**, a C toolchain, and a Linux desktop with working Vulkan drivers. Wayland and X11 are supported; Mesa software Vulkan can also run the editor. Native file dialogs use the desktop portal, so install the portal backend for your desktop if dialogs do not appear.
+Requires Rust **1.88+** and a C toolchain.
+
+### Linux
+
+Use a Linux desktop with working Vulkan drivers. Wayland and X11 are supported; Mesa software Vulkan can also run the editor. Native file dialogs use the desktop portal, so install the portal backend for your desktop if dialogs do not appear.
 
 Typical Debian/Ubuntu prerequisites:
 
@@ -15,6 +19,10 @@ sudo apt install build-essential pkg-config libxkbcommon-dev libwayland-dev \
 
 `libheif-examples` supplies the optional `heif-convert` executable for HEIC/HEIF import. Nikon NEF/NRW import uses the bundled Rawler library and needs no external converter.
 
+### Windows
+
+Install the x86_64 MSVC Rust toolchain (`stable-x86_64-pc-windows-msvc`) and Visual Studio Build Tools with **Desktop development with C++** and a Windows SDK. Use Windows 10/11 with a DirectX 12 or Vulkan driver. Native file dialogs and the clipboard use Windows APIs. Packaging also requires Python **3.11+** on `PATH`.
+
 ## Build and run
 
 ```sh
@@ -23,7 +31,7 @@ cargo run --release --locked -- --demo
 cargo run --release --locked -- photograph.png composition.xuan
 ```
 
-To install a local build:
+To install a local Linux build:
 
 ```sh
 cargo build --release --locked
@@ -35,6 +43,17 @@ The installer adds a desktop launcher, icons, and the `.xuan` file association. 
 
 ## Packaging
 
+On Windows, run from PowerShell:
+
+```powershell
+python scripts/package-windows.py
+python scripts/check-packages.py
+```
+
+This builds `xuan-<version>-windows-x86_64.zip`, its SHA-256 checksum, and the matching source archive in `dist/`. The ZIP includes `xuan.exe` plus licenses and user guides under `share/`. The release executable uses the Windows GUI subsystem and statically links the MSVC runtime, so it opens without a console window and needs no Visual C++ redistributable. The script builds the explicit `x86_64-pc-windows-msvc` target on an x86_64 Windows host. The ZIP is unsigned and does not install file associations.
+
+On Linux:
+
 ```sh
 scripts/package.sh                 # portable archive (default)
 scripts/package.sh deb             # Debian/Ubuntu package
@@ -43,9 +62,9 @@ scripts/package.sh all             # all three binary formats and matching sourc
 python3 scripts/check-packages.py  # inspect binary packages and source archive
 ```
 
-Outputs and individual SHA-256 checksums are written to `dist/`. Every format also produces `xuan-<version>-source.tar.gz`; distribute that matching source archive alongside the binaries. Packaging requires Python **3.11+**, binutils, and the normal build prerequisites. Debian packaging additionally needs `dpkg-deb`; RPM packaging needs `rpmbuild`. On Debian/Ubuntu, install the packaging and inspection tools with `sudo apt install dpkg rpm cpio binutils desktop-file-utils`. Native x86_64 and aarch64 builds are supported; cross-compilation is not supported by these scripts.
+Outputs and individual SHA-256 checksums are written to `dist/`. Both packaging scripts also produce `xuan-<version>-source.tar.gz`; distribute that matching source archive alongside the binaries. Linux packaging requires Python **3.11+**, binutils, and the normal build prerequisites. Debian packaging additionally needs `dpkg-deb`; RPM packaging needs `rpmbuild`. On Debian/Ubuntu, install the packaging and inspection tools with `sudo apt install dpkg rpm cpio binutils desktop-file-utils`. Linux packaging supports native x86_64 and aarch64 builds. The packaging scripts do not support cross-compilation.
 
-A portable archive includes `bin/xuan`, `scripts/install.sh`, and a `share/` directory for desktop integration, icons, licenses, and user guides. It can run directly after extraction. Debian and RPM packages install the same application files under `/usr`. Binary packages omit source code, CI workflows, original artwork, development guides, and screenshots. Their `share/doc/xuan/SOURCES.md` notice points to the exact source download; links to development documentation point to the release's repository tag.
+A portable Linux archive includes `bin/xuan`, `scripts/install.sh`, and a `share/` directory for desktop integration, icons, licenses, and user guides. It can run directly after extraction. Debian and RPM packages install the same application files under `/usr`. Binary packages omit source code, CI workflows, original artwork, development guides, and screenshots. Their `share/doc/xuan/SOURCES.md` notice points to the exact source download; links to development documentation point to the release's repository tag.
 
 The separate source archive contains the application and build assets, the patched egui-winit sources, and the exact Rawler sources. Its manifest and lockfile use the bundled Rawler directory so `cargo build --release --locked` works after extraction. Other dependencies are downloaded from the Cargo registry. See [third-party notices](../THIRD_PARTY.md).
 
@@ -55,7 +74,7 @@ Build on the oldest distribution you intend to support. The locally produced arc
 
 ## GitHub releases
 
-The [release workflow](../.github/workflows/release.yml) runs when a `v*` tag is pushed. It rejects tags that do not match the package version in `Cargo.toml`, then runs the shared Linux checks, builds all three x86_64 packages and the matching source archive on Ubuntu 24.04, verifies their contents and checksums, and tests Debian installation, native startup, and removal. Package checks reject development files in binary payloads and verify the source archive's vendored dependencies and resolved lockfile.
+The [release workflow](../.github/workflows/release.yml) runs when a `v*` tag is pushed. It rejects tags that do not match the package version in `Cargo.toml`, then runs the shared Linux and Windows checks. Linux builds all three x86_64 packages and the matching source archive on Ubuntu 24.04 and tests Debian installation, native startup, and removal. The [Windows workflow](../.github/workflows/windows.yml) runs on Windows Server 2022, builds the portable MSVC x86_64 ZIP, verifies its payload and checksums, and launches the packaged application with DirectX 12 to capture a demo screenshot. Both jobs must pass before publishing. Package checks reject development files in binary payloads and verify the source archive's vendored dependencies and resolved lockfile.
 
 To release, update the version in `Cargo.toml` and the `xuan` entry in `Cargo.lock`, commit the changes, then create and push the matching tag. For example, for version `0.2.0`:
 
@@ -64,7 +83,7 @@ git tag -a v0.2.0 -m 'Release v0.2.0'
 git push origin v0.2.0
 ```
 
-After validation succeeds, [changelogithub](https://github.com/antfu-collective/changelogithub) generates release notes from conventional commits. The GitHub CLI uploads the three binary packages, matching source archive, and all four checksums. Missing artifacts fail the workflow before publication; retries replace matching assets and upload failures fail the workflow. The workflow fetches the full Git history and uses pinned changelogithub **15.0.5** with Node.js 24. Only the publishing job receives `contents: write`; it uses the built-in `GITHUB_TOKEN` and needs no separate release secret. Prerelease tags such as `v0.2.0-rc.1` are marked as GitHub prereleases.
+After validation succeeds, [changelogithub](https://github.com/antfu-collective/changelogithub) generates release notes from conventional commits. The GitHub CLI uploads the three Linux binary packages, Windows ZIP, matching source archive, and all five checksums. Missing artifacts fail the workflow before publication; retries replace matching assets and upload failures fail the workflow. The workflow fetches the full Git history and uses pinned changelogithub **15.0.5** with Node.js 24. Only the publishing job receives `contents: write`; it uses the built-in `GITHUB_TOKEN` and needs no separate release secret. Prerelease tags such as `v0.2.0-rc.1` are marked as GitHub prereleases.
 
 Preview release notes locally without publishing:
 
@@ -89,6 +108,15 @@ This requires ImageMagick 7. The generated transparent PNGs cover sizes from 16 
 ```sh
 scripts/check.sh          # formatting, Clippy, engine and UI tests
 scripts/check.sh --gpu    # also compares wgpu output against the CPU reference
+```
+
+On Windows, run the equivalent checks in PowerShell:
+
+```powershell
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
+cargo test --locked --package egui-winit --lib clipboard_paste
 ```
 
 The GPU checks require a working graphics environment. CI also validates the desktop entry, builds the release archive, and runs native screenshot and clipboard checks under Xvfb. See [implementation and verification notes](PORTING.md) for the architecture and recorded results.
