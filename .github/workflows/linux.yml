@@ -19,7 +19,7 @@ jobs:
       - name: Install Linux libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libvulkan1 mesa-vulkan-drivers libheif-examples desktop-file-utils xvfb dpkg rpm cpio binutils
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libvulkan1 mesa-vulkan-drivers desktop-file-utils xvfb dpkg rpm cpio binutils
       - name: Set up Rust
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy

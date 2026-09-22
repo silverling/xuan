@@ -718,7 +718,7 @@ impl EditorApp {
                 "Images and Xuan projects",
                 &[
                     "xuan", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "heic",
-                    "heif", "nef", "nrw",
+                    "heif", "hif", "nef", "nrw",
                 ],
             )
             .pick_files()

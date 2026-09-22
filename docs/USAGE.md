@@ -110,7 +110,7 @@ shown as children when a project is opened. Save as `.xuan` to preserve the stac
 
 Use **File → Open Compositor Project…** to import an original `.comp` folder package. Save it as `.xuan` to keep editing in Xuan. Image export supports PNG, JPEG, TIFF, and WebP; JPEG has a quality preview and PNG/JPEG carry print resolution.
 
-HEIC/HEIF import uses the optional `heif-convert` executable on `PATH` (`libheif-examples` on Linux); it is not bundled in the Windows ZIP. Nikon NEF/NRW import uses the bundled Rawler library and needs no external converter. Other image formats are decoded directly in Rust. See the [project format](FORMAT.md) for details about saved documents.
+HEIC/HEIF photos (`.heic`, `.heif`, and `.hif`, including uppercase extensions) open directly on Linux and Windows using the bundled decoder. Use File → Open, import as a layer, or drag a photo into the editor. The primary still image is imported, including tiled images and container rotation/mirroring; sequences and unsupported HEVC coding features report an error. Images use the editor's 8-bit raster pipeline and are limited to 512 MiB per file, 30,000 pixels per side, and 100 megapixels. Saved `.xuan` projects embed the decoded pixels, so the original HEIC file is no longer required. HEIC export is not supported. Nikon NEF/NRW import uses the bundled Rawler library. No external converter is required for either format. See the [project format](FORMAT.md) for details about saved documents.
 
 ## Current limits
 

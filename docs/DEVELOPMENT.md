@@ -14,10 +14,10 @@ Typical Debian/Ubuntu prerequisites:
 
 ```sh
 sudo apt install build-essential pkg-config libxkbcommon-dev libwayland-dev \
-    libvulkan1 mesa-vulkan-drivers xdg-desktop-portal libheif-examples
+    libvulkan1 mesa-vulkan-drivers xdg-desktop-portal
 ```
 
-`libheif-examples` supplies the optional `heif-convert` executable for HEIC/HEIF import. Nikon NEF/NRW import uses the bundled Rawler library and needs no external converter.
+HEIC/HEIF import uses the bundled pure Rust `heic-rs` decoder on Linux and Windows. No `libheif` installation or `heif-convert` executable is required. Nikon NEF/NRW import uses the bundled Rawler library and also needs no external converter. HEIC regression fixtures are included in `src/io/fixtures`; `cargo test --locked heif` covers decoding, orientation, limits, and project persistence, and `cargo test --locked heic_opens` covers document/layer import.
 
 ### Windows
 

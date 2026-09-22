@@ -127,7 +127,7 @@ def build_deb(payload, output, version, architecture, glibc):
         "Maintainer: Silver Ling <silver.ling@outlook.com>\n"
         "Homepage: https://github.com/silverling/xuan\n"
         f"Installed-Size: {(installed_size + 1023) // 1024}\nDepends: {dependencies}\n"
-        "Recommends: xdg-desktop-portal\nSuggests: libheif-examples\n"
+        "Recommends: xdg-desktop-portal\n"
         "Description: Native Linux image editor\n"
         " Layered compositions, photo retouching, and Nikon RAW development.\n"
     )

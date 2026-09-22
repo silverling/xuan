@@ -35,6 +35,7 @@ def check_files(prefix, portable=False, windows=False):
     expected = {
         "share/licenses/xuan/LICENSE",
         "share/licenses/xuan/rawler-LGPL-2.1.txt",
+        "share/licenses/xuan/heic-rs-MIT.txt",
         "share/licenses/xuan/Inter-LICENSE.txt",
         "share/licenses/xuan/egui-winit/LICENSE-MIT",
         "share/licenses/xuan/egui-winit/LICENSE-APACHE",
@@ -138,6 +139,9 @@ def check_source(temporary):
         "vendor/rawler/Cargo.toml",
         "vendor/egui-winit/Cargo.toml",
         "assets/Xuan.png",
+        "src/io/fixtures/rgb-strips.heic",
+        "src/io/fixtures/checker-grid.heic",
+        "licenses/heic-rs-MIT.txt",
         "scripts/package.sh",
         "scripts/package-windows.py",
         "scripts/package-source.py",

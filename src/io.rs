@@ -22,6 +22,8 @@ use crate::{
 const MAX_MANIFEST: u64 = 4 * 1024 * 1024;
 const MAX_ASSET: u64 = 512 * 1024 * 1024;
 
+mod heif;
+
 #[derive(Serialize, Deserialize)]
 struct Manifest {
     format: String,
@@ -38,6 +40,9 @@ fn encode_png(image: &DynamicImage) -> Result<Vec<u8>> {
 
 fn decode_image(bytes: Vec<u8>, used: &mut u64) -> Result<DynamicImage> {
     ensure!(bytes.len() as u64 <= MAX_ASSET, "Image file is too large");
+    if heic_rs::ftyp::parse(&bytes).is_ok() {
+        return heif::decode(&bytes, used).map(DynamicImage::ImageRgba8);
+    }
     let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(30_000);
@@ -47,53 +52,41 @@ fn decode_image(bytes: Vec<u8>, used: &mut u64) -> Result<DynamicImage> {
     let mut decoder = reader.into_decoder()?;
     use image::ImageDecoder;
     let (width, height) = decoder.dimensions();
-    validate_size(width, height)?;
-    *used += u64::from(width) * u64::from(height);
-    ensure!(
-        *used <= MAX_PIXELS,
-        "Project exceeds 100 megapixels of source images"
-    );
+    reserve_pixels(width, height, used)?;
     let orientation = decoder.orientation()?;
     let mut image = DynamicImage::from_decoder(decoder)?;
     image.apply_orientation(orientation);
     Ok(image)
 }
 
+fn reserve_pixels(width: u32, height: u32, used: &mut u64) -> Result<()> {
+    validate_size(width, height)?;
+    let total = used.saturating_add(u64::from(width) * u64::from(height));
+    ensure!(
+        total <= MAX_PIXELS,
+        "Project exceeds 100 megapixels of source images"
+    );
+    *used = total;
+    Ok(())
+}
+
 pub fn import_image(path: &Path) -> Result<RgbaImage> {
     let metadata = fs::metadata(path).with_context(|| format!("Cannot read {}", path.display()))?;
     ensure!(metadata.len() <= MAX_ASSET, "Image exceeds 512 MiB");
+    let mut bytes = Vec::new();
+    File::open(path)?
+        .take(MAX_ASSET + 1)
+        .read_to_end(&mut bytes)?;
+    ensure!(bytes.len() as u64 <= MAX_ASSET, "Image exceeds 512 MiB");
     let extension = path
         .extension()
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
     if matches!(extension.as_str(), "heic" | "heif" | "hif") {
-        let temporary = tempfile::tempdir()?;
-        let output = temporary.path().join("image.png");
-        let result = std::process::Command::new("heif-convert")
-            .arg(path.canonicalize()?)
-            .arg(&output)
-            .output()
-            .context("HEIC import requires heif-convert on PATH (libheif-examples on Linux)")?;
-        ensure!(
-            result.status.success(),
-            "HEIC conversion failed: {}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-        // Collections may be emitted as image-1.png, image-2.png, and so on.
-        let mut files: Vec<_> = fs::read_dir(temporary.path())?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|e| e == "png"))
-            .collect();
-        files.sort();
-        let decoded = if output.exists() {
-            &output
-        } else {
-            files.first().context("HEIC decoder produced no image")?
-        };
-        return import_image(decoded);
+        return heif::decode(&bytes, &mut 0);
     }
-    Ok(decode_image(fs::read(path)?, &mut 0)?.to_rgba8())
+    Ok(decode_image(bytes, &mut 0)?.to_rgba8())
 }
 
 /// Persist a complete sibling temporary file, then atomically replace the destination.

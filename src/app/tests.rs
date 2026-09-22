@@ -4,6 +4,29 @@ use super::*;
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
+fn heic_opens_as_a_document_and_imports_as_an_undoable_layer() {
+    let (_, mut app) = app();
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/io/fixtures/rgb-strips.heic");
+    app.open_path(&path, false);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    let document = &app.session().unwrap().document;
+    assert_eq!((document.width, document.height), (96, 32));
+    let pixels = document.layers[0].pixels.clone();
+    let sessions = app.sessions.len();
+
+    app.open_path(&path, true);
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert_eq!(app.sessions.len(), sessions);
+    assert_eq!(app.session().unwrap().document.layers.len(), 2);
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().pixels,
+        pixels
+    );
+    app.command("undo");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+}
+
+#[test]
 fn text_tool_creates_edits_and_undoes_one_transaction() {
     let (context, mut app) = app();
     app.dimensions = [640, 480];
