@@ -4,6 +4,8 @@ Open a `.nef` or `.nrw` through File → Open, Import Image as Layer, the comman
 
 Use **Develop** to create a photo layer, or **Cancel** to leave the destination document unchanged. Double-click the RAW layer row or the image with Move selected to return to Develop. Layer → Develop RAW and the layer context menu also reopen it. A committed redevelopment is one document undo step; changes inside Develop have their own Undo/Redo. Cancelling redevelopment retains the last committed pixels and settings.
 
+Develop shares the editor's menu bar and document tabs. Each open RAW session has a **RAW** tab; switching to another tab keeps its pending adjustments, undo history, zoom, and pan in memory. Return to that tab to continue. Undo/Redo and the Fit, 100%, and zoom commands act on the active tab. Closing a RAW tab, its destination project, or the application asks before discarding pending development. Use **Develop** and save the project to retain adjustments after quitting.
+
 Save as `.xuan` to embed the original RAW bytes, shooting metadata, and all Develop adjustments. The original camera file is never modified and is not needed to reopen a saved project. Duplicates share the in-memory source but have independent settings. Moving, scaling, rotating, masking, grouping, and blending a RAW layer retain editability. Reopening a RAW processes that layer in isolation; the result returns to its existing position in the composition.
 
 Direct pixel painting and destructive filters require **Rasterize RAW Layer**, which is undoable. Paint on a separate pixel layer and use adjustment layers when you want to retain RAW editing. Merging or flattening produces ordinary pixel layers.
@@ -17,7 +19,7 @@ Direct pixel painting and destructive filters require **Rasterize RAW Layer**, w
 - **Masks:** linear and radial gradients or soft brush masks with exposure, warmth, saturation, visibility and inversion. Select a mask, enable Draw mask, and drag on the image. The brush radius/feather applies to the entire stroke collection in that mask. Up to 32 masks and 8,192 total brush points are saved with the RAW.
 - **Info:** camera, lens, oriented dimensions, decoded depth, ISO, aperture, shutter, focal length and embedded source size.
 
-The RGB histogram and clipping indicators describe the developed output. Compare Edited, Original (default development), Split, or Side by side. Drag the split divider; Alt-drag pans in Split view. In other views, drag pans and the wheel zooms. Presets can save/load validated JSON settings, including crops and masks.
+The RGB histogram and clipping indicators describe the developed output. Compare Edited, Original (default development), Split, or Side by side. Drag the split divider; Alt-drag pans in Split view. In other views, drag pans. The wheel zooms around the pointer, including either side of Side by side; horizontal wheel input or Shift+wheel pans horizontally. Presets can save/load validated JSON settings, including crops and masks.
 
 ## Precision and output
 

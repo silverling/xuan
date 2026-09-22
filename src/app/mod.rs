@@ -355,8 +355,9 @@ pub struct EditorApp {
     window_title: String,
     job: Option<jobs::Job>,
     develop: Option<develop::Develop>,
+    inactive_develop: Vec<develop::Develop>,
     raw_queue: std::collections::VecDeque<(PathBuf, develop::DevelopTarget)>,
-    develop_close_requested: bool,
+    develop_close_requested: Option<develop::DevelopClose>,
     gpu_state: Option<eframe::egui_wgpu::RenderState>,
     processor: Option<Arc<xuan::gpu::Processor>>,
     sessions: Vec<Session>,
@@ -480,8 +481,9 @@ impl EditorApp {
             window_title: String::new(),
             job: None,
             develop: None,
+            inactive_develop: Vec::new(),
             raw_queue: Default::default(),
-            develop_close_requested: false,
+            develop_close_requested: None,
             gpu_state: None,
             processor: None,
             sessions: Vec::new(),
@@ -942,8 +944,31 @@ impl EditorApp {
     }
 
     fn command(&mut self, command: &str) {
-        if self.job.is_some() || self.develop.is_some() {
+        if self.job.is_some() {
             return;
+        }
+        if let Some(develop) = &mut self.develop {
+            match command {
+                "new" | "open" | "open_clipboard" | "open_comp" => self.suspend_develop(),
+                "about" | "shortcuts" => {}
+                "close" => {
+                    self.request_develop_close(develop::DevelopClose::Tab);
+                    return;
+                }
+                "undo" | "redo" => {
+                    if develop.ready() {
+                        develop.undo(command == "redo");
+                    }
+                    return;
+                }
+                "fit" | "actual" | "zoom_in" | "zoom_out" => {
+                    if develop.ready() {
+                        develop.view_command(command);
+                    }
+                    return;
+                }
+                _ => return,
+            }
         }
         match command {
             "develop" => {
@@ -1010,7 +1035,7 @@ impl EditorApp {
                 self.dialog = Some(Dialog::Export);
                 self.export_changed = true;
             }
-            "close" => self.close_tab = Some(self.current),
+            "close" => self.request_project_close(self.current),
             "undo" | "redo" => {
                 if let Some(session) = self.session_mut() {
                     if command == "undo" {
@@ -1353,16 +1378,17 @@ impl EditorApp {
         self.poll_job();
         self.poll_develop(ctx);
         self.frames += 1;
-        if self.develop.is_some()
+        if (self.develop.is_some() || !self.inactive_develop.is_empty())
             && !self.allow_close
             && ctx.input(|i| i.viewport().close_requested())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.develop_close_requested = true;
+            self.request_develop_close(develop::DevelopClose::Window);
         }
         if ctx.input(|i| i.viewport().close_requested())
             && !self.allow_close
             && self.develop.is_none()
+            && self.inactive_develop.is_empty()
             && self.sessions.iter().any(|s| s.history.dirty())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1372,7 +1398,7 @@ impl EditorApp {
             self.close_app = true;
         }
         if self.dialog.is_none()
-            && self.develop.is_none()
+            && self.develop_close_requested.is_none()
             && self.job.is_none()
             && self.error.is_none()
             && self.close_tab.is_none()
@@ -1393,11 +1419,11 @@ impl EditorApp {
             theme::PANEL,
         );
         self.window_resize(ctx);
+        self.menus(ctx);
+        self.tabs(ctx);
         if self.develop.is_some() {
             self.develop_workspace(ctx);
         } else {
-            self.menus(ctx);
-            self.tabs(ctx);
             self.tool_options(ctx);
             self.status_bar(ctx);
             self.tool_rail(ctx);
@@ -1414,13 +1440,17 @@ impl EditorApp {
         {
             session.history.commit();
         }
-        let title = self.session().map_or("Xuan".to_owned(), |s| {
-            format!(
-                "{}{} —  Xuan",
-                s.title,
-                if s.history.dirty() { " •" } else { "" }
-            )
-        });
+        let title = if let Some(develop) = &self.develop {
+            format!("{} — Develop — Xuan", develop.title)
+        } else {
+            self.session().map_or("Xuan".to_owned(), |s| {
+                format!(
+                    "{}{} —  Xuan",
+                    s.title,
+                    if s.history.dirty() { " •" } else { "" }
+                )
+            })
+        };
         if title != self.window_title {
             self.window_title = title.clone();
             // Viewport commands request another repaint, even for an unchanged title.

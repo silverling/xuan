@@ -2,6 +2,34 @@ use egui::{Color32, FontId, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 
 use super::{EditorApp, theme};
 
+pub(super) fn title_bar(ctx: &egui::Context, id: &'static str) -> egui::TopBottomPanel {
+    egui::TopBottomPanel::top(id).exact_height(32.0).frame(
+        egui::Frame::new()
+            .fill(theme::TITLEBAR)
+            .corner_radius(egui::CornerRadius {
+                nw: theme::window_corner_radius(ctx),
+                ne: theme::window_corner_radius(ctx),
+                sw: 0,
+                se: 0,
+            })
+            .inner_margin(egui::Margin::symmetric(14, 5)),
+    )
+}
+
+pub(super) fn status_bar(ctx: &egui::Context, id: &'static str) -> egui::TopBottomPanel {
+    egui::TopBottomPanel::bottom(id).exact_height(30.0).frame(
+        egui::Frame::new()
+            .fill(theme::PANEL)
+            .corner_radius(egui::CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: theme::window_corner_radius(ctx),
+                se: theme::window_corner_radius(ctx),
+            })
+            .inner_margin(egui::Margin::symmetric(18, 4)),
+    )
+}
+
 impl EditorApp {
     pub(super) fn window_controls(&mut self, ui: &mut egui::Ui) {
         let focused = ui.input(|i| i.viewport().focused.unwrap_or(true));
@@ -53,10 +81,6 @@ impl EditorApp {
                 let stroke = Stroke::new(1.0_f32, Color32::from_black_alpha(170));
                 match index {
                     0 => {
-                        if self.develop.is_some() {
-                            self.develop_close_requested = true;
-                            continue;
-                        }
                         ui.painter().line_segment(
                             [center - vec2(2.3, 2.3), center + vec2(2.3, 2.3)],
                             stroke,
@@ -86,7 +110,9 @@ impl EditorApp {
                 match index {
                     0 => {
                         // Route through the same save/cancel flow as a window-manager close.
-                        if self.sessions.iter().any(|s| s.history.dirty()) {
+                        if self.develop.is_some() || !self.inactive_develop.is_empty() {
+                            self.request_develop_close(super::develop::DevelopClose::Window);
+                        } else if self.sessions.iter().any(|s| s.history.dirty()) {
                             if let Some(job) = &self.job {
                                 job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                             }
@@ -113,9 +139,13 @@ impl EditorApp {
             vec2(ui.available_width().max(0.0), 22.0),
             Sense::click_and_drag(),
         );
-        let title = self.session().map_or("Xuan".into(), |s| {
-            format!("{}{}", s.title, if s.history.dirty() { "  •" } else { "" })
-        });
+        let title = if let Some(develop) = &self.develop {
+            format!("{} — Develop", develop.title)
+        } else {
+            self.session().map_or("Xuan".into(), |s| {
+                format!("{}{}", s.title, if s.history.dirty() { "  •" } else { "" })
+            })
+        };
         let center = pos2(ui.ctx().content_rect().center().x, rect.center().y);
         // Keep the title centered on the window and ellipsize before it reaches the menus.
         let half_width = (center.x - rect.left()).min(rect.right() - center.x) - 12.0;

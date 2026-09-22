@@ -26,6 +26,13 @@ pub(super) enum DevelopTarget {
     Existing { document: Uuid, layer: Uuid },
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum DevelopClose {
+    Tab,
+    Document(Uuid),
+    Window,
+}
+
 enum WorkerResult {
     Loaded {
         asset: RawAsset,
@@ -54,6 +61,8 @@ pub(super) enum Compare {
 }
 
 pub(super) struct Develop {
+    pub id: Uuid,
+    pub opened: Instant,
     target: DevelopTarget,
     pub title: String,
     pub asset: Option<RawAsset>,
@@ -99,6 +108,8 @@ pub(super) struct Develop {
 impl Develop {
     fn loading(target: DevelopTarget, title: String, settings: DevelopSettings) -> Self {
         Self {
+            id: Uuid::new_v4(),
+            opened: Instant::now(),
             target,
             title,
             settings,
@@ -150,6 +161,36 @@ impl Develop {
 
     pub fn ready(&self) -> bool {
         self.full.is_some() && !self.applying && self.exporting.is_none()
+    }
+
+    pub fn view_command(&mut self, command: &str) {
+        match command {
+            "fit" => self.fit = true,
+            "actual" => {
+                if !self.full_preview {
+                    self.full_preview = true;
+                    self.changed();
+                }
+                self.fit = false;
+                self.zoom = 1.0;
+                self.pan = Vec2::ZERO;
+            }
+            "zoom_in" | "zoom_out" => {
+                self.fit = false;
+                self.zoom =
+                    (self.zoom * if command == "zoom_in" { 1.25 } else { 0.8 }).clamp(0.02, 16.0);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn targets_document(&self, id: Uuid) -> bool {
+        match self.target {
+            DevelopTarget::New => false,
+            DevelopTarget::Insert(document) | DevelopTarget::Existing { document, .. } => {
+                document == id
+            }
+        }
     }
 
     pub fn changed(&mut self) {
@@ -261,6 +302,53 @@ fn texture(ctx: &egui::Context, name: &str, pixels: &RgbaImage) -> TextureHandle
 }
 
 impl EditorApp {
+    pub(super) fn suspend_develop(&mut self) {
+        if let Some(mut develop) = self.develop.take() {
+            develop.finish_undo();
+            develop.last_brush_point = None;
+            self.inactive_develop.push(develop);
+        }
+    }
+
+    pub(super) fn activate_develop(&mut self, id: Uuid) {
+        if let Some(index) = self.inactive_develop.iter().position(|d| d.id == id) {
+            self.cancel_gesture();
+            let develop = self.inactive_develop.remove(index);
+            self.suspend_develop();
+            self.develop = Some(develop);
+        }
+    }
+
+    pub(super) fn request_develop_close(&mut self, target: DevelopClose) {
+        if self.develop.is_none()
+            && let Some(id) = self.inactive_develop.first().map(|d| d.id)
+        {
+            self.activate_develop(id);
+        }
+        if self.develop.is_some() {
+            self.develop_close_requested = Some(target);
+        }
+    }
+
+    pub(super) fn request_project_close(&mut self, index: usize) {
+        let Some(session) = self.sessions.get(index) else {
+            return;
+        };
+        let document = session.document.id;
+        let pending = self
+            .develop
+            .iter()
+            .chain(&self.inactive_develop)
+            .find(|d| d.targets_document(document))
+            .map(|d| d.id);
+        if let Some(id) = pending {
+            self.activate_develop(id);
+            self.request_develop_close(DevelopClose::Document(document));
+        } else {
+            self.close_tab = Some(index);
+        }
+    }
+
     pub(super) fn queue_raw(&mut self, path: &Path, as_layer: bool) {
         let target = if as_layer {
             self.session()
@@ -269,7 +357,9 @@ impl EditorApp {
             DevelopTarget::New
         };
         self.raw_queue.push_back((path.to_owned(), target));
-        self.poll_develop(&self.context.clone());
+        let ctx = self.context.clone();
+        self.start_next_raw(&ctx);
+        self.poll_develop(&ctx);
     }
 
     pub(super) fn start_develop_layer(&mut self, id: Uuid) {
@@ -280,6 +370,13 @@ impl EditorApp {
         let Some(session) = self.session() else {
             return;
         };
+        if let Some(pending) = self.inactive_develop.iter().find(|d| {
+            matches!(d.target, DevelopTarget::Existing { document, layer } if document == session.document.id && layer == id)
+        }) {
+            let pending = pending.id;
+            self.activate_develop(pending);
+            return;
+        }
         let Some(layer) = session.document.layers.iter().find(|l| l.id == id) else {
             return;
         };
@@ -306,7 +403,7 @@ impl EditorApp {
         self.mask_target = false;
     }
 
-    pub(super) fn poll_develop(&mut self, ctx: &egui::Context) {
+    fn start_next_raw(&mut self, ctx: &egui::Context) {
         if self.develop.is_none()
             && self.job.is_none()
             && self.dialog.is_none()
@@ -328,6 +425,13 @@ impl EditorApp {
                 loaded(asset, decoded, cancel)
             });
             self.develop = Some(develop);
+        }
+    }
+
+    pub(super) fn poll_develop(&mut self, ctx: &egui::Context) {
+        // Changing document tabs must not advance the import queue or steal focus.
+        if self.inactive_develop.is_empty() {
+            self.start_next_raw(ctx);
         }
         let Some(mut develop) = self.develop.take() else {
             return;
@@ -526,29 +630,12 @@ impl EditorApp {
         if let Some(develop) = self.develop.take() {
             develop.cancel.store(true, Ordering::Relaxed);
         }
+        self.develop_close_requested = None;
         self.status = "RAW development cancelled".into();
         self.context.request_repaint();
     }
 
     pub(super) fn develop_workspace(&mut self, ctx: &egui::Context) {
-        // Keep the state in the app while drawing window controls, so native close
-        // takes the Develop discard path even when there is no document tab yet.
-        egui::TopBottomPanel::top("develop_title")
-            .exact_height(32.0)
-            .frame(
-                egui::Frame::new()
-                    .fill(theme::TITLEBAR)
-                    .inner_margin(egui::Margin::symmetric(14, 5)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    self.window_controls(ui);
-                    ui.strong("Develop");
-                    ui.separator();
-                    ui.label(&self.develop.as_ref().unwrap().title);
-                    self.titlebar_drag(ui);
-                });
-            });
         let Some(mut d) = self.develop.take() else {
             return;
         };
@@ -558,7 +645,8 @@ impl EditorApp {
         let mut apply = false;
         let mut export = false;
         let mut cancel = false;
-        let interactive = d.ready() && !self.develop_close_requested;
+        let interactive =
+            d.ready() && self.develop_close_requested.is_none() && self.dialog.is_none();
         egui::TopBottomPanel::top("develop_toolbar")
             .exact_height(44.0)
             .frame(
@@ -571,9 +659,12 @@ impl EditorApp {
                     ui.add_enabled_ui(interactive, |ui| {
                         apply = widgets::primary_button(ui, "Develop").clicked();
                     });
-                    ui.add_enabled_ui(!self.develop_close_requested, |ui| {
-                        cancel = widgets::button(ui, "Cancel").clicked();
-                    });
+                    ui.add_enabled_ui(
+                        self.develop_close_requested.is_none() && self.dialog.is_none(),
+                        |ui| {
+                            cancel = widgets::button(ui, "Cancel").clicked();
+                        },
+                    );
                     ui.add_enabled_ui(interactive, |ui| {
                         export = widgets::button(ui, "16-bit TIFF…").clicked();
                     });
@@ -589,70 +680,57 @@ impl EditorApp {
                                 (Compare::SideBySide, "Side by side"),
                             ],
                         );
-                        ui.separator();
-                        if widgets::button(ui, "Fit").clicked() {
-                            d.fit = true;
-                        }
-                        if widgets::button(ui, "100%")
-                            .on_hover_text("Render all pixels to inspect detail at 100%")
-                            .clicked()
-                        {
-                            d.full_preview = true;
-                            d.fit = false;
-                            d.zoom = 1.0;
-                            d.pan = Vec2::ZERO;
-                        }
                         widgets::checkbox(ui, &mut d.show_clipping, "Clipping");
                     });
                 });
             });
-        egui::TopBottomPanel::bottom("develop_status")
-            .exact_height(30.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if d.receiver.is_some() {
-                        ui.spinner();
-                    }
-                    ui.label(if d.exporting.is_some() {
-                        "Exporting 16-bit TIFF…"
-                    } else if d.applying {
-                        "Developing full-resolution image…"
-                    } else if d.full.is_none() && d.error.is_none() {
-                        "Decoding RAW sensor data…"
-                    } else if d.receiver.is_some() {
-                        "Updating preview…"
-                    } else if d.picker {
-                        "Click a neutral gray area to set white balance"
-                    } else if d.draw_overlay {
-                        "Drag on the image to place the selected mask"
-                    } else if let Some(notice) = &d.notice {
-                        notice
-                    } else {
-                        "RAW embedded · 32-bit float processing · sRGB photo layer"
-                    });
-                    if let Some(asset) = &d.asset {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(format!(
-                                "{} × {} · {}",
-                                asset.metadata.width,
-                                asset.metadata.height,
-                                if d.full_preview {
-                                    "Full resolution"
-                                } else {
-                                    "Preview"
-                                }
-                            ));
-                        });
-                    }
+        super::chrome::status_bar(ctx, "develop_status").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if d.receiver.is_some() {
+                    ui.spinner();
+                }
+                ui.label(if d.exporting.is_some() {
+                    "Exporting 16-bit TIFF…"
+                } else if d.applying {
+                    "Developing full-resolution image…"
+                } else if d.full.is_none() && d.error.is_none() {
+                    "Decoding RAW sensor data…"
+                } else if d.receiver.is_some() {
+                    "Updating preview…"
+                } else if d.picker {
+                    "Click a neutral gray area to set white balance"
+                } else if d.draw_overlay {
+                    "Drag on the image to place the selected mask"
+                } else if let Some(notice) = &d.notice {
+                    notice
+                } else {
+                    "RAW embedded · 32-bit float processing · sRGB photo layer"
                 });
+                if let Some(asset) = &d.asset {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(format!(
+                            "{} × {} · {}",
+                            asset.metadata.width,
+                            asset.metadata.height,
+                            if d.full_preview {
+                                "Full resolution"
+                            } else {
+                                "Preview"
+                            }
+                        ));
+                    });
+                }
             });
+        });
         egui::SidePanel::right("develop_controls")
             .default_width(330.0)
             .width_range(330.0..=420.0)
             .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(12))
             .show(ctx, |ui| {
                 ui.add_enabled_ui(interactive, |ui| {
-                    super::develop_controls::controls(ui, &mut d);
+                    ui.push_id(d.id, |ui| {
+                        super::develop_controls::controls(ui, &mut d);
+                    });
                 });
             });
         egui::CentralPanel::default()
@@ -676,20 +754,6 @@ impl EditorApp {
                     });
                 }
             });
-        if interactive && !ctx.wants_keyboard_input() {
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Z)) {
-                d.undo(false);
-            }
-            if ctx.input_mut(|i| {
-                i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::Z)
-            }) {
-                d.undo(true);
-            }
-            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                d.picker = false;
-                d.draw_overlay = false;
-            }
-        }
         if d.settings != previous && !d.navigated_history {
             d.pending_undo.get_or_insert(previous);
             d.changed();
@@ -741,27 +805,44 @@ impl EditorApp {
         if cancel {
             self.cancel_develop();
         }
-        if self.develop_close_requested {
+        if let Some(target) = self.develop_close_requested {
             let mut discard = false;
             let mut keep = false;
             widgets::Window::new("Finish developing?").show(ctx, |ui| {
-                ui.label("Develop the image to keep your RAW adjustments in a project, or discard this Develop session.");
+                ui.label(if matches!(target, DevelopClose::Window) && !self.inactive_develop.is_empty() {
+                    "Develop the images to keep your RAW adjustments in projects, or discard all open Develop sessions."
+                } else {
+                    "Develop the image to keep your RAW adjustments in a project, or discard this Develop session."
+                });
                 ui.horizontal(|ui| {
                     keep = widgets::primary_button(ui, "Keep developing").clicked();
                     discard = widgets::button(ui, "Discard and close").clicked();
                 });
             });
             if keep {
-                self.develop_close_requested = false;
+                self.develop_close_requested = None;
             }
             if discard {
-                self.develop_close_requested = false;
                 self.cancel_develop();
-                self.raw_queue.clear();
-                if self.sessions.iter().any(|s| s.history.dirty()) {
-                    self.close_app = true;
-                } else {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                match target {
+                    DevelopClose::Tab => {}
+                    DevelopClose::Document(id) => {
+                        if let Some(index) = self.sessions.iter().position(|s| s.document.id == id)
+                        {
+                            self.request_project_close(index);
+                        }
+                    }
+                    DevelopClose::Window => {
+                        self.raw_queue.clear();
+                        for develop in self.inactive_develop.drain(..) {
+                            develop.cancel.store(true, Ordering::Relaxed);
+                        }
+                        if self.sessions.iter().any(|s| s.history.dirty()) {
+                            self.close_app = true;
+                        } else {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    }
                 }
             }
         }
@@ -802,23 +883,33 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, inter
             .max(0.01);
         d.pan = Vec2::ZERO;
     }
-    let zoom_delta = ui.input(|i| {
-        if response.hovered() {
-            i.smooth_scroll_delta.y
-        } else {
-            0.0
-        }
-    });
-    if zoom_delta != 0.0 {
+    let center = viewport.center() + vec2(if side_by_side { available.x * 0.5 } else { 0.0 }, 0.0);
+    // Both previews share a pan offset; anchor the one under the pointer.
+    let anchor = if side_by_side
+        && ui.input(|i| {
+            i.pointer
+                .hover_pos()
+                .is_some_and(|p| p.x < viewport.center().x)
+        }) {
+        center - vec2(available.x, 0.0)
+    } else {
+        center
+    };
+    if interactive
+        && super::canvas::scroll_canvas(ui, &response, anchor, &mut d.zoom, &mut d.pan, 0.02..=16.0)
+    {
         d.fit = false;
-        d.zoom = (d.zoom * (zoom_delta * 0.003).exp()).clamp(0.02, 16.0);
     }
-    let rect = Rect::from_center_size(
-        viewport.center() + d.pan + vec2(if side_by_side { available.x * 0.5 } else { 0.0 }, 0.0),
-        image_size * d.zoom,
-    );
+    let rect = Rect::from_center_size(center + d.pan, image_size * d.zoom);
     let painter = ui.painter().with_clip_rect(viewport);
-    painter.rect_filled(rect, 0.0, Color32::from_gray(50));
+    let edited_viewport = if side_by_side {
+        Rect::from_min_max(pos2(viewport.center().x, viewport.top()), viewport.max)
+    } else {
+        viewport
+    };
+    painter
+        .with_clip_rect(edited_viewport)
+        .rect_filled(rect, 0.0, Color32::from_gray(50));
     let uv = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
     let original_uv = Rect::from_min_max(
         pos2(d.settings.crop[0], d.settings.crop[1]),
@@ -838,8 +929,17 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, inter
         }
         Compare::SideBySide => {
             let original_rect = rect.translate(vec2(-available.x, 0.0));
-            painter.image(before.id(), original_rect, original_uv, Color32::WHITE);
-            painter.image(shown.id(), rect, uv, Color32::WHITE);
+            let original_viewport =
+                Rect::from_min_max(viewport.min, pos2(viewport.center().x, viewport.bottom()));
+            painter.with_clip_rect(original_viewport).image(
+                before.id(),
+                original_rect,
+                original_uv,
+                Color32::WHITE,
+            );
+            painter
+                .with_clip_rect(edited_viewport)
+                .image(shown.id(), rect, uv, Color32::WHITE);
         }
         Compare::Split => {
             painter.image(shown.id(), rect, uv, Color32::WHITE);
@@ -859,7 +959,7 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, inter
     }
     let point = response
         .interact_pointer_pos()
-        .filter(|p| rect.contains(*p))
+        .filter(|p| rect.contains(*p) && edited_viewport.contains(*p))
         .map(|p| {
             Point::new(
                 d.settings.crop[0]
@@ -949,6 +1049,7 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, inter
     if d.show_mask
         && let Some(overlay) = d.selected_overlay.and_then(|i| d.settings.overlays.get(i))
     {
+        let painter = painter.with_clip_rect(edited_viewport);
         let to_screen = |p: Point| {
             pos2(
                 rect.left()
@@ -1023,15 +1124,290 @@ mod tests {
         d
     }
 
-    fn frame(ctx: &egui::Context, app: &mut EditorApp, events: Vec<egui::Event>) {
-        let _ = ctx.run(
+    fn frame(
+        ctx: &egui::Context,
+        app: &mut EditorApp,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1280.0, 860.0))),
                 events,
                 ..Default::default()
             },
             |ctx| app.show(ctx),
+        )
+    }
+
+    fn image_rect(output: &egui::FullOutput, texture: egui::TextureId) -> Rect {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id == texture => Some(mesh.calc_bounds()),
+                _ => None,
+            })
+            .expect("Develop preview is visible")
+    }
+
+    fn click(ctx: &egui::Context, app: &mut EditorApp, pos: Pos2) {
+        frame(ctx, app, vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            frame(
+                ctx,
+                app,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+    }
+
+    fn click_text(ctx: &egui::Context, app: &mut EditorApp, label: &str) {
+        // Floating windows use their first frame to measure their contents.
+        frame(ctx, app, vec![]);
+        let output = frame(ctx, app, vec![]);
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Missing UI label: {label}"));
+        click(ctx, app, pos);
+    }
+
+    #[test]
+    fn shared_tabs_preserve_raw_sessions_and_route_menu_commands() {
+        let ctx = egui::Context::default();
+        let mut app = EditorApp::with_context(&ctx, vec![], false, None);
+        app.dimensions = [32, 24];
+        app.new_document();
+        app.sessions[0].title = "Photo".into();
+        let mut d = ready(&ctx);
+        d.undo.push(d.settings.clone());
+        d.settings.exposure = 1.25;
+        d.fit = false;
+        d.zoom = 2.0;
+        d.pan = vec2(30.0, -15.0);
+        d.panel = 1;
+        let id = d.id;
+        app.develop = Some(d);
+        // A queued RAW must not steal focus when we switch to a document.
+        app.raw_queue
+            .push_back((PathBuf::from("queued.NEF"), DevelopTarget::New));
+        click_text(&ctx, &mut app, "Photo");
+        assert!(app.develop.is_none());
+        assert_eq!(app.inactive_develop.len(), 1);
+        app.command("fill_fg");
+        frame(&ctx, &mut app, vec![]);
+        assert!(app.develop.is_none());
+        assert_eq!(app.raw_queue.len(), 1);
+        let history = app.sessions[0].history.names().count();
+        assert_eq!(history, 1);
+
+        click_text(&ctx, &mut app, "fixture.NEF · RAW");
+        let d = app.develop.as_ref().unwrap();
+        assert_eq!(d.id, id);
+        assert_eq!(d.settings.exposure, 1.25);
+        assert_eq!(d.zoom, 2.0);
+        assert_eq!(d.pan, vec2(30.0, -15.0));
+        assert_eq!(d.panel, 1);
+        click_text(&ctx, &mut app, "Edit");
+        click_text(&ctx, &mut app, "Undo RAW adjustment");
+        assert_eq!(app.develop.as_ref().unwrap().settings.exposure, 0.0);
+        assert_eq!(app.sessions[0].history.names().count(), history);
+        app.command("redo");
+        assert_eq!(app.develop.as_ref().unwrap().settings.exposure, 1.25);
+        click_text(&ctx, &mut app, "100%");
+        assert_eq!(app.develop.as_ref().unwrap().zoom, 1.0);
+        assert!(app.develop.as_ref().unwrap().full_preview);
+        click_text(&ctx, &mut app, "Fit");
+        assert!(app.develop.as_ref().unwrap().fit);
+
+        app.command("new");
+        assert!(app.develop.is_none());
+        assert!(matches!(app.dialog, Some(super::super::Dialog::New)));
+        app.dialog = None;
+        let mut second = ready(&ctx);
+        second.title = "second.NEF".into();
+        second.settings.exposure = -0.5;
+        let second_id = second.id;
+        app.develop = Some(second);
+        click_text(&ctx, &mut app, "fixture.NEF · RAW");
+        assert_eq!(app.develop.as_ref().unwrap().id, id);
+        assert_eq!(app.develop.as_ref().unwrap().settings.exposure, 1.25);
+        click_text(&ctx, &mut app, "second.NEF · RAW");
+        assert_eq!(app.develop.as_ref().unwrap().id, second_id);
+        assert_eq!(app.develop.as_ref().unwrap().settings.exposure, -0.5);
+    }
+
+    #[test]
+    fn shared_window_and_project_close_preserve_pending_raw_until_confirmed() {
+        let ctx = egui::Context::default();
+        let mut app = EditorApp::with_context(&ctx, vec![], false, None);
+        app.dimensions = [32, 24];
+        app.new_document();
+        app.sessions[0].title = "Photo".into();
+        let document = app.sessions[0].document.id;
+        let layer = app.sessions[0].document.layers[0].id;
+        let mut d = ready(&ctx);
+        d.target = DevelopTarget::Existing { document, layer };
+        d.settings.exposure = 1.25;
+        let id = d.id;
+        let cancelled = d.cancel.clone();
+        app.develop = Some(d);
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::PointerMoved(pos2(61.0, 16.0))],
         );
+        assert!(
+            app.develop_close_requested.is_none(),
+            "Hovering window controls must not close Develop"
+        );
+        click_text(&ctx, &mut app, "Photo");
+        app.command("close");
+        assert_eq!(app.develop.as_ref().unwrap().id, id);
+        assert!(
+            matches!(app.develop_close_requested, Some(DevelopClose::Document(target)) if target == document)
+        );
+        assert_eq!(app.sessions.len(), 1);
+        assert!(!cancelled.load(Ordering::Relaxed));
+        click_text(&ctx, &mut app, "Keep developing");
+        assert!(app.develop_close_requested.is_none());
+        assert_eq!(app.develop.as_ref().unwrap().settings.exposure, 1.25);
+
+        click_text(&ctx, &mut app, "Photo");
+        click(&ctx, &mut app, pos2(21.0, 16.0));
+        assert!(matches!(
+            app.develop_close_requested,
+            Some(DevelopClose::Window)
+        ));
+        assert_eq!(app.develop.as_ref().unwrap().id, id);
+        assert!(!cancelled.load(Ordering::Relaxed));
+        click_text(&ctx, &mut app, "Keep developing");
+        app.command("close");
+        assert!(matches!(
+            app.develop_close_requested,
+            Some(DevelopClose::Tab)
+        ));
+        click_text(&ctx, &mut app, "Discard and close");
+        assert!(cancelled.load(Ordering::Relaxed));
+        assert!(app.develop.is_none());
+        assert_eq!(app.sessions.len(), 1);
+    }
+
+    #[test]
+    fn develop_canvas_wheel_pans_horizontally_without_zooming() {
+        for fit in [true, false] {
+            for (delta, modifiers) in [
+                (vec2(-1.0, 0.0), egui::Modifiers::NONE),
+                (vec2(1.0, 0.0), egui::Modifiers::NONE),
+                (vec2(0.0, -1.0), egui::Modifiers::SHIFT),
+            ] {
+                let ctx = egui::Context::default();
+                let mut app = EditorApp::with_context(&ctx, vec![], false, None);
+                let mut d = ready(&ctx);
+                d.fit = fit;
+                d.zoom = 0.01;
+                let texture = d.texture.as_ref().unwrap().id();
+                app.develop = Some(d);
+                let rect = image_rect(&frame(&ctx, &mut app, vec![]), texture);
+                let pointer = rect.center();
+                frame(&ctx, &mut app, vec![egui::Event::PointerMoved(pointer)]);
+                let d = app.develop.as_ref().unwrap();
+                let (zoom, pan) = (d.zoom, d.pan);
+                frame(
+                    &ctx,
+                    &mut app,
+                    vec![egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Line,
+                        delta,
+                        modifiers,
+                    }],
+                );
+                for _ in 0..30 {
+                    frame(&ctx, &mut app, vec![]);
+                }
+                let d = app.develop.as_ref().unwrap();
+                assert_eq!(d.zoom, zoom);
+                assert_eq!(d.pan.y, pan.y);
+                assert_eq!((d.pan.x - pan.x).signum(), (delta.x + delta.y).signum());
+                assert!(!d.fit);
+                assert!(d.undo.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn develop_canvas_wheel_zoom_keeps_pointer_anchored_in_each_comparison() {
+        for (compare, original) in [
+            (Compare::Edited, false),
+            (Compare::Original, true),
+            (Compare::Split, false),
+            (Compare::SideBySide, false),
+            (Compare::SideBySide, true),
+        ] {
+            for (fit, zoom, delta) in [
+                (true, 1.0, 1.0),
+                (false, 2.0, 1.0),
+                (false, 2.0, -1.0),
+                (false, 16.0, 1.0),
+                (false, 0.02, -1.0),
+            ] {
+                let ctx = egui::Context::default();
+                let mut app = EditorApp::with_context(&ctx, vec![], false, None);
+                let mut d = ready(&ctx);
+                d.compare = compare;
+                d.fit = fit;
+                d.zoom = zoom;
+                d.pan = vec2(30.0, -15.0);
+                let texture = if original { &d.before } else { &d.texture }
+                    .as_ref()
+                    .unwrap()
+                    .id();
+                app.develop = Some(d);
+                let rect = image_rect(&frame(&ctx, &mut app, vec![]), texture);
+                let pointer = rect.lerp_inside(vec2(0.6, 0.4));
+                let point = (pointer - rect.min) / rect.size();
+                frame(&ctx, &mut app, vec![egui::Event::PointerMoved(pointer)]);
+                let old_zoom = app.develop.as_ref().unwrap().zoom;
+                frame(
+                    &ctx,
+                    &mut app,
+                    vec![egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Line,
+                        delta: vec2(0.0, delta),
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+                for _ in 0..30 {
+                    let rect = image_rect(&frame(&ctx, &mut app, vec![]), texture);
+                    let after = (pointer - rect.min) / rect.size();
+                    assert!(
+                        (after - point).length() < 0.001,
+                        "Zoom moved the image under the pointer"
+                    );
+                }
+                let d = app.develop.as_ref().unwrap();
+                if delta > 0.0 && old_zoom < 16.0 {
+                    assert!(d.zoom > old_zoom);
+                } else if delta < 0.0 && old_zoom > 0.02 {
+                    assert!(d.zoom < old_zoom);
+                } else {
+                    assert_eq!(d.zoom, old_zoom);
+                }
+                assert!(!d.fit);
+                assert!(d.undo.is_empty());
+            }
+        }
     }
 
     #[test]

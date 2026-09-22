@@ -307,61 +307,48 @@ impl EditorApp {
     }
 
     pub(super) fn status_bar(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::bottom("status_bar")
-            .exact_height(30.0)
-            .frame(
-                egui::Frame::new()
-                    .fill(theme::PANEL)
-                    .corner_radius(egui::CornerRadius {
-                        nw: 0,
-                        ne: 0,
-                        sw: theme::window_corner_radius(ctx),
-                        se: theme::window_corner_radius(ctx),
-                    })
-                    .inner_margin(egui::Margin::symmetric(18, 4)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if let Some(session) = self.session() {
-                        ui.label(
-                            RichText::new(format!("{:.1}%", session.zoom * 100.0))
-                                .size(11.0)
-                                .color(theme::MUTED),
-                        );
-                        ui.separator();
-                        ui.label(
-                            RichText::new(format!(
-                                "{} × {} px",
-                                session.document.width, session.document.height
-                            ))
+        super::chrome::status_bar(ctx, "status_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if let Some(session) = self.session() {
+                    ui.label(
+                        RichText::new(format!("{:.1}%", session.zoom * 100.0))
                             .size(11.0)
                             .color(theme::MUTED),
-                        );
-                        ui.separator();
-                        ui.label(
-                            RichText::new("sRGB · Transparent")
+                    );
+                    ui.separator();
+                    ui.label(
+                        RichText::new(format!(
+                            "{} × {} px",
+                            session.document.width, session.document.height
+                        ))
+                        .size(11.0)
+                        .color(theme::MUTED),
+                    );
+                    ui.separator();
+                    ui.label(
+                        RichText::new("sRGB · Transparent")
+                            .size(11.0)
+                            .color(theme::MUTED),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new("Ready when you are")
+                            .size(11.0)
+                            .color(theme::MUTED),
+                    );
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(self.tool.hint())
                                 .size(11.0)
                                 .color(theme::MUTED),
-                        );
-                    } else {
-                        ui.label(
-                            RichText::new("Ready when you are")
-                                .size(11.0)
-                                .color(theme::MUTED),
-                        );
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(self.tool.hint())
-                                    .size(11.0)
-                                    .color(theme::MUTED),
-                            )
-                            .truncate(),
-                        );
-                    });
+                        )
+                        .truncate(),
+                    );
                 });
             });
+        });
     }
 
     pub(super) fn tool_rail(&mut self, ctx: &egui::Context) {

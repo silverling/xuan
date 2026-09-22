@@ -1,5 +1,5 @@
 use super::widgets;
-use std::sync::Arc;
+use std::{ops::RangeInclusive, sync::Arc};
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2, pos2, vec2};
 use xuan::{
@@ -22,6 +22,33 @@ const HANDLES: [Point; 8] = [
     Point::new(0.0, 1.0),
     Point::new(0.0, 0.5),
 ];
+
+/// Pan horizontally and zoom around the pointer using the unpanned image center.
+pub(super) fn scroll_canvas(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    center: Pos2,
+    zoom: &mut f32,
+    pan: &mut Vec2,
+    limits: RangeInclusive<f32>,
+) -> bool {
+    if !response.hovered() {
+        return false;
+    }
+    let scroll = ui.input_mut(|i| std::mem::take(&mut i.smooth_scroll_delta));
+    if scroll == Vec2::ZERO {
+        return false;
+    }
+    if scroll.y != 0.0 {
+        let new_zoom = (*zoom * (scroll.y * 0.003).exp()).clamp(*limits.start(), *limits.end());
+        if let Some(pointer) = ui.input(|i| i.pointer.hover_pos()) {
+            *pan += (pointer - center - *pan) * (1.0 - new_zoom / *zoom);
+        }
+        *zoom = new_zoom;
+    }
+    pan.x += scroll.x;
+    true
+}
 
 fn drag_transform(
     old: xuan::document::Transform,
@@ -428,19 +455,15 @@ impl EditorApp {
                             || i.pointer.button_pressed(egui::PointerButton::Middle)
                     });
                 if response.hovered() {
-                    let scroll = ctx.input_mut(|i| std::mem::take(&mut i.smooth_scroll_delta));
-                    if scroll != Vec2::ZERO {
-                        let session = &mut self.sessions[self.current];
-                        let old = session.zoom;
-                        let new = (old * (scroll.y * 0.003).exp()).clamp(0.01, 64.0);
-                        if let Some(point) = doc_point {
-                            session.pan -= (vec2(
-                                point.x - session.document.width as f32 * 0.5,
-                                point.y - session.document.height as f32 * 0.5,
-                            )) * (new - old);
-                        }
-                        session.pan.x += scroll.x;
-                        session.zoom = new;
+                    let session = &mut self.sessions[self.current];
+                    if scroll_canvas(
+                        ui,
+                        &response,
+                        viewport.center(),
+                        &mut session.zoom,
+                        &mut session.pan,
+                        0.01..=64.0,
+                    ) {
                         session.fit = false;
                     }
                     let cursor = if panning {

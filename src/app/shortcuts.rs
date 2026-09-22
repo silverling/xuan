@@ -11,6 +11,9 @@ impl EditorApp {
         // including Ctrl+Shift+C. Leave them alone when a text field has focus.
         let clipboard_commands = ctx.input_mut(|input| {
             let mut commands = Vec::new();
+            if self.develop.is_some() {
+                return commands;
+            }
             input.events.retain(|event| {
                 let command = match event {
                     Event::Copy if input.modifiers.shift => "copy_merged",
@@ -83,6 +86,16 @@ impl EditorApp {
                 self.command(command);
                 return;
             }
+        }
+        if let Some(develop) = &mut self.develop {
+            if pressed(Key::Escape) {
+                develop.picker = false;
+                develop.draw_overlay = false;
+            }
+            if pressed(Key::F1) {
+                self.command("shortcuts");
+            }
+            return;
         }
         if modifiers.ctrl {
             if pressed(Key::H) {
