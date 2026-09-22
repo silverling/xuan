@@ -407,9 +407,10 @@ mod tests {
         assert!((layer.transform.height - dimensions.1 as f32 * 0.75).abs() < 0.001);
         let mut document = Document::new(600, 300).unwrap();
         document.insert(layer);
-        let file = tempfile::NamedTempFile::new().unwrap();
-        io::save(&document, file.path()).unwrap();
-        let loaded = io::load(file.path()).unwrap();
+        // Close the destination handle so Windows can replace the file during save.
+        let path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+        io::save(&document, &path).unwrap();
+        let loaded = io::load(&path).unwrap();
         assert_eq!(loaded.active().unwrap().text, Some(style));
         assert_eq!(
             loaded.active().unwrap().pixels,
