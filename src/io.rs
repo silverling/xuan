@@ -155,6 +155,9 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
     }
     temporary.as_file().sync_all()?;
     temporary.persist(path).map_err(|error| error.error)?;
+
+    // Sync the rename on Unix; Windows cannot open directories with File::open.
+    #[cfg(unix)]
     File::open(parent)?.sync_all()?;
     Ok(())
 }
