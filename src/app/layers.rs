@@ -225,72 +225,95 @@ impl EditorApp {
                     .inner_margin(egui::Margin::symmetric(8, 8))
                     .show(ui, |ui| {
                         ui.set_min_width((width - 16.0).max(0.0));
-                        ui.horizontal(|ui| {
-                            ui.set_min_height(36.0);
-                            ui.spacing_mut().item_spacing.x = 6.0;
-                            if icons::eye(ui, layer.visible).clicked() {
-                                actions.visibility = Some(layer.id);
-                            }
-                            ui.add_space((depth as f32 * 24.0).min(72.0));
-                            if layer.group {
-                                let collapsed =
-                                    self.sessions[self.current].collapsed.contains(&layer.id);
-                                if ui.small_button(if collapsed { "▸" } else { "▾" }).clicked()
-                                {
-                                    actions.collapse = Some(layer.id);
+                        ui.allocate_ui_with_layout(
+                            vec2(ui.available_width(), 36.0),
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.set_min_height(36.0);
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                if icons::eye(ui, layer.visible).clicked() {
+                                    actions.visibility = Some(layer.id);
                                 }
-                                if icons::action_button(ui, "group").clicked() {
-                                    actions.select = Some((layer.id, false));
-                                }
-                            } else if !layer.standalone_mask {
-                                if layer.clip_to.is_some() {
-                                    ui.label(RichText::new("↳").small().color(theme::MUTED));
-                                }
-                                self.layer_thumbnail(ui, layer, false, selected, actions);
-                            }
-                            if layer.mask.is_some() {
-                                self.layer_thumbnail(ui, layer, true, selected, actions);
-                            }
-                            let color = if layer.visible {
-                                theme::TEXT
-                            } else {
-                                theme::MUTED
-                            };
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 3.0;
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(&layer.name).size(13.0).color(color),
-                                    )
-                                    .truncate()
-                                    .sense(Sense::hover()),
+                                ui.with_layout(
+                                    egui::Layout::left_to_right(egui::Align::Center),
+                                    |ui| {
+                                        ui.add_space((depth as f32 * 24.0).min(72.0));
+                                        if layer.group {
+                                            let collapsed = self.sessions[self.current]
+                                                .collapsed
+                                                .contains(&layer.id);
+                                            if icons::disclosure(ui, collapsed).clicked() {
+                                                actions.collapse = Some(layer.id);
+                                            }
+                                            if icons::action_button(ui, "group").clicked() {
+                                                actions.select = Some((layer.id, false));
+                                            }
+                                        } else if !layer.standalone_mask {
+                                            if layer.clip_to.is_some() {
+                                                ui.label(
+                                                    RichText::new("↳").small().color(theme::MUTED),
+                                                );
+                                            }
+                                            self.layer_thumbnail(
+                                                ui, layer, false, selected, actions,
+                                            );
+                                        }
+                                        if layer.mask.is_some() {
+                                            self.layer_thumbnail(
+                                                ui, layer, true, selected, actions,
+                                            );
+                                        }
+                                        let color = if layer.visible {
+                                            theme::TEXT
+                                        } else {
+                                            theme::MUTED
+                                        };
+                                        ui.vertical(|ui| {
+                                            ui.spacing_mut().item_spacing.y = 3.0;
+                                            ui.add(
+                                                egui::Label::new(
+                                                    RichText::new(&layer.name)
+                                                        .size(13.0)
+                                                        .color(color),
+                                                )
+                                                .truncate()
+                                                .sense(Sense::hover()),
+                                            );
+                                            let detail = if layer.group {
+                                                "Folder".to_owned()
+                                            } else if layer.standalone_mask {
+                                                "Mask · Layers below".to_owned()
+                                            } else if let Some(adjustment) = &layer.adjustment {
+                                                adjustment.name().to_owned()
+                                            } else if layer.raw.is_some() {
+                                                "RAW · Embedded · Double-click to develop"
+                                                    .to_owned()
+                                            } else if let Some(text) = &layer.text {
+                                                format!(
+                                                    "Text · {} · {:.0} px",
+                                                    text.family, text.size
+                                                )
+                                            } else {
+                                                format!(
+                                                    "{:.0} × {:.0} px{}",
+                                                    layer.transform.width,
+                                                    layer.transform.height,
+                                                    if layer.locked { " · Locked" } else { "" }
+                                                )
+                                            };
+                                            ui.add(
+                                                egui::Label::new(
+                                                    RichText::new(detail)
+                                                        .size(10.0)
+                                                        .color(theme::MUTED),
+                                                )
+                                                .truncate(),
+                                            );
+                                        });
+                                    },
                                 );
-                                let detail = if layer.group {
-                                    "Folder".to_owned()
-                                } else if layer.standalone_mask {
-                                    "Mask · Layers below".to_owned()
-                                } else if let Some(adjustment) = &layer.adjustment {
-                                    adjustment.name().to_owned()
-                                } else if layer.raw.is_some() {
-                                    "RAW · Embedded · Double-click to develop".to_owned()
-                                } else if let Some(text) = &layer.text {
-                                    format!("Text · {} · {:.0} px", text.family, text.size)
-                                } else {
-                                    format!(
-                                        "{:.0} × {:.0} px{}",
-                                        layer.transform.width,
-                                        layer.transform.height,
-                                        if layer.locked { " · Locked" } else { "" }
-                                    )
-                                };
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(detail).size(10.0).color(theme::MUTED),
-                                    )
-                                    .truncate(),
-                                );
-                            });
-                        });
+                            },
+                        );
                     });
             },
         );

@@ -1565,7 +1565,7 @@ fn layer_eye(context: &egui::Context, app: &mut EditorApp, name: &str) -> Pos2 {
         .find_map(|shape| match &shape.shape {
             egui::Shape::Circle(circle)
                 if circle.radius == 2.0
-                    && circle.center.x < label.x
+                    && circle.center.x > label.x
                     && (label.y..label.y + 36.0).contains(&circle.center.y) =>
             {
                 Some(circle.center)

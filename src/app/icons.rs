@@ -213,6 +213,36 @@ pub fn draw(ui: &Ui, tool: Tool, rect: Rect, color: Color32) {
     }
 }
 
+pub fn disclosure(ui: &mut Ui, collapsed: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), egui::Sense::click());
+    if response.hovered() {
+        ui.painter().rect_filled(rect, 4.0, Color32::from_gray(55));
+    }
+    let center = rect.center();
+    let offsets = if collapsed {
+        [vec2(-2.0, -4.0), vec2(2.0, 0.0), vec2(-2.0, 4.0)]
+    } else {
+        [vec2(-4.0, -2.0), vec2(0.0, 2.0), vec2(4.0, -2.0)]
+    };
+    ui.painter().add(egui::Shape::line(
+        offsets.into_iter().map(|offset| center + offset).collect(),
+        Stroke::new(1.5_f32, theme::MUTED),
+    ));
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::CollapsingHeader,
+            ui.is_enabled(),
+            !collapsed,
+            "Folder",
+        )
+    });
+    response.on_hover_text(if collapsed {
+        "Expand folder"
+    } else {
+        "Collapse folder"
+    })
+}
+
 pub fn eye(ui: &mut Ui, visible: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), egui::Sense::click());
     let c = rect.center();
