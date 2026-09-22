@@ -479,53 +479,63 @@ fn processing_brushes_coverage_and_analysis_match_cpu() {
         hardness: 0.6,
         opacity: 0.7,
         color: [137, 59, 213, 191],
+        ..Default::default()
     };
-    for mask in [false, true] {
-        for mode in [
-            PaintMode::Paint,
-            PaintMode::Erase,
-            PaintMode::Clone,
-            PaintMode::Blur,
-            PaintMode::Heal,
-            PaintMode::Smudge,
-        ] {
-            let apply = |doc: &mut Document| {
-                paint::stroke(
-                    doc,
-                    Point::new(150.0, 140.0),
-                    Point::new(167.0, 153.0),
-                    &brush,
-                    StrokeOptions {
-                        mode,
-                        mask_target: mask,
-                        source: Some(&source),
-                        clone_offset: Point::new(17.0, -13.0),
-                    },
-                )
-                .unwrap()
-            };
-            let mut expected = base.clone();
-            apply(&mut expected);
-            let mut actual = base.clone();
-            scope(Some(gpu.clone()), || apply(&mut actual));
-            if mask {
-                let a = &actual.active().unwrap().mask.as_ref().unwrap().pixels;
-                let b = &expected.active().unwrap().mask.as_ref().unwrap().pixels;
-                assert!(
-                    a.as_raw()
-                        .iter()
-                        .zip(b.as_raw())
-                        .all(|(a, b)| a.abs_diff(*b) <= 1)
-                );
-            } else {
-                compare(
-                    actual.active().unwrap().pixels.as_ref().unwrap(),
-                    expected.active().unwrap().pixels.as_ref().unwrap(),
-                    1,
-                );
+    for varying in [false, true] {
+        for mask in [false, true] {
+            for mode in [
+                PaintMode::Paint,
+                PaintMode::Erase,
+                PaintMode::Clone,
+                PaintMode::Blur,
+                PaintMode::Heal,
+                PaintMode::Smudge,
+            ] {
+                let apply = |doc: &mut Document| {
+                    paint::stroke_varying(
+                        doc,
+                        Point::new(150.0, 140.0),
+                        Point::new(167.0, 153.0),
+                        &Brush {
+                            tilt: if varying { [55.0, 30.0] } else { [0.0; 2] },
+                            diameter: if varying { 80.0 } else { brush.diameter },
+                            opacity: if varying { 0.2 } else { brush.opacity },
+                            ..brush.clone()
+                        },
+                        &brush,
+                        StrokeOptions {
+                            mode,
+                            mask_target: mask,
+                            source: Some(&source),
+                            clone_offset: Point::new(17.0, -13.0),
+                        },
+                    )
+                    .unwrap()
+                };
+                let mut expected = base.clone();
+                apply(&mut expected);
+                let mut actual = base.clone();
+                scope(Some(gpu.clone()), || apply(&mut actual));
+                if mask {
+                    let a = &actual.active().unwrap().mask.as_ref().unwrap().pixels;
+                    let b = &expected.active().unwrap().mask.as_ref().unwrap().pixels;
+                    assert!(
+                        a.as_raw()
+                            .iter()
+                            .zip(b.as_raw())
+                            .all(|(a, b)| a.abs_diff(*b) <= 1)
+                    );
+                } else {
+                    compare(
+                        actual.active().unwrap().pixels.as_ref().unwrap(),
+                        expected.active().unwrap().pixels.as_ref().unwrap(),
+                        1,
+                    );
+                }
             }
         }
     }
+
     let mut group = Layer::blank("Group", 320, 300);
     group.group = true;
     group.opacity = 0.73;

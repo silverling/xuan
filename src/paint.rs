@@ -9,6 +9,10 @@ use crate::{
     render, selection,
 };
 
+#[cfg(test)]
+#[path = "paint/tablet_tests.rs"]
+mod tablet_tests;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaintMode {
     Paint,
@@ -25,6 +29,8 @@ pub struct Brush {
     pub hardness: f32,
     pub opacity: f32,
     pub color: [u8; 4],
+    /// Pen tilt in degrees; zero produces the usual circular brush.
+    pub tilt: [f32; 2],
 }
 
 impl Default for Brush {
@@ -34,8 +40,28 @@ impl Default for Brush {
             hardness: 0.8,
             opacity: 1.0,
             color: [0, 0, 0, 255],
+            tilt: [0.0; 2],
         }
     }
+}
+
+/// Major-axis direction and minor/major radius ratio of a tilted brush.
+pub fn tilt_shape(tilt: [f32; 2]) -> (Point, f32) {
+    let length = tilt[0].hypot(tilt[1]);
+    if length < 0.001 {
+        return (Point::new(1.0, 0.0), 1.0);
+    }
+    (
+        Point::new(tilt[0] / length, tilt[1] / length),
+        length.min(75.0).to_radians().cos(),
+    )
+}
+
+pub(crate) fn brush_distance(offset: Point, radius: f32, tilt: [f32; 2]) -> f32 {
+    let (axis, aspect) = tilt_shape(tilt);
+    let along = offset.x * axis.x + offset.y * axis.y;
+    let across = (offset.y * axis.x - offset.x * axis.y) / aspect;
+    along.hypot(across) / radius.max(0.5)
 }
 
 pub fn ensure_pixels(layer: &mut Layer) -> Result<()> {
@@ -133,6 +159,19 @@ pub fn stroke(
     brush: &Brush,
     options: StrokeOptions<'_>,
 ) -> Result<()> {
+    stroke_varying(document, from, to, brush, brush, options)
+}
+
+/// Sweep a brush while interpolating size, opacity, and tilt between input samples.
+pub fn stroke_varying(
+    document: &mut Document,
+    from: Point,
+    to: Point,
+    from_brush: &Brush,
+    brush: &Brush,
+    options: StrokeOptions<'_>,
+) -> Result<()> {
+    let max_radius = (from_brush.diameter.max(brush.diameter) * 0.5).max(0.5);
     let StrokeOptions {
         mode,
         mask_target,
@@ -148,7 +187,7 @@ pub fn stroke(
     } else {
         ensure_pixels(layer)?;
         if matches!(mode, PaintMode::Paint | PaintMode::Clone) {
-            expand_stroke_bounds(layer, from, to, (brush.diameter * 0.5).max(0.5))?;
+            expand_stroke_bounds(layer, from, to, max_radius)?;
         }
     }
     let transform = if mask_target {
@@ -165,7 +204,7 @@ pub fn stroke(
     } else {
         layer.pixels.as_ref().unwrap().dimensions()
     };
-    let radius = (brush.diameter * 0.5).max(0.5);
+    let radius = max_radius;
     let min = Point::new(from.x.min(to.x) - radius, from.y.min(to.y) - radius);
     let max = Point::new(from.x.max(to.x) + radius, from.y.max(to.y) + radius);
     let local = [min, Point::new(max.x, min.y), max, Point::new(min.x, max.y)]
@@ -188,6 +227,7 @@ pub fn stroke(
         crate::gpu::Stroke {
             bounds: [left, top, right, bottom],
             endpoints: [from, to],
+            from_brush,
             brush,
             options: StrokeOptions {
                 mode,
@@ -209,11 +249,20 @@ pub fn stroke(
                 (y as f32 + 0.5) / height as f32,
             ));
             let t = if length_sq < 0.0001 {
-                0.0
+                1.0
             } else {
                 (((point.x - from.x) * dx + (point.y - from.y) * dy) / length_sq).clamp(0.0, 1.0)
             };
-            let distance = point.distance(Point::new(from.x + t * dx, from.y + t * dy)) / radius;
+            let radius =
+                ((from_brush.diameter + (brush.diameter - from_brush.diameter) * t) * 0.5).max(0.5);
+            let opacity = from_brush.opacity + (brush.opacity - from_brush.opacity) * t;
+            let tilt = [0, 1]
+                .map(|axis| from_brush.tilt[axis] + (brush.tilt[axis] - from_brush.tilt[axis]) * t);
+            let distance = brush_distance(
+                Point::new(point.x - from.x - t * dx, point.y - from.y - t * dy),
+                radius,
+                tilt,
+            );
             if distance > 1.0 {
                 continue;
             }
@@ -222,8 +271,7 @@ pub fn stroke(
             } else {
                 (1.0 - distance) / (1.0 - brush.hardness).max(0.001)
             };
-            let amount =
-                softness * brush.opacity * selection::coverage(selection.as_deref(), point);
+            let amount = softness * opacity * selection::coverage(selection.as_deref(), point);
             if amount <= 0.0 {
                 continue;
             }

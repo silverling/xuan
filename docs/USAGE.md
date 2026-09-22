@@ -87,6 +87,39 @@ to reopen its settings.
 
 See [keyboard shortcuts](SHORTCUTS.md) for tool and command bindings.
 
+### Drawing tablets
+
+Wacom, Parblo, and other tablets supported by your system's driver can draw and
+operate the interface with the pen. Linux uses native Wayland tablet-v2 or
+XInput2 on X11/XWayland. Windows uses Windows Ink; enable **Windows Ink** in the
+tablet driver's settings for Xuan. A driver that supplies only mouse events
+still works as a mouse, without pressure, tilt, or eraser identification.
+
+Pressure controls brush size by default. Open **Pen dynamics** in the painting
+toolbar to control these independently:
+
+- **Pressure: size** scales the selected brush size with pen pressure.
+- **Pressure: opacity** scales the selected opacity with pen pressure.
+- **Tilt: shape** flattens and rotates the brush footprint with the pen's tilt.
+  The cursor outline previews the footprint. This option starts disabled.
+
+These controls apply to raster painting, erasing, clone stamp, blur/smudge,
+healing, and layer masks. Missing pressure data uses the selected size and
+opacity; missing tilt data gives a circular brush. Flipping a pen with an eraser
+tip temporarily erases without changing the selected tool. Hovering does not
+paint, and lifting the tip ends the stroke as one undo step. Fast strokes retain
+intermediate pen samples and interpolate their size, opacity, and tilt.
+
+Pen buttons use the platform's secondary and middle pointer actions;
+middle-drag pans the canvas. Configure express keys and touch rings as keyboard
+shortcuts in your driver or compositor; Xuan uses its normal shortcut bindings.
+There is no separate tablet-button mapping editor. RAW Develop's local adjustment
+brushes retain their existing fixed-size behavior.
+
+No root access or direct access to `/dev/input` is needed. The tablet must first
+work in the desktop session. When reporting a problem, include the tablet model,
+driver, desktop/compositor, and whether Xuan is using Wayland, X11, or Windows Ink.
+
 ### Attached image effects
 
 An image can contain multiple masks, filters, and adjustment layers. Use its

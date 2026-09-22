@@ -130,18 +130,26 @@ fn stroke_pixels(@builtin(global_invocation_id) id: vec3<u32>) {
     let point = document_point((vec2<f32>(id.xy) + config[0].zw + 0.5) / config[11].xy);
     let delta = config[10].zw - config[10].xy;
     let length_sq = dot(delta, delta);
-    var t = 0.0;
+    var t = 1.0;
     if (length_sq >= 0.0001) {
         t = clamp(dot(point - config[10].xy, delta) / length_sq, 0.0, 1.0);
     }
-    let distance = length(point - config[10].xy - t * delta) / config[7].x;
+    let radius = mix(config[9].x, config[7].x, t);
+    let opacity = mix(config[9].y, config[7].z, t);
+    let tilt = mix(config[9].zw, config[13].xy, t);
+    let inclination = length(tilt);
+    var axis = vec2(1.0, 0.0);
+    if (inclination >= 0.001) { axis = tilt / inclination; }
+    let aspect = cos(radians(min(inclination, 75.0)));
+    let offset = point - config[10].xy - t * delta;
+    let distance = length(vec2(dot(offset, axis), dot(offset, vec2(-axis.y, axis.x)) / aspect)) / radius;
     var amount = 0.0;
     if (distance <= 1.0) {
         var softness = 1.0;
         if (distance > config[7].y) {
             softness = (1.0 - distance) / max(1.0 - config[7].y, 0.001);
         }
-        amount = softness * config[7].z * selected(point);
+        amount = softness * opacity * selected(point);
     }
     let mode = config[7].w;
     var color = config[8];
@@ -160,7 +168,7 @@ fn stroke_pixels(@builtin(global_invocation_id) id: vec3<u32>) {
                 color.a *= amount;
                 p = over(p, color);
             } else {
-                let step = select(2.0, max(config[7].x, 2.0), mode == 4.0);
+                let step = select(2.0, max(radius, 2.0), mode == 4.0);
                 color = vec4(0.0);
                 var weight = 0.0;
                 for (var y = -1; y <= 1; y++) {

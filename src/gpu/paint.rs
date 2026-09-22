@@ -167,6 +167,7 @@ pub(crate) struct Stroke<'a> {
     pub bounds: [u32; 4],
     pub endpoints: [Point; 2],
     pub brush: &'a crate::paint::Brush,
+    pub from_brush: &'a crate::paint::Brush,
     pub options: crate::paint::StrokeOptions<'a>,
 }
 
@@ -221,7 +222,12 @@ pub(crate) fn stroke(layer: &mut Layer, selection: Option<&GrayImage>, stroke: S
             mode as f32,
         ]);
         config.push(stroke.brush.color.map(|v| v as f32 / 255.0));
-        config.push([0.0; 4]);
+        config.push([
+            (stroke.from_brush.diameter * 0.5).max(0.5),
+            stroke.from_brush.opacity,
+            stroke.from_brush.tilt[0],
+            stroke.from_brush.tilt[1],
+        ]);
         config.push([
             stroke.endpoints[0].x,
             stroke.endpoints[0].y,
@@ -245,6 +251,7 @@ pub(crate) fn stroke(layer: &mut Layer, selection: Option<&GrayImage>, stroke: S
         if let Some(source) = source {
             auxiliary.extend_from_slice(source.as_raw());
         }
+        config.push([stroke.brush.tilt[0], stroke.brush.tilt[1], 0.0, 0.0]);
         gpu.simple(
             "stroke_pixels",
             SHADER,

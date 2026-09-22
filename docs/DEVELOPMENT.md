@@ -121,6 +121,22 @@ cargo test --locked --package egui-winit --lib clipboard_paste
 
 The GPU checks require a working graphics environment. CI also validates the desktop entry, builds the release archive, and runs native screenshot and clipboard checks under Xvfb. See [implementation and verification notes](PORTING.md) for the architecture and recorded results.
 
+## Tablet input checks
+
+Tablet regression checks run with `cargo test --locked tablet`. They cover native
+Wayland protocol frames through an in-process compositor, XInput valuator decoding,
+pointer/pressure conversion, focus loss and device removal, multi-sample strokes,
+eraser switching, tilt footprints, and undo. The GPU brush checks compare varying
+pressure and tilt against the CPU implementation. The Linux tablet workers use
+event-driven input and stop before eframe destroys its window; Windows intercepts
+Ink pen messages before winit's touch conversion.
+
+For hardware verification on both Linux backends and Windows, check hover, light
+and heavy strokes, fast curves, tilted strokes with **Tilt: shape** enabled, eraser
+tips, barrel-button panning, toolbar clicks, mouse switching, hot-unplug during a
+stroke, and driver-configured shortcuts. Repeat at non-default display and UI
+scales. Automated tests do not certify individual Wacom or Parblo models.
+
 ## RAW sample checks
 
 The regular test suite uses synthetic camera-linear data and small embedded-asset fixtures. Camera files are not committed to the repository. Optional tests use a local NEF:

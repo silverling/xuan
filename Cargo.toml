@@ -19,6 +19,7 @@ image = { version = "0.25.9", default-features = false, features = ["png", "jpeg
 png = "0.18"
 rawler = "=0.7.2"
 rayon = "1.11"
+raw-window-handle = "0.6"
 rfd = "0.15.4"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"
@@ -28,11 +29,24 @@ uuid = { version = "1.18", features = ["v4", "serde"] }
 wgpu = { version = "27.0.1", default-features = false, features = ["vulkan", "gles", "wgsl"] }
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+calloop = "0.13"
+calloop-wayland-source = "0.3"
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "unstable", "staging"] }
+x11rb = { version = "0.13", features = ["xinput"] }
+
 [target.'cfg(windows)'.dependencies]
 wgpu = { version = "27.0.1", default-features = false, features = ["dx12"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_Pointer", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi"] }
 
 [dev-dependencies]
 pollster = "0.4"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+wayland-server = "0.31"
+wayland-protocols = { version = "0.32", features = ["server"] }
 
 [patch.crates-io]
 # Preserve paste events when the clipboard contains an image without text.

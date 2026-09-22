@@ -14,6 +14,7 @@ mod levels_controls;
 mod menus;
 mod panels;
 mod shortcuts;
+mod tablet;
 #[cfg(test)]
 mod tests;
 mod text_controls;
@@ -315,6 +316,9 @@ struct LayerDrag {
 }
 
 struct Gesture {
+    tool: Tool,
+    brush: Brush,
+    brushes: Vec<Brush>,
     start: Point,
     last: Point,
     screen_start: Pos2,
@@ -346,6 +350,7 @@ impl Gesture {
 }
 
 pub struct EditorApp {
+    tablet: Option<tablet::TabletInput>,
     context: egui::Context,
     window_title: String,
     job: Option<jobs::Job>,
@@ -358,6 +363,12 @@ pub struct EditorApp {
     current: usize,
     tool: Tool,
     brush: Brush,
+    pressure_size: bool,
+    pressure_opacity: bool,
+    tilt_shape: bool,
+    pen_samples: Vec<tablet::Sample>,
+    pen_sample: Option<tablet::Sample>,
+    pen_stroke: bool,
     background: [u8; 4],
     mask_target: bool,
     ellipse: bool,
@@ -430,6 +441,7 @@ impl EditorApp {
         });
         app.processor = processor;
         app.gpu_state = cc.wgpu_render_state.clone();
+        app.tablet = tablet::TabletInput::new(cc);
         app
     }
 
@@ -463,6 +475,7 @@ impl EditorApp {
     ) -> Self {
         theme::apply(ctx);
         let mut app = Self {
+            tablet: None,
             context: ctx.clone(),
             window_title: String::new(),
             job: None,
@@ -475,6 +488,12 @@ impl EditorApp {
             current: 0,
             tool: Tool::Move,
             brush: Brush::default(),
+            pressure_size: true,
+            pressure_opacity: false,
+            tilt_shape: false,
+            pen_samples: Vec::new(),
+            pen_sample: None,
+            pen_stroke: false,
             background: [255; 4],
             mask_target: false,
             ellipse: false,
@@ -533,6 +552,25 @@ impl EditorApp {
             app.open_path(&path, false);
         }
         app
+    }
+
+    fn input_brush(&self) -> Brush {
+        let mut brush = self.brush.clone();
+        if self.tilt_shape {
+            brush.tilt = self
+                .pen_sample
+                .and_then(|sample| sample.tilt)
+                .unwrap_or([0.0; 2]);
+        }
+        if let Some(pressure) = self.pen_sample.and_then(|sample| sample.pressure) {
+            if self.pressure_size {
+                brush.diameter *= pressure.max(0.01);
+            }
+            if self.pressure_opacity {
+                brush.opacity *= pressure;
+            }
+        }
+        brush
     }
 
     fn session(&self) -> Option<&Session> {
@@ -775,6 +813,7 @@ impl EditorApp {
     }
 
     fn cancel_gesture(&mut self) {
+        self.pen_stroke = false;
         if let Some(gesture) = self.gesture.take()
             && !gesture.panning
             && let Some(session) = self.session_mut()
@@ -1274,6 +1313,17 @@ impl EditorApp {
 }
 
 impl eframe::App for EditorApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        if let Some(tablet) = &mut self.tablet {
+            self.pen_samples = tablet.update(ctx, input);
+        }
+    }
+
+    fn on_exit(&mut self) {
+        // Stop the tablet queue before eframe destroys its Wayland window/display.
+        self.tablet = None;
+    }
+
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         // Let the desktop show through outside the rounded client frame.
         [0.0; 4]

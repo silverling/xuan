@@ -179,6 +179,11 @@ impl EditorApp {
                                             .percentage(),
                                         );
                                         widgets::color_well(ui, &mut self.brush.color);
+                                        ui.menu_button("Pen dynamics", |ui| {
+                                            widgets::checkbox(ui, &mut self.pressure_size, "Pressure: size");
+                                            widgets::checkbox(ui, &mut self.pressure_opacity, "Pressure: opacity");
+                                            widgets::checkbox(ui, &mut self.tilt_shape, "Tilt: shape");
+                                        });
                                     }
                                     tool if tool.is_selection() => {
                                         widgets::segmented(

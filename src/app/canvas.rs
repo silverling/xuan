@@ -409,6 +409,10 @@ impl EditorApp {
                     || self.close_tab.is_some()
                     || self.rename.is_some();
                 if blocked {
+                    if self.pen_stroke {
+                        self.cancel_gesture();
+                    }
+                    self.pen_samples.clear();
                     return;
                 }
                 let pointer = response
@@ -419,7 +423,10 @@ impl EditorApp {
                 let modifiers = ctx.input(|i| i.modifiers);
                 let panning = self.tool == Tool::Hand
                     || ctx.input(|i| i.key_down(egui::Key::Space))
-                    || ctx.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+                    || ctx.input(|i| {
+                        i.pointer.button_down(egui::PointerButton::Middle)
+                            || i.pointer.button_pressed(egui::PointerButton::Middle)
+                    });
                 if response.hovered() {
                     let scroll = ctx.input_mut(|i| std::mem::take(&mut i.smooth_scroll_delta));
                     if scroll != Vec2::ZERO {
@@ -448,47 +455,97 @@ impl EditorApp {
                         egui::CursorIcon::Crosshair
                     };
                     ctx.set_cursor_icon(cursor);
-                    if self.tool.is_brush()
+                    let pen = self.tablet.as_ref().and_then(|tablet| tablet.sample());
+                    if (self.tool.is_brush() || pen.is_some_and(|sample| sample.eraser))
                         && !panning
                         && let Some(p) = pointer
                     {
-                        painter.circle_stroke(
-                            p,
-                            self.brush.diameter * zoom * 0.5,
+                        let tilt = if self.tilt_shape {
+                            pen.and_then(|sample| sample.tilt).unwrap_or([0.0; 2])
+                        } else {
+                            [0.0; 2]
+                        };
+                        let (axis, aspect) = paint::tilt_shape(tilt);
+                        let pressure = if self.pressure_size {
+                            pen.filter(|sample| {
+                                matches!(
+                                    sample.phase,
+                                    super::tablet::Phase::Down | super::tablet::Phase::Move
+                                )
+                            })
+                            .and_then(|sample| sample.pressure)
+                            .unwrap_or(1.0)
+                            .max(0.01)
+                        } else {
+                            1.0
+                        };
+                        let radius = self.brush.diameter * zoom * pressure * 0.5;
+                        let outline: Vec<_> = (0..48)
+                            .map(|i| {
+                                let angle = i as f32 * std::f32::consts::TAU / 48.0;
+                                let (sin, cos) = angle.sin_cos();
+                                p + vec2(
+                                    axis.x * cos - axis.y * sin * aspect,
+                                    axis.y * cos + axis.x * sin * aspect,
+                                ) * radius
+                            })
+                            .collect();
+                        painter.add(egui::Shape::closed_line(
+                            outline.clone(),
                             Stroke::new(2.5_f32, Color32::from_black_alpha(130)),
-                        );
-                        painter.circle_stroke(
-                            p,
-                            self.brush.diameter * zoom * 0.5,
+                        ));
+                        painter.add(egui::Shape::closed_line(
+                            outline,
                             Stroke::new(1.0_f32, Color32::WHITE),
-                        );
+                        ));
                     }
                 }
-                let started = response.drag_started()
-                    || response.drag_started_by(egui::PointerButton::Middle);
-                if started {
-                    if let (Some(screen), Some(point)) = (pointer, doc_point) {
-                        let press = ctx.input(|i| i.pointer.press_origin()).unwrap_or(screen);
-                        let start =
-                            Point::new((press.x - origin.x) / zoom, (press.y - origin.y) / zoom);
-                        self.begin_gesture(start, press, panning, hover_handle, modifiers);
+                let pen_frames = std::mem::take(&mut self.pen_samples);
+                let continuing_pan = self.gesture.as_ref().is_some_and(|gesture| gesture.panning);
+                let pen_brush = !continuing_pan
+                    && (self.pen_stroke
+                        || (!panning
+                            && (self.tool.is_brush()
+                                || pen_frames.iter().any(|sample| sample.eraser))
+                            && (self
+                                .tablet
+                                .as_ref()
+                                .and_then(|tablet| tablet.sample())
+                                .is_some()
+                                || pen_frames
+                                    .iter()
+                                    .any(|sample| sample.phase != super::tablet::Phase::Leave))));
+                if pen_brush {
+                    self.paint_pen_samples(&pen_frames, &response, canvas, ctx, modifiers);
+                } else {
+                    let started = response.drag_started()
+                        || response.drag_started_by(egui::PointerButton::Middle);
+                    if started {
+                        if let (Some(screen), Some(point)) = (pointer, doc_point) {
+                            let press = ctx.input(|i| i.pointer.press_origin()).unwrap_or(screen);
+                            let start = Point::new(
+                                (press.x - origin.x) / zoom,
+                                (press.y - origin.y) / zoom,
+                            );
+                            self.begin_gesture(start, press, panning, hover_handle, modifiers);
+                            self.update_gesture(point, screen, modifiers);
+                        }
+                    } else if self.gesture.is_some()
+                        && ctx.input(|i| i.pointer.any_down())
+                        && let (Some(screen), Some(point)) = (pointer, doc_point)
+                    {
                         self.update_gesture(point, screen, modifiers);
                     }
-                } else if self.gesture.is_some()
-                    && ctx.input(|i| i.pointer.any_down())
-                    && let (Some(screen), Some(point)) = (pointer, doc_point)
-                {
-                    self.update_gesture(point, screen, modifiers);
-                }
-                if self.gesture.is_some() && !ctx.input(|i| i.pointer.any_down()) {
-                    self.end_gesture(modifiers);
-                }
-                if response.clicked()
-                    && !panning
-                    && hover_handle.is_none()
-                    && let Some(point) = doc_point
-                {
-                    self.canvas_click(point, modifiers);
+                    if self.gesture.is_some() && !ctx.input(|i| i.pointer.any_down()) {
+                        self.end_gesture(modifiers);
+                    }
+                    if response.clicked()
+                        && !panning
+                        && hover_handle.is_none()
+                        && let Some(point) = doc_point
+                    {
+                        self.canvas_click(point, modifiers);
+                    }
                 }
                 if response.double_clicked() && self.tool == Tool::Lasso && self.polygonal {
                     self.finish_polygon();
@@ -580,6 +637,72 @@ impl EditorApp {
         if import {
             self.open_dialog(false);
         }
+    }
+
+    fn paint_pen_samples(
+        &mut self,
+        samples: &[super::tablet::Sample],
+        response: &egui::Response,
+        canvas: Rect,
+        ctx: &egui::Context,
+        modifiers: egui::Modifiers,
+    ) {
+        use super::tablet::Phase;
+        let origin = canvas.min;
+        let zoom = self.session().unwrap().zoom;
+        for sample in samples {
+            let point = Point::new(
+                (sample.position.x - origin.x) / zoom,
+                (sample.position.y - origin.y) / zoom,
+            );
+            self.pen_sample = Some(*sample);
+            match sample.phase {
+                Phase::Down
+                    if response.rect.contains(sample.position)
+                        && ctx.layer_id_at(sample.position) == Some(response.layer_id) =>
+                {
+                    let from = if modifiers.shift {
+                        self.last_brush.unwrap_or(point)
+                    } else {
+                        point
+                    };
+                    self.begin_gesture(from, sample.position, false, None, modifiers);
+                    self.pen_stroke = self.gesture.is_some();
+                    if self.pen_stroke {
+                        self.update_gesture(point, sample.position, modifiers);
+                    }
+                }
+                Phase::Move if self.pen_stroke => {
+                    self.update_gesture(point, sample.position, modifiers)
+                }
+                Phase::Up | Phase::Leave if self.pen_stroke => {
+                    // A zero pressure Up is a release, not an extra transparent dab.
+                    // Include its final position using the preceding brush state.
+                    if sample.phase == Phase::Up
+                        && self
+                            .gesture
+                            .as_ref()
+                            .is_some_and(|gesture| gesture.last.distance(point) > 0.001)
+                    {
+                        self.pen_sample = Some(super::tablet::Sample {
+                            pressure: None,
+                            tilt: self.gesture.as_ref().map(|gesture| gesture.brush.tilt),
+                            ..*sample
+                        });
+                        let brush = self.brush.clone();
+                        if let Some(gesture) = &self.gesture {
+                            self.brush = gesture.brush.clone();
+                        }
+                        self.update_gesture(point, sample.position, modifiers);
+                        self.brush = brush;
+                    }
+                    self.end_gesture(modifiers);
+                    self.pen_stroke = false;
+                }
+                _ => {}
+            }
+        }
+        self.pen_sample = None;
     }
 
     fn canvas_click(&mut self, point: Point, modifiers: egui::Modifiers) {
@@ -707,6 +830,12 @@ impl EditorApp {
         mut handle: Option<TransformDrag>,
         modifiers: egui::Modifiers,
     ) {
+        let tool = if self.pen_sample.is_some_and(|sample| sample.eraser) {
+            Tool::Erase
+        } else {
+            self.tool
+        };
+        let brush = self.input_brush();
         if self.gesture.is_some() || self.sessions.is_empty() {
             return;
         }
@@ -714,6 +843,9 @@ impl EditorApp {
             // View navigation must not start an edit or run tool-specific setup.
             let session = &self.sessions[self.current];
             self.gesture = Some(Gesture {
+                tool,
+                brush: brush.clone(),
+                brushes: vec![brush],
                 start: point,
                 last: point,
                 screen_start: screen,
@@ -728,19 +860,19 @@ impl EditorApp {
             });
             return;
         }
-        if self.tool == Tool::Text {
+        if tool == Tool::Text {
             return;
         }
-        if self.tool == Tool::Clone && modifiers.alt {
+        if tool == Tool::Clone && modifiers.alt {
             self.clone_source = Some(point);
             self.clone_offset = None;
             return;
         }
-        if self.tool == Tool::Clone && self.clone_source.is_none() {
+        if tool == Tool::Clone && self.clone_source.is_none() {
             self.status = "Alt-click on the canvas to set a clone source".into();
             return;
         }
-        if self.tool == Tool::Move && self.show_controls {
+        if tool == Tool::Move && self.show_controls {
             // The press location determines the handle, even if the pointer has moved since.
             handle = None;
             let session = &self.sessions[self.current];
@@ -770,7 +902,7 @@ impl EditorApp {
             }
         }
         let mut kind = handle.unwrap_or(TransformDrag::Move);
-        if self.tool == Tool::Move
+        if tool == Tool::Move
             && (self.auto_select || modifiers.ctrl)
             && handle.is_none()
             && !self.select_canvas_layer(point, modifiers.shift, true)
@@ -779,14 +911,14 @@ impl EditorApp {
         }
         let mask_target = self.transforming_mask();
         let session = &mut self.sessions[self.current];
-        if self.tool == Tool::Move && session.document.active.is_none() {
+        if tool == Tool::Move && session.document.active.is_none() {
             return;
         }
-        session.history.begin(self.tool.label(), &session.document);
-        if self.tool == Tool::Move && modifiers.alt {
+        session.history.begin(tool.label(), &session.document);
+        if tool == Tool::Move && modifiers.alt {
             operations::duplicate(&mut session.document);
         }
-        if self.tool.is_selection()
+        if tool.is_selection()
             && !modifiers.shift
             && (!modifiers.alt || modifiers.ctrl)
             && session
@@ -815,8 +947,8 @@ impl EditorApp {
                 kind = TransformDrag::Selection;
             }
         }
-        let source = if matches!(self.tool, Tool::Clone | Tool::Blur) {
-            if self.tool == Tool::Clone && self.clone_all {
+        let source = if matches!(tool, Tool::Clone | Tool::Blur) {
+            if tool == Tool::Clone && self.clone_all {
                 Some(Arc::new(render::render(&session.document)))
             } else {
                 let mut isolated = session.document.clone();
@@ -839,10 +971,13 @@ impl EditorApp {
                 Point::new(p.x - point.x, p.y - point.y)
             })
         });
-        if self.tool == Tool::Clone {
+        if tool == Tool::Clone {
             self.clone_offset = Some(offset);
         }
         self.gesture = Some(Gesture {
+            tool,
+            brush: brush.clone(),
+            brushes: vec![brush],
             start: point,
             last: point,
             screen_start: screen,
@@ -861,12 +996,14 @@ impl EditorApp {
         let Some(mut gesture) = self.gesture.take() else {
             return;
         };
+        let tool = gesture.tool;
+        let brush = self.input_brush();
         if gesture.panning {
             self.sessions[self.current].pan = gesture.pan_start + (screen - gesture.screen_start);
             self.gesture = Some(gesture);
             return;
         }
-        if modifiers.shift && matches!(self.tool, Tool::Shape | Tool::Marquee | Tool::Crop) {
+        if modifiers.shift && matches!(tool, Tool::Shape | Tool::Marquee | Tool::Crop) {
             let dx = point.x - gesture.start.x;
             let dy = point.y - gesture.start.y;
             let size = dx.abs().max(dy.abs());
@@ -878,8 +1015,7 @@ impl EditorApp {
         let mask_target = self.editing_mask();
         let transform_mask = self.transforming_mask();
         let session = &mut self.sessions[self.current];
-        let result = if matches!(gesture.kind, TransformDrag::Selection) && self.tool.is_selection()
-        {
+        let result = if matches!(gesture.kind, TransformDrag::Selection) && tool.is_selection() {
             if let Some(mask) = &gesture.original.selection {
                 session.document.selection = Some(Arc::new(selection::translate(
                     mask,
@@ -889,13 +1025,14 @@ impl EditorApp {
             }
             Ok(())
         } else {
-            match self.tool {
+            match tool {
                 Tool::Heal => {
                     gesture.points.push(point);
+                    gesture.brushes.push(brush.clone());
                     Ok(())
                 }
                 tool if tool.is_brush() => {
-                    let mode = match self.tool {
+                    let mode = match tool {
                         Tool::Erase => PaintMode::Erase,
                         Tool::Clone => PaintMode::Clone,
                         Tool::Heal => PaintMode::Heal,
@@ -907,11 +1044,12 @@ impl EditorApp {
                     } else {
                         gesture.clone_offset
                     };
-                    paint::stroke(
+                    paint::stroke_varying(
                         &mut session.document,
                         gesture.last,
                         point,
-                        &self.brush,
+                        &gesture.brush,
+                        &brush,
                         paint::StrokeOptions {
                             mode,
                             mask_target,
@@ -920,7 +1058,7 @@ impl EditorApp {
                         },
                     )
                 }
-                _ if self.tool == Tool::Move || matches!(gesture.kind, TransformDrag::Pixels) => {
+                _ if tool == Tool::Move || matches!(gesture.kind, TransformDrag::Pixels) => {
                     let mut dx = point.x - gesture.start.x;
                     let mut dy = point.y - gesture.start.y;
                     if modifiers.shift && matches!(gesture.kind, TransformDrag::Move) {
@@ -1061,9 +1199,8 @@ impl EditorApp {
             return;
         }
         gesture.last = point;
-        if gesture.changes_composition(self.tool)
-            && !matches!(self.tool, Tool::Gradient | Tool::Shape)
-        {
+        gesture.brush = brush;
+        if gesture.changes_composition(tool) && !matches!(tool, Tool::Gradient | Tool::Shape) {
             session.invalidate();
         }
         self.gesture = Some(gesture);
@@ -1073,14 +1210,15 @@ impl EditorApp {
         let Some(gesture) = self.gesture.take() else {
             return;
         };
+        let tool = gesture.tool;
         if gesture.panning {
             return;
         }
-        if self.tool == Tool::Heal {
+        if tool == Tool::Heal {
             let points = gesture.points;
-            let brush = self.brush.clone();
+            let brushes = gesture.brushes;
             self.start_job("Spot Healing", move |document, cancel| {
-                xuan::retouch::heal_path(document, &points, &brush, cancel)
+                xuan::retouch::heal_path_varying(document, &points, &brushes, cancel)
             });
             return;
         }
@@ -1089,15 +1227,15 @@ impl EditorApp {
         let session = &mut self.sessions[self.current];
         let start = gesture.start;
         let end = gesture.last;
-        let changes_composition = gesture.changes_composition(self.tool);
+        let changes_composition = gesture.changes_composition(tool);
         let result = if matches!(
             gesture.kind,
             TransformDrag::Selection | TransformDrag::Pixels
-        ) && self.tool.is_selection()
+        ) && tool.is_selection()
         {
             Ok(())
         } else {
-            match self.tool {
+            match tool {
                 Tool::Marquee => {
                     selection::combine(
                         &mut session.document,
@@ -1177,7 +1315,7 @@ impl EditorApp {
         }
         session.invalidate();
         self.guides.clear();
-        if self.tool.is_brush() {
+        if tool.is_brush() {
             self.last_brush = Some(end);
         }
     }

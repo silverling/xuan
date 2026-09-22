@@ -233,14 +233,27 @@ pub fn heal_path(
     brush: &Brush,
     cancel: &AtomicBool,
 ) -> Result<()> {
+    heal_path_varying(document, points, &vec![brush.clone(); points.len()], cancel)
+}
+
+pub fn heal_path_varying(
+    document: &mut Document,
+    points: &[Point],
+    brushes: &[Brush],
+    cancel: &AtomicBool,
+) -> Result<()> {
+    anyhow::ensure!(
+        points.len() == brushes.len(),
+        "Each healing sample needs a brush"
+    );
     let mut mask = GrayImage::new(document.width, document.height);
-    let radius = brush.diameter * 0.5;
-    let mut path = points.to_vec();
+    let mut path: Vec<_> = points.iter().copied().zip(brushes).collect();
     if path.len() == 1 {
         path.push(path[0]);
     }
     for segment in path.windows(2) {
-        let [a, b] = [segment[0], segment[1]];
+        let [(a, first), (b, brush)] = [segment[0], segment[1]];
+        let radius = first.diameter.max(brush.diameter) * 0.5;
         let dx = b.x - a.x;
         let dy = b.y - a.y;
         let length = (dx * dx + dy * dy).max(0.001);
@@ -252,10 +265,18 @@ pub fn heal_path(
             for x in left..right {
                 let p = Point::new(x as f32 + 0.5, y as f32 + 0.5);
                 let t = (((p.x - a.x) * dx + (p.y - a.y) * dy) / length).clamp(0.0, 1.0);
-                let distance = p.distance(Point::new(a.x + t * dx, a.y + t * dy)) / radius.max(0.5);
+                let radius = (first.diameter + (brush.diameter - first.diameter) * t) * 0.5;
+                let opacity = first.opacity + (brush.opacity - first.opacity) * t;
+                let tilt =
+                    [0, 1].map(|axis| first.tilt[axis] + (brush.tilt[axis] - first.tilt[axis]) * t);
+                let distance = crate::paint::brush_distance(
+                    Point::new(p.x - a.x - t * dx, p.y - a.y - t * dy),
+                    radius,
+                    tilt,
+                );
                 if distance <= 1.0 {
                     let amount = ((1.0 - distance) / (1.0 - brush.hardness).max(0.001)).min(1.0)
-                        * brush.opacity
+                        * opacity
                         * selection::coverage(document.selection.as_deref(), p);
                     let old = mask.get_pixel(x, y)[0];
                     mask.put_pixel(x, y, Luma([old.max((amount * 255.0).round() as u8)]));
