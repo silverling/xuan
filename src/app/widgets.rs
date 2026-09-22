@@ -231,6 +231,7 @@ impl<'a, N: egui::emath::Numeric> Number<'a, N> {
         self.range = range.start().to_f64()..=range.end().to_f64();
         self
     }
+    /// Show a unit inside the field while idle; egui edits the numeric text alone.
     pub fn suffix(mut self, suffix: impl ToString) -> Self {
         self.suffix = suffix.to_string();
         self
@@ -469,14 +470,11 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
                 Number::new(&mut display)
                     .range(range.start() * scale..=range.end() * scale)
                     .speed(speed)
+                    .suffix(self.suffix)
                     .max_decimals(decimals),
             );
             if number.changed() {
                 value = display / scale;
-            }
-            if !self.suffix.trim().is_empty() {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                ui.label(self.suffix.trim());
             }
             response.union(number)
         });

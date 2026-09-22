@@ -9,19 +9,20 @@ use xuan::raw::{self, DevelopSettings, Overlay, OverlayKind, WhiteBalance};
 
 use super::{develop::Develop, theme, widgets};
 
-fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: RangeInclusive<f32>) {
+fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: RangeInclusive<f32>, unit: &str) {
     ui.horizontal(|ui| {
         ui.add_sized([105.0, 20.0], egui::Label::new(label));
         ui.add(
             egui::Slider::new(value, range)
                 .clamping(egui::SliderClamping::Edits)
+                .suffix(unit)
                 .max_decimals(2),
         );
     });
 }
 
 fn percent(ui: &mut egui::Ui, label: &str, value: &mut f32) {
-    slider(ui, label, value, -100.0..=100.0);
+    slider(ui, label, value, -100.0..=100.0, "%");
 }
 
 pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
@@ -166,20 +167,27 @@ fn basic(ui: &mut egui::Ui, d: &mut Develop) {
         |ui| {
             slider(
                 ui,
-                "Temperature K",
+                "Temperature",
                 &mut d.settings.temperature,
                 2000.0..=25_000.0,
+                " K",
             );
         },
     );
-    slider(ui, "Tint", &mut d.settings.tint, -150.0..=150.0);
+    slider(ui, "Tint", &mut d.settings.tint, -150.0..=150.0, "");
     heading(ui, "Light");
     if ui.button("Auto exposure").clicked()
         && let Some(raw) = &d.proxy
     {
         d.settings.exposure = raw::auto_exposure(raw);
     }
-    slider(ui, "Exposure EV", &mut d.settings.exposure, -10.0..=10.0);
+    slider(
+        ui,
+        "Exposure",
+        &mut d.settings.exposure,
+        -10.0..=10.0,
+        " EV",
+    );
     percent(ui, "Brightness", &mut d.settings.brightness);
     percent(ui, "Contrast", &mut d.settings.contrast);
     percent(ui, "Highlights", &mut d.settings.highlights);
@@ -237,7 +245,7 @@ fn tones(ui: &mut egui::Ui, d: &mut Develop) {
     ui.checkbox(&mut d.settings.monochrome, "Monochrome");
     ui.add_enabled_ui(d.settings.monochrome, |ui| {
         for (i, label) in ["Red mix", "Green mix", "Blue mix"].iter().enumerate() {
-            slider(ui, label, &mut d.settings.bw_mix[i], -1.0..=2.0);
+            slider(ui, label, &mut d.settings.bw_mix[i], -1.0..=2.0, "");
         }
     });
     heading(ui, "Split toning");
@@ -246,24 +254,28 @@ fn tones(ui: &mut egui::Ui, d: &mut Develop) {
         "Shadow hue",
         &mut d.settings.shadow_tone[0],
         0.0..=360.0,
+        "°",
     );
     slider(
         ui,
         "Shadow amount",
         &mut d.settings.shadow_tone[1],
         0.0..=100.0,
+        "%",
     );
     slider(
         ui,
         "Highlight hue",
         &mut d.settings.highlight_tone[0],
         0.0..=360.0,
+        "°",
     );
     slider(
         ui,
         "Highlight amount",
         &mut d.settings.highlight_tone[1],
         0.0..=100.0,
+        "%",
     );
     percent(ui, "Balance", &mut d.settings.tone_balance);
 }
@@ -275,16 +287,24 @@ fn detail(ui: &mut egui::Ui, d: &mut Develop) {
         "Luminance",
         &mut d.settings.luminance_noise,
         0.0..=100.0,
+        "%",
     );
-    slider(ui, "Color", &mut d.settings.color_noise, 0.0..=100.0);
+    slider(ui, "Color", &mut d.settings.color_noise, 0.0..=100.0, "%");
     heading(ui, "Sharpening");
-    slider(ui, "Amount", &mut d.settings.sharpen, 0.0..=200.0);
-    slider(ui, "Radius px", &mut d.settings.sharpen_radius, 0.3..=5.0);
+    slider(ui, "Amount", &mut d.settings.sharpen, 0.0..=200.0, "%");
+    slider(
+        ui,
+        "Radius",
+        &mut d.settings.sharpen_radius,
+        0.3..=5.0,
+        " px",
+    );
     slider(
         ui,
         "Threshold",
         &mut d.settings.sharpen_threshold,
         0.0..=0.2,
+        "",
     );
     ui.add_space(12.0);
     ui.checkbox(&mut d.full_preview, "Full-resolution preview");
@@ -301,10 +321,16 @@ fn lens(ui: &mut egui::Ui, d: &mut Develop) {
     percent(ui, "Distortion", &mut d.settings.distortion);
     percent(ui, "Red / cyan", &mut d.settings.chromatic_red);
     percent(ui, "Blue / yellow", &mut d.settings.chromatic_blue);
-    slider(ui, "Defringe", &mut d.settings.defringe, 0.0..=100.0);
+    slider(ui, "Defringe", &mut d.settings.defringe, 0.0..=100.0, "%");
     percent(ui, "Vignetting", &mut d.settings.vignette);
     heading(ui, "Geometry");
-    slider(ui, "Straighten °", &mut d.settings.rotation, -45.0..=45.0);
+    slider(
+        ui,
+        "Straighten",
+        &mut d.settings.rotation,
+        -45.0..=45.0,
+        "°",
+    );
     percent(ui, "Horizontal", &mut d.settings.perspective[0]);
     percent(ui, "Vertical", &mut d.settings.perspective[1]);
     heading(ui, "Crop");
@@ -314,10 +340,34 @@ fn lens(ui: &mut egui::Ui, d: &mut Develop) {
             .color(theme::MUTED),
     );
     let [left, top, right, bottom] = d.settings.crop;
-    slider(ui, "Left", &mut d.settings.crop[0], 0.0..=(right - 0.01));
-    slider(ui, "Top", &mut d.settings.crop[1], 0.0..=(bottom - 0.01));
-    slider(ui, "Right", &mut d.settings.crop[2], (left + 0.01)..=1.0);
-    slider(ui, "Bottom", &mut d.settings.crop[3], (top + 0.01)..=1.0);
+    slider(
+        ui,
+        "Left",
+        &mut d.settings.crop[0],
+        0.0..=(right - 0.01),
+        "",
+    );
+    slider(
+        ui,
+        "Top",
+        &mut d.settings.crop[1],
+        0.0..=(bottom - 0.01),
+        "",
+    );
+    slider(
+        ui,
+        "Right",
+        &mut d.settings.crop[2],
+        (left + 0.01)..=1.0,
+        "",
+    );
+    slider(
+        ui,
+        "Bottom",
+        &mut d.settings.crop[3],
+        (top + 0.01)..=1.0,
+        "",
+    );
     ui.horizontal(|ui| {
         if ui.button("Uncrop").clicked() {
             d.settings.crop = [0.0, 0.0, 1.0, 1.0];
@@ -387,15 +437,15 @@ fn masks(ui: &mut egui::Ui, d: &mut Develop) {
     ui.text_edit_singleline(&mut overlay.name);
     ui.checkbox(&mut overlay.invert, "Invert mask");
     if overlay.kind == OverlayKind::Brush {
-        slider(ui, "Brush radius", &mut overlay.radius, 0.005..=0.3);
+        slider(ui, "Brush radius", &mut overlay.radius, 0.005..=0.3, "");
         if ui.button("Clear brush").clicked() {
             overlay.points.clear();
         }
     }
     if overlay.kind != OverlayKind::Linear {
-        slider(ui, "Feather", &mut overlay.feather, 0.01..=1.0);
+        slider(ui, "Feather", &mut overlay.feather, 0.01..=1.0, "");
     }
-    slider(ui, "Exposure EV", &mut overlay.exposure, -10.0..=10.0);
+    slider(ui, "Exposure", &mut overlay.exposure, -10.0..=10.0, " EV");
     percent(ui, "Warmth", &mut overlay.warmth);
     percent(ui, "Saturation", &mut overlay.saturation);
     if widgets::button(ui, "Delete mask").clicked() {

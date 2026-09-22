@@ -12,12 +12,14 @@ fn value(
     label: &str,
     number: &mut f32,
     range: std::ops::RangeInclusive<f32>,
+    unit: &str,
 ) -> bool {
     ui.label(RichText::new(label).color(theme::MUTED));
     ui.add(
         widgets::Number::new(number)
             .speed(1.0)
             .range(range)
+            .suffix(unit)
             .max_decimals(1),
     )
     .changed()
@@ -71,21 +73,23 @@ impl EditorApp {
                                                 "X",
                                                 &mut t.x,
                                                 -1_000_000.0..=1_000_000.0,
+                                                " px",
                                             );
                                             changed |= value(
                                                 ui,
                                                 "Y",
                                                 &mut t.y,
                                                 -1_000_000.0..=1_000_000.0,
+                                                " px",
                                             );
                                             let old = *t;
-                                            if value(ui, "W", &mut t.width, 1.0..=300_000.0) {
+                                            if value(ui, "W", &mut t.width, 1.0..=300_000.0, " px") {
                                                 if self.lock_ratio {
                                                     t.height *= t.width / old.width;
                                                 }
                                                 changed = true;
                                             }
-                                            if value(ui, "H", &mut t.height, 1.0..=300_000.0) {
+                                            if value(ui, "H", &mut t.height, 1.0..=300_000.0, " px") {
                                                 if self.lock_ratio {
                                                     t.width *= t.height / old.height;
                                                 }
@@ -93,8 +97,7 @@ impl EditorApp {
                                             }
                                             widgets::checkbox(ui, &mut self.lock_ratio, "Link");
                                             changed |=
-                                                value(ui, "Angle", &mut t.rotation, -360.0..=360.0);
-                                            ui.label("°");
+                                                value(ui, "Angle", &mut t.rotation, -360.0..=360.0, "°");
                                         } else {
                                             ui.label(
                                                 RichText::new("Select a layer to transform")
@@ -137,8 +140,7 @@ impl EditorApp {
                                                 &[(false, "This Layer"), (true, "All Layers")],
                                             );
                                         }
-                                        value(ui, "Size", &mut self.brush.diameter, 1.0..=2000.0);
-                                        ui.label("px");
+                                        value(ui, "Size", &mut self.brush.diameter, 1.0..=2000.0, " px");
                                         ui.label("Hardness");
                                         ui.add(
                                             widgets::Slider::new(
@@ -237,8 +239,8 @@ impl EditorApp {
                                                 "Radius",
                                                 &mut self.corner_radius,
                                                 0.0..=1000.0,
+                                                " px",
                                             );
-                                            ui.label("px");
                                         }
                                     }
                                     Tool::Text => self.text_options(ui),

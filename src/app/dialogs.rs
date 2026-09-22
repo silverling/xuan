@@ -313,13 +313,15 @@ impl EditorApp {
                                             -100.0..=100.0
                                         },
                                     )
-                                    .text("Saturation"),
+                                    .text("Saturation")
+                                    .suffix("%"),
                                 )
                                 .changed();
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(&mut values[2], -100.0..=100.0)
-                                        .text("Lightness"),
+                                        .text("Lightness")
+                                        .suffix("%"),
                                 )
                                 .changed();
                             changed |=
@@ -343,7 +345,8 @@ impl EditorApp {
                                                     &mut settings.bands[settings.range][index],
                                                     0.0..=360.0,
                                                 )
-                                                .text(*label),
+                                                .text(*label)
+                                                .suffix("°"),
                                             )
                                             .changed();
                                     }
@@ -382,13 +385,15 @@ impl EditorApp {
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(saturation, -100.0..=100.0)
-                                        .text("Saturation"),
+                                        .text("Saturation")
+                                        .suffix("%"),
                                 )
                                 .changed();
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(lightness, -100.0..=100.0)
-                                        .text("Lightness"),
+                                        .text("Lightness")
+                                        .suffix("%"),
                                 )
                                 .changed();
                             changed |= widgets::checkbox(ui, colorize, "Colorize").changed();
@@ -447,17 +452,26 @@ impl EditorApp {
                             seed,
                         } => {
                             changed |= ui
-                                .add(widgets::Slider::new(amount, 0.0..=100.0).text("Amount"))
+                                .add(
+                                    widgets::Slider::new(amount, 0.0..=100.0)
+                                        .text("Amount")
+                                        .suffix("%"),
+                                )
                                 .changed();
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(size, 0.1..=100.0)
                                         .logarithmic(true)
-                                        .text("Size"),
+                                        .text("Size")
+                                        .suffix(" px"),
                                 )
                                 .changed();
                             changed |= ui
-                                .add(widgets::Slider::new(roughness, 0.0..=100.0).text("Roughness"))
+                                .add(
+                                    widgets::Slider::new(roughness, 0.0..=100.0)
+                                        .text("Roughness")
+                                        .suffix("%"),
+                                )
                                 .changed();
                             if widgets::button(ui, "New pattern").clicked() {
                                 *seed = seed.wrapping_add(1);
@@ -523,12 +537,15 @@ impl EditorApp {
                             changed |= ui
                                 .add(
                                     widgets::Slider::new(distortion, -50.0..=50.0)
-                                        .text("Distortion"),
+                                        .text("Distortion")
+                                        .suffix("%"),
                                 )
                                 .changed();
                             changed |= ui
                                 .add(
-                                    widgets::Slider::new(vignette, -100.0..=100.0).text("Vignette"),
+                                    widgets::Slider::new(vignette, -100.0..=100.0)
+                                        .text("Vignette")
+                                        .suffix("%"),
                                 )
                                 .changed();
                         }
@@ -719,7 +736,8 @@ impl EditorApp {
                         self.export_changed |= ui
                             .add(
                                 widgets::Slider::new(&mut self.jpeg_quality, 1..=100)
-                                    .text("Quality"),
+                                    .text("Quality")
+                                    .suffix("%"),
                             )
                             .changed();
                     }
