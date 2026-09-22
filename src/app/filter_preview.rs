@@ -48,7 +48,7 @@ impl EditorApp {
         let wanted = edit.preview || preview.applying;
         if wanted
             && !preview.applying
-            && !self.mask_target
+            && !self.editing_mask()
             && let Filter::MotionBlur { distance, angle } = filter
             && xuan::gpu::can_preview_motion_blur(&edit.original)
             && let Some(session) = self.session_mut().filter(|session| session.gpu.is_some())
@@ -128,7 +128,7 @@ impl EditorApp {
             let mut document = edit.original.clone();
             let filter = filter.clone();
             let worker_filter = filter.clone();
-            let mask_target = self.mask_target;
+            let mask_target = self.editing_mask();
             let cancel = Arc::new(AtomicBool::new(false));
             let worker_cancel = cancel.clone();
             let (send, receive) = mpsc::channel();

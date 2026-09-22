@@ -541,6 +541,22 @@ impl EditorApp {
         self.sessions.get_mut(self.current)
     }
 
+    fn editing_mask(&self) -> bool {
+        self.session()
+            .and_then(|s| s.document.active())
+            .is_some_and(|layer| {
+                layer.standalone_mask || (self.mask_target && layer.mask.is_some())
+            })
+    }
+
+    fn transforming_mask(&self) -> bool {
+        self.editing_mask()
+            && self
+                .session()
+                .and_then(|s| s.document.active())
+                .is_some_and(|l| !l.standalone_mask)
+    }
+
     fn edit(&mut self, name: &str, operation: impl FnOnce(&mut Document) -> Result<()>) {
         let Some(session) = self.session_mut() else {
             return;
@@ -989,8 +1005,18 @@ impl EditorApp {
                 doc.layers = vec![layer];
                 Ok(())
             }),
-            "mask" => {
+            "mask" | "new_mask_layer" => {
                 self.edit("Add Layer Mask", |doc| {
+                    if command == "new_mask_layer" || doc.active().is_none() {
+                        let mut layer = Layer::mask("Mask", doc.width, doc.height);
+                        layer.mask.as_mut().unwrap().pixels =
+                            Arc::new(paint::mask_from_selection(doc, &layer));
+                        doc.insert(layer);
+                        return Ok(());
+                    }
+                    if doc.active().is_some_and(|l| l.standalone_mask) {
+                        return Ok(());
+                    }
                     let pixels = doc.active().map(|l| paint::mask_from_selection(doc, l));
                     if let (Some(layer), Some(pixels)) = (doc.active_mut(), pixels) {
                         layer.mask = Some(Mask {
@@ -1006,6 +1032,11 @@ impl EditorApp {
             }
             "delete_mask" => {
                 self.edit("Delete Mask", |doc| {
+                    if let Some(id) = doc.active().filter(|l| l.standalone_mask).map(|l| l.id) {
+                        doc.select(id, false);
+                        doc.delete_selected();
+                        return Ok(());
+                    }
                     if let Some(layer) = doc.active_mut() {
                         layer.mask = None;
                     }
@@ -1021,6 +1052,7 @@ impl EditorApp {
             }),
             "link_mask" => self.edit("Link Mask", |doc| {
                 if let Some(layer) = doc.active_mut()
+                    && !layer.standalone_mask
                     && let Some(mask) = &mut layer.mask
                 {
                     mask.linked = !mask.linked;
@@ -1035,9 +1067,11 @@ impl EditorApp {
                     let lower = doc.layers[..index]
                         .iter()
                         .rev()
-                        .find(|l| l.parent == doc.layers[index].parent && !l.group)
+                        .find(|l| {
+                            l.parent == doc.layers[index].parent && !l.group && !l.standalone_mask
+                        })
                         .map(|l| l.clip_to.unwrap_or(l.id));
-                    if !doc.layers[index].group {
+                    if !doc.layers[index].group && !doc.layers[index].standalone_mask {
                         doc.layers[index].clip_to = if doc.layers[index].clip_to.is_some() {
                             None
                         } else {
@@ -1065,7 +1099,7 @@ impl EditorApp {
                 }
             }),
             "load_selection" => {
-                let mask = self.mask_target;
+                let mask = self.editing_mask();
                 self.edit_selection("Load Selection", |doc| {
                     operations::selection_from_layer(doc, mask);
                 });
@@ -1081,7 +1115,7 @@ impl EditorApp {
                 } else {
                     self.brush.color
                 };
-                let mask = self.mask_target;
+                let mask = self.editing_mask();
                 self.edit(
                     if command == "clear" {
                         "Clear Pixels"
@@ -1182,7 +1216,7 @@ impl EditorApp {
                 }
             }
             "invert" => {
-                let mask = self.mask_target;
+                let mask = self.editing_mask();
                 self.edit("Invert", |doc| {
                     xuan::effects::apply_adjustment(doc, &Adjustment::Invert, mask)
                 });

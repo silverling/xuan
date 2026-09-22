@@ -44,7 +44,7 @@ pub fn ensure_pixels(layer: &mut Layer) -> Result<()> {
         "This is a RAW layer. Paint on a new pixel layer, use an adjustment layer, or rasterize it from the Layers menu."
     );
     ensure!(
-        !layer.locked && !layer.group && layer.adjustment.is_none(),
+        !layer.locked && !layer.group && !layer.standalone_mask && layer.adjustment.is_none(),
         "Select an unlocked pixel layer to paint"
     );
     layer.shape = None;

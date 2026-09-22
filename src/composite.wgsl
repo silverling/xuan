@@ -60,6 +60,15 @@ fn composite(@builtin(global_invocation_id) id: vec3<u32>) {
     let point = (vec2<f32>(id.xy) + 0.5) / params.canvas.xy * params.canvas.zw;
     var amount = params.appearance.x;
     if params.flags.z != 0u { amount *= textureLoad(coverage, position, 0).r; }
+    if params.flags.y == 12u {
+        var backdrop = vec4(0.0);
+        if params.flags.w != 0u { backdrop = textureLoad(source, position, 0); }
+        let strength = 1.0 - params.appearance.x + amount;
+        let alpha = mix(backdrop.a, dst.a, strength);
+        let color = mix(backdrop.rgb * backdrop.a, dst.rgb * dst.a, strength) / max(alpha, 0.000001);
+        textureStore(output, position, vec4(color, alpha));
+        return;
+    }
     if params.flags.y != 0u {
         textureStore(output, position, vec4(mix(dst.rgb, clamp(adjust(dst.rgb, point), vec3(0.0), vec3(1.0)), amount), dst.a));
         return;

@@ -115,6 +115,7 @@ impl EditorApp {
                     self.welcome(ui, viewport);
                     return;
                 }
+                let mask_target = self.transforming_mask();
                 let session = &mut self.sessions[self.current];
                 if session.fit {
                     session.zoom = ((viewport.width() - 100.0) / session.document.width as f32)
@@ -266,7 +267,7 @@ impl EditorApp {
                 let mut hover_handle = None;
                 if self.tool == Tool::Move
                     && self.show_controls
-                    && let Some(t) = operations::transform_box(&session.document, self.mask_target)
+                    && let Some(t) = operations::transform_box(&session.document, mask_target)
                 {
                     let corners = t.corners().map(map);
                     painter.add(egui::Shape::closed_line(
@@ -743,7 +744,8 @@ impl EditorApp {
             // The press location determines the handle, even if the pointer has moved since.
             handle = None;
             let session = &self.sessions[self.current];
-            if let Some(t) = operations::transform_box(&session.document, self.mask_target) {
+            if let Some(t) = operations::transform_box(&session.document, self.transforming_mask())
+            {
                 if let Some(index) = HANDLES
                     .iter()
                     .position(|unit| t.point(*unit).distance(point) * session.zoom < 9.0)
@@ -775,6 +777,7 @@ impl EditorApp {
         {
             return;
         }
+        let mask_target = self.transforming_mask();
         let session = &mut self.sessions[self.current];
         if self.tool == Tool::Move && session.document.active.is_none() {
             return;
@@ -850,7 +853,7 @@ impl EditorApp {
             panning: false,
             clone_offset: offset,
             source,
-            reference: operations::transform_box(&session.document, self.mask_target),
+            reference: operations::transform_box(&session.document, mask_target),
         });
     }
 
@@ -872,6 +875,8 @@ impl EditorApp {
                 gesture.start.y + size * dy.signum(),
             );
         }
+        let mask_target = self.editing_mask();
+        let transform_mask = self.transforming_mask();
         let session = &mut self.sessions[self.current];
         let result = if matches!(gesture.kind, TransformDrag::Selection) && self.tool.is_selection()
         {
@@ -909,7 +914,7 @@ impl EditorApp {
                         &self.brush,
                         paint::StrokeOptions {
                             mode,
-                            mask_target: self.mask_target,
+                            mask_target,
                             source: gesture.source.as_deref(),
                             clone_offset: offset,
                         },
@@ -982,7 +987,7 @@ impl EditorApp {
                             self.guides.push((false, y));
                         }
                     }
-                    let targets = if self.mask_target {
+                    let targets = if transform_mask {
                         gesture.original.active.into_iter().collect()
                     } else {
                         gesture.original.transform_targets()
@@ -1007,7 +1012,7 @@ impl EditorApp {
                                 else {
                                     continue;
                                 };
-                                let old = if self.mask_target {
+                                let old = if transform_mask {
                                     original
                                         .mask
                                         .as_ref()
@@ -1021,7 +1026,7 @@ impl EditorApp {
                                 } else {
                                     old.following(reference, transformed)
                                 };
-                                if self.mask_target {
+                                if transform_mask {
                                     if let Some(mask) = &mut layer.mask {
                                         mask.placement = Some(transform);
                                         mask.linked = false;
@@ -1080,6 +1085,7 @@ impl EditorApp {
             return;
         }
         let mode = self.selection_mode(modifiers);
+        let mask_target = self.editing_mask();
         let session = &mut self.sessions[self.current];
         let start = gesture.start;
         let end = gesture.last;
@@ -1127,7 +1133,7 @@ impl EditorApp {
                         background: self.background,
                         radial: self.radial,
                         opacity: self.brush.opacity,
-                        mask_target: self.mask_target,
+                        mask_target,
                     },
                 ),
                 Tool::Shape => {

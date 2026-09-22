@@ -284,6 +284,8 @@ pub struct Layer {
     pub group: bool,
     pub clip_to: Option<Uuid>,
     pub mask: Option<Mask>,
+    #[serde(default)]
+    pub standalone_mask: bool,
     pub adjustment: Option<Adjustment>,
     #[serde(default)]
     pub shape: Option<ShapeStyle>,
@@ -309,6 +311,7 @@ impl Layer {
             group: false,
             clip_to: None,
             mask: None,
+            standalone_mask: false,
             adjustment: None,
             shape: None,
             text: None,
@@ -319,7 +322,7 @@ impl Layer {
 
     pub fn set_transform(&mut self, transform: Transform) {
         if let Some(mask) = &mut self.mask {
-            if mask.linked {
+            if mask.linked || self.standalone_mask {
                 mask.placement = mask
                     .placement
                     .map(|placement| placement.following(self.transform, transform));
@@ -333,6 +336,13 @@ impl Layer {
     pub fn image(name: impl Into<String>, pixels: RgbaImage) -> Self {
         let mut layer = Self::blank(name, pixels.width(), pixels.height());
         layer.pixels = Some(Arc::new(pixels));
+        layer
+    }
+
+    pub fn mask(name: impl Into<String>, width: u32, height: u32) -> Self {
+        let mut layer = Self::blank(name, width, height);
+        layer.standalone_mask = true;
+        layer.mask = Some(Mask::white());
         layer
     }
 }
@@ -472,6 +482,15 @@ impl Document {
         let mut mask_pixels = 0_u64;
         let mut raw_bytes = 0_u64;
         for layer in &self.layers {
+            ensure!(
+                !layer.standalone_mask
+                    || (layer.mask.is_some()
+                        && !layer.group
+                        && layer.adjustment.is_none()
+                        && layer.pixels.is_none()
+                        && layer.clip_to.is_none()),
+                "Invalid standalone mask layer"
+            );
             if let Some(raw) = &layer.raw {
                 raw.validate()?;
                 raw_bytes += raw.bytes.len() as u64;
@@ -542,7 +561,10 @@ impl Document {
                     "Invalid clipping mask graph"
                 );
                 let target = self.layers.iter().find(|l| l.id == id);
-                ensure!(target.is_some_and(|l| !l.group), "Missing clipping source");
+                ensure!(
+                    target.is_some_and(|l| !l.group && !l.standalone_mask),
+                    "Missing clipping source"
+                );
                 source = target.and_then(|l| l.clip_to);
             }
         }
@@ -561,6 +583,33 @@ impl Document {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_layers_default_to_attached_masks_and_standalone_masks_validate() {
+        let mut layer = Layer::blank("Existing", 2, 2);
+        layer.mask = Some(Mask::white());
+        let mut legacy = serde_json::to_value(&layer).unwrap();
+        legacy.as_object_mut().unwrap().remove("standalone_mask");
+        assert!(
+            !serde_json::from_value::<Layer>(legacy)
+                .unwrap()
+                .standalone_mask
+        );
+
+        let mut document = Document::new(2, 2).unwrap();
+        document.insert(Layer::mask("Mask", 2, 2));
+        document.validate().unwrap();
+        document.active_mut().unwrap().mask = None;
+        assert!(document.validate().is_err());
+        document.active_mut().unwrap().mask = Some(Mask::white());
+        document.active_mut().unwrap().pixels = Some(Arc::new(RgbaImage::new(2, 2)));
+        assert!(document.validate().is_err());
+        document.active_mut().unwrap().pixels = None;
+        let mut clipped = Layer::blank("Clipped", 2, 2);
+        clipped.clip_to = document.active;
+        document.insert(clipped);
+        assert!(document.validate().is_err());
+    }
 
     #[test]
     fn transform_round_trip_with_rotation_and_flips() {

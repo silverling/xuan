@@ -9,6 +9,7 @@ This project is inspired by [Compositor](https://github.com/robbietilton/Composi
 ## Features
 
 - Compose with layers, groups, masks, blend modes, editable text, and shapes.
+- Use standalone mask layers to mask everything below them, limited to their group when grouped. Click the empty area of the Layers panel to deselect, then click Add layer mask; or choose Layer Mask → New Mask Layer.
 - Retouch with selections, brushes, clone stamp, healing, filters, and adjustment layers.
 - Develop Nikon NEF/NRW files and return to their RAW settings at any time.
 - Save editable `.xuan` projects, import Compositor projects, and export PNG, JPEG, TIFF, or WebP.

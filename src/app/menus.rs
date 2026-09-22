@@ -270,6 +270,13 @@ impl EditorApp {
                                     ui.menu_button("Layer Mask", |ui| {
                                         item(
                                             ui,
+                                            "New Mask Layer",
+                                            "",
+                                            "new_mask_layer",
+                                            &mut action,
+                                        );
+                                        item(
+                                            ui,
                                             "Add Mask from Selection",
                                             "",
                                             "mask",

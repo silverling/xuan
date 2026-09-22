@@ -612,7 +612,7 @@ impl EditorApp {
             return;
         }
         if changed || edit.refresh || apply {
-            let mask_target = self.mask_target;
+            let mask_target = self.editing_mask();
             if let Some(session) = self.session_mut() {
                 session.document = edit.original.clone();
                 if edit.preview || apply {

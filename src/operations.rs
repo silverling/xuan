@@ -223,6 +223,18 @@ pub fn merge_selected(document: &mut Document, down: bool) -> Result<()> {
             }
         }
     }
+    // Baking a standalone mask must include its entire lower stack, otherwise
+    // removing it would reveal layers that were previously masked out.
+    for (index, mask) in document.layers.iter().enumerate().rev() {
+        if mask.standalone_mask && targets.contains(&mask.id) {
+            for layer in document.layers[..index]
+                .iter()
+                .filter(|l| l.parent == mask.parent)
+            {
+                targets.extend(document.descendants(layer.id));
+            }
+        }
+    }
     ensure!(
         targets.len() >= 2 || document.active().is_some_and(|l| l.group),
         "Select at least two layers, or a layer above another"
@@ -434,6 +446,34 @@ pub fn selection_from_layer(document: &mut Document, mask_target: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merging_a_standalone_mask_bakes_all_lower_siblings() {
+        let mut document = Document::new(4, 2).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+            4,
+            2,
+            image::Rgba([255, 0, 0, 255]),
+        )));
+        document.insert(Layer::image(
+            "Top",
+            RgbaImage::from_pixel(4, 2, image::Rgba([0, 255, 0, 255])),
+        ));
+        group(&mut document);
+        document.insert(Layer::image(
+            "Middle",
+            RgbaImage::from_pixel(4, 2, image::Rgba([0, 0, 255, 255])),
+        ));
+        let mut mask = Layer::mask("Mask", 4, 2);
+        mask.mask.as_mut().unwrap().pixels = Arc::new(GrayImage::from_pixel(4, 2, Luma([128])));
+        document.insert(mask);
+        let before = render::render(&document);
+        merge_selected(&mut document, true).unwrap();
+        document.validate().unwrap();
+        assert_eq!(render::render(&document), before);
+        assert_eq!(document.layers.len(), 3);
+        assert!(!document.layers.iter().any(|l| l.standalone_mask));
+    }
 
     #[test]
     fn linked_placed_masks_follow_transforms_and_unlinked_masks_stay_put() {

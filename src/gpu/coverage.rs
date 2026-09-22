@@ -25,7 +25,7 @@ impl Coverage {
             ],
             pixels: Vec::new(),
         };
-        if mode == CoverageMode::Composite {
+        if mode == CoverageMode::Composite && !layer.standalone_mask {
             coverage.config[1][0] = if layer.visible { 1.0 } else { 0.0 };
             let mut parent = layer.parent;
             for _ in 0..64 {

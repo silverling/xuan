@@ -229,7 +229,7 @@ impl EditorApp {
             dy += step;
         }
         if dx != 0.0 || dy != 0.0 {
-            let mask_target = self.mask_target;
+            let mask_target = self.transforming_mask();
             self.edit("Nudge", |doc| {
                 if let Some(mut transform) = xuan::operations::transform_box(doc, mask_target) {
                     transform.x += dx;

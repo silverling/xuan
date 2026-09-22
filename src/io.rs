@@ -110,7 +110,9 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         let manifest = Manifest {
             format: "me.silverl.xuan".into(),
-            version: if document.layers.iter().any(|l| l.raw.is_some()) {
+            version: if document.layers.iter().any(|l| l.standalone_mask) {
+                3
+            } else if document.layers.iter().any(|l| l.raw.is_some()) {
                 2
             } else {
                 1
@@ -177,7 +179,7 @@ pub fn load(path: &Path) -> Result<Document> {
     let mut manifest: Manifest =
         serde_json::from_slice(&zip_read(&mut archive, "manifest.json", MAX_MANIFEST)?)?;
     ensure!(
-        manifest.format == "me.silverl.xuan" && (1..=2).contains(&manifest.version),
+        manifest.format == "me.silverl.xuan" && (1..=3).contains(&manifest.version),
         "Unsupported xuan project version"
     );
     let mut used_pixels = 0;
@@ -651,6 +653,52 @@ mod tests {
             panic!("expected channel levels");
         };
         assert_eq!(ranges[1][1], 1.5);
+    }
+
+    #[test]
+    fn standalone_masks_round_trip_with_scope_and_transforms() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mask.xuan");
+        let mut document = Document::new(4, 2).unwrap();
+        document.layers[0].pixels = Some(Arc::new(RgbaImage::from_pixel(
+            4,
+            2,
+            Rgba([10, 90, 180, 255]),
+        )));
+        crate::operations::group(&mut document);
+        let mut mask = Layer::mask("Standalone", 4, 2);
+        mask.opacity = 0.75;
+        mask.mask = Some(Mask {
+            pixels: Arc::new(GrayImage::from_fn(4, 2, |x, _| Luma([(x * 70) as u8]))),
+            placement: Some(Transform {
+                x: 1.0,
+                ..Transform::new(4, 2)
+            }),
+            linked: false,
+            ..Mask::white()
+        });
+        document.insert(mask);
+        save(&document, &path).unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(render::render(&document), render::render(&loaded));
+        let expected = document.active().unwrap();
+        let actual = loaded.active().unwrap();
+        assert!(actual.standalone_mask);
+        assert_eq!(actual.parent, expected.parent);
+        assert_eq!(actual.opacity, expected.opacity);
+        assert_eq!(
+            actual.mask.as_ref().unwrap().pixels,
+            expected.mask.as_ref().unwrap().pixels
+        );
+        assert_eq!(
+            actual.mask.as_ref().unwrap().placement,
+            expected.mask.as_ref().unwrap().placement
+        );
+        let mut archive = ZipArchive::new(File::open(path).unwrap()).unwrap();
+        let manifest: Manifest =
+            serde_json::from_slice(&zip_read(&mut archive, "manifest.json", MAX_MANIFEST).unwrap())
+                .unwrap();
+        assert_eq!(manifest.version, 3);
     }
 
     #[test]

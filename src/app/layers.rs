@@ -173,16 +173,18 @@ impl EditorApp {
                     let mut changed = false;
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Blend").size(11.0));
-                        widgets::PopUp::from_id_salt("blend_mode")
-                            .width((ui.available_width() - 24.0).max(80.0))
-                            .selected_text(blend.name())
-                            .show_ui(ui, |ui| {
-                                for mode in BlendMode::ALL {
-                                    changed |=
-                                        widgets::menu_choice(ui, &mut blend, mode, mode.name())
-                                            .changed();
-                                }
-                            });
+                        ui.add_enabled_ui(active.is_none_or(|l| !l.standalone_mask), |ui| {
+                            widgets::PopUp::from_id_salt("blend_mode")
+                                .width((ui.available_width() - 24.0).max(80.0))
+                                .selected_text(blend.name())
+                                .show_ui(ui, |ui| {
+                                    for mode in BlendMode::ALL {
+                                        changed |=
+                                            widgets::menu_choice(ui, &mut blend, mode, mode.name())
+                                                .changed();
+                                    }
+                                });
+                        });
                         if icons::lock(ui, locked).clicked() {
                             locked = !locked;
                             changed = true;
@@ -240,7 +242,7 @@ impl EditorApp {
                                 if icons::action_button(ui, "group").clicked() {
                                     actions.select = Some((layer.id, false));
                                 }
-                            } else {
+                            } else if !layer.standalone_mask {
                                 if layer.clip_to.is_some() {
                                     ui.label(RichText::new("↳").small().color(theme::MUTED));
                                 }
@@ -265,6 +267,8 @@ impl EditorApp {
                                 );
                                 let detail = if layer.group {
                                     "Folder".to_owned()
+                                } else if layer.standalone_mask {
+                                    "Mask · Layers below".to_owned()
                                 } else if let Some(adjustment) = &layer.adjustment {
                                     adjustment.name().to_owned()
                                 } else if layer.raw.is_some() {
@@ -353,6 +357,9 @@ impl EditorApp {
                 ("Clipping Mask", "clip"),
                 ("Delete", "delete_layer"),
             ] {
+                if layer.standalone_mask && matches!(command, "mask" | "clip") {
+                    continue;
+                }
                 if ui.button(label).clicked() {
                     actions.select = Some((layer.id, false));
                     actions.command = Some(command);
@@ -366,6 +373,9 @@ impl EditorApp {
                     ("Link / Unlink Mask", "link_mask"),
                     ("Delete Mask", "delete_mask"),
                 ] {
+                    if layer.standalone_mask && command == "link_mask" {
+                        continue;
+                    }
                     if ui.button(label).clicked() {
                         actions.select = Some((layer.id, true));
                         actions.command = Some(command);
@@ -419,7 +429,11 @@ impl EditorApp {
     ) {
         let session = &mut self.sessions[self.current];
         let document = &session.document;
-        let side = if mask { 30.0 } else { 36.0 };
+        let side = if mask && !layer.standalone_mask {
+            30.0
+        } else {
+            36.0
+        };
         let canvas_size = vec2(document.width as f32, document.height as f32);
         let size = if layer.adjustment.is_some() {
             vec2(side, side)
@@ -510,7 +524,7 @@ impl EditorApp {
         if response.double_clicked() && !mask && layer.raw.is_some() {
             actions.edit_raw = Some(layer.id);
         }
-        if selected && mask == self.mask_target {
+        if selected && mask == self.editing_mask() {
             ui.painter().rect_stroke(
                 rect.expand(2.0),
                 2.0,
@@ -553,7 +567,17 @@ impl EditorApp {
                         for (tip, command) in [
                             ("New layer (Ctrl+Shift+N)", "new_layer"),
                             ("Group layers (Ctrl+G)", "group"),
-                            ("Add layer mask", "mask"),
+                            (
+                                if self
+                                    .session()
+                                    .is_some_and(|s| s.document.active().is_none())
+                                {
+                                    "Add mask layer affecting layers below"
+                                } else {
+                                    "Add layer mask"
+                                },
+                                "mask",
+                            ),
                         ] {
                             if icons::action_button(ui, command)
                                 .on_hover_text(tip)

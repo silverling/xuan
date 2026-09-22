@@ -82,6 +82,7 @@ pub struct GpuCompositor {
     sources: HashMap<(usize, [u32; 2]), Source>,
     size: [u32; 2],
     buffers: [wgpu::Texture; 2],
+    group_buffers: Vec<[wgpu::Texture; 2]>,
     display: wgpu::Texture,
     blank: wgpu::Texture,
     motion_blur: GpuMotionBlur,
@@ -132,6 +133,7 @@ impl GpuCompositor {
             sources: HashMap::new(),
             size: [1, 1],
             buffers,
+            group_buffers: Vec::new(),
             display,
             blank,
             motion_blur,
@@ -184,6 +186,7 @@ impl GpuCompositor {
         let motion_blur = motion_blur.filter(|_| can_preview_motion_blur(document));
         if size != self.size {
             self.size = size;
+            self.group_buffers.clear();
             self.buffers = std::array::from_fn(|_| {
                 target(&self.device, size, wgpu::TextureFormat::Rgba16Float, 1)
             });
@@ -200,27 +203,45 @@ impl GpuCompositor {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("xuan composite frame"),
             });
-        {
-            let view = self.buffers[0].create_view(&Default::default());
-            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("clear composition"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            });
-        }
+        let mut buffers = self.buffers.clone();
+        clear_composite(&mut encoder, &buffers[0]);
         let mut current = 0;
-        for layer in render::paint_order(document) {
-            if !layer.visible || (layer.pixels.is_none() && layer.adjustment.is_none()) {
+        let mut groups = Vec::new();
+        let mut group_depth = 0;
+        for step in render::composite_steps(document) {
+            let layer = match step {
+                render::CompositeStep::BeginGroup => {
+                    if self.group_buffers.len() == groups.len() {
+                        self.group_buffers.push(std::array::from_fn(|_| {
+                            target(&self.device, size, wgpu::TextureFormat::Rgba16Float, 1)
+                        }));
+                    }
+                    let group_buffers = self.group_buffers[groups.len()].clone();
+                    encoder.copy_texture_to_texture(
+                        buffers[current].as_image_copy(),
+                        group_buffers[0].as_image_copy(),
+                        buffers[current].size(),
+                    );
+                    groups.push((buffers, current));
+                    group_depth = group_depth.max(groups.len());
+                    buffers = group_buffers;
+                    current = 0;
+                    continue;
+                }
+                render::CompositeStep::EndGroup => {
+                    let source = buffers[current].clone();
+                    (buffers, current) = groups.pop().unwrap();
+                    encoder.copy_texture_to_texture(
+                        source.as_image_copy(),
+                        buffers[1 - current].as_image_copy(),
+                        source.size(),
+                    );
+                    current = 1 - current;
+                    continue;
+                }
+                render::CompositeStep::Layer(layer) => layer,
+            };
+            if !layer.standalone_mask && layer.pixels.is_none() && layer.adjustment.is_none() {
                 continue;
             }
             if let Some(pixels) = &layer.pixels {
@@ -257,7 +278,11 @@ impl GpuCompositor {
                 });
             }
             let mut params = parameters(document, layer, size);
-            let needs_coverage = layer.parent.is_some()
+            if layer.standalone_mask {
+                params.flags[1] = 12;
+                params.flags[3] = u32::from(!groups.is_empty());
+            }
+            let needs_coverage = (layer.parent.is_some() && !layer.standalone_mask)
                 || layer.mask.as_ref().is_some_and(|m| m.enabled)
                 || layer.clip_to.is_some();
             let accelerated_coverage = needs_coverage
@@ -285,8 +310,10 @@ impl GpuCompositor {
                             point.x * document.width as f32 / size[0] as f32,
                             point.y * document.height as f32 / size[1] as f32,
                         );
-                        let mut alpha = render::inherited_coverage(document, layer, point)
-                            * render::own_mask(layer, point);
+                        let mut alpha = render::own_mask(layer, point);
+                        if !layer.standalone_mask {
+                            alpha *= render::inherited_coverage(document, layer, point);
+                        }
                         if let Some(source) = layer
                             .clip_to
                             .and_then(|id| document.layers.iter().find(|l| l.id == id))
@@ -327,7 +354,15 @@ impl GpuCompositor {
                     )]
                         .texture
                 })
-                .unwrap_or(&self.blank);
+                .unwrap_or_else(|| {
+                    if layer.standalone_mask {
+                        groups
+                            .last()
+                            .map_or(&self.blank, |(buffers, current)| &buffers[*current])
+                    } else {
+                        &self.blank
+                    }
+                });
             if document.active == Some(layer.id)
                 && let Some([distance, angle]) = motion_blur
                 && let Some(pixels) = &layer.pixels
@@ -341,6 +376,7 @@ impl GpuCompositor {
             }
             self.dispatch(
                 &mut encoder,
+                &buffers,
                 current,
                 source,
                 coverage.as_ref().unwrap_or(&self.blank),
@@ -356,11 +392,19 @@ impl GpuCompositor {
             document.height as f32,
         ];
         params.flags[1] = if straight_output { 101 } else { 100 };
-        self.dispatch(&mut encoder, current, &self.blank, &self.blank, &params);
+        self.dispatch(
+            &mut encoder,
+            &buffers,
+            current,
+            &self.blank,
+            &self.blank,
+            &params,
+        );
         if !straight_output {
             self.generate_mipmaps(&mut encoder);
         }
         self.queue.submit([encoder.finish()]);
+        self.group_buffers.truncate(group_depth);
         self.sources
             .retain(|key, source| retained.contains(key) && source.pixels.strong_count() > 0);
     }
@@ -405,6 +449,7 @@ impl GpuCompositor {
     fn dispatch(
         &self,
         encoder: &mut wgpu::CommandEncoder,
+        buffers: &[wgpu::Texture; 2],
         current: usize,
         source: &wgpu::Texture,
         coverage: &wgpu::Texture,
@@ -418,10 +463,10 @@ impl GpuCompositor {
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let views = [
-            &self.buffers[current],
+            &buffers[current],
             source,
             coverage,
-            &self.buffers[1 - current],
+            &buffers[1 - current],
             &self.display,
         ]
         .map(|texture| {
@@ -468,6 +513,25 @@ impl GpuCompositor {
         pass.set_bind_group(0, &bind, &[]);
         pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
     }
+}
+
+fn clear_composite(encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture) {
+    let view = texture.create_view(&Default::default());
+    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("clear composition"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        occlusion_query_set: None,
+        timestamp_writes: None,
+    });
 }
 
 fn target(
@@ -711,6 +775,107 @@ impl Processor {
 mod tests {
     use super::*;
     use image::Rgba;
+
+    #[test]
+    #[ignore = "requires a Vulkan or OpenGL compute adapter; run explicitly for native verification"]
+    fn standalone_masks_match_cpu_in_preview_and_export() {
+        use crate::document::{Mask, Transform};
+        use image::{GrayImage, Luma};
+
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let processor = Processor::new(device.clone(), queue.clone());
+        let mut compositor = GpuCompositor::new(device, queue);
+        let mut document = Document::new(160, 144).unwrap();
+        let mut outer = Layer::blank("Outer", 160, 144);
+        outer.group = true;
+        outer.opacity = 0.73;
+        outer.mask = Some(Mask {
+            pixels: Arc::new(GrayImage::from_pixel(1, 1, Luma([199]))),
+            ..Mask::white()
+        });
+        let mut inner = Layer::blank("Inner", 160, 144);
+        inner.group = true;
+        inner.parent = Some(outer.id);
+        let mut base = Layer::image(
+            "Base",
+            RgbaImage::from_pixel(160, 144, Rgba([230, 40, 90, 255])),
+        );
+        base.parent = Some(inner.id);
+        let mut top = Layer::image(
+            "Top",
+            RgbaImage::from_pixel(160, 144, Rgba([20, 190, 60, 255])),
+        );
+        top.parent = Some(inner.id);
+        top.clip_to = Some(base.id);
+        let mut adjustment = Layer::blank("Invert", 160, 144);
+        adjustment.adjustment = Some(Adjustment::Invert);
+        adjustment.parent = Some(inner.id);
+        let mut inner_mask = Layer::mask("Inner mask", 160, 144);
+        inner_mask.parent = Some(inner.id);
+        inner_mask.opacity = 0.8;
+        inner_mask.mask = Some(Mask {
+            pixels: Arc::new(GrayImage::from_fn(160, 144, |x, _| {
+                Luma([(x * 255 / 159) as u8])
+            })),
+            placement: Some(Transform {
+                x: 10.0,
+                ..Transform::new(140, 144)
+            }),
+            ..Mask::white()
+        });
+        let mut outer_mask = Layer::mask("Outer mask", 160, 144);
+        outer_mask.parent = Some(outer.id);
+        outer_mask.mask.as_mut().unwrap().pixels =
+            Arc::new(GrayImage::from_pixel(1, 1, Luma([128])));
+        let mut root_mask = Layer::mask("Root mask", 160, 144);
+        root_mask.mask.as_mut().unwrap().pixels = Arc::new(GrayImage::from_fn(160, 144, |_, y| {
+            Luma([if y < 72 { 0 } else { 128 }])
+        }));
+        document.layers = vec![
+            Layer::image(
+                "Outside",
+                RgbaImage::from_pixel(160, 144, Rgba([80, 110, 210, 255])),
+            ),
+            outer,
+            inner,
+            base,
+            top,
+            adjustment,
+            inner_mask,
+            outer_mask,
+            root_mask,
+        ];
+        let original = document.clone();
+        for variant in 0..5 {
+            document = original.clone();
+            match variant {
+                1 => document.layers[6].visible = false,
+                2 => document.layers[7].mask.as_mut().unwrap().enabled = false,
+                3 => document.layers[7].opacity = 0.0,
+                4 => document.layers[8].parent = Some(document.layers[2].id),
+                _ => {}
+            }
+            for accelerated in [false, true] {
+                scope(accelerated.then(|| processor.clone()), || {
+                    compositor.render(&document, [160, 144]);
+                });
+                compare(&document, &readback(&compositor), "Standalone mask preview");
+                let actual = scope(accelerated.then(|| processor.clone()), || {
+                    processor.compose(&document, 160, 144).unwrap()
+                });
+                let expected = render::render(&document);
+                for (a, b) in actual.pixels().zip(expected.pixels()) {
+                    assert!(
+                        a.0.iter().zip(b.0).all(|(a, b)| a.abs_diff(b) <= 2),
+                        "GPU {a:?}, CPU {b:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn motion_blur_preview_rejects_edits_that_need_cpu_coverage() {

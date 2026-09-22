@@ -2309,6 +2309,197 @@ fn welcome_and_all_tool_panels_render_without_panics() {
 }
 
 #[test]
+fn standalone_mask_creation_editing_and_history_follow_layer_selection() {
+    let (context, mut app) = app();
+    app.dimensions = [64, 48];
+    app.new_document();
+    app.command("fill_fg");
+    // An active layer still receives an attached mask.
+    app.command("mask");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+    assert!(
+        !app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .standalone_mask
+    );
+    app.command("undo");
+
+    let empty = layer_label(&context, &mut app, "Layer 1") + Vec2::new(5.0, 100.0);
+    for pressed in [true, false] {
+        pointer_frame(
+            &context,
+            &mut app,
+            empty,
+            Some(pressed),
+            egui::Modifiers::NONE,
+        );
+    }
+    assert!(app.session().unwrap().document.active.is_none());
+    let button = frame(&context, &mut app)
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Circle(circle) if circle.radius == 3.5 && circle.center.x > 1000.0 => {
+                Some(circle.center)
+            }
+            _ => None,
+        })
+        .expect("Add layer mask button");
+    for pressed in [true, false] {
+        pointer_frame(
+            &context,
+            &mut app,
+            button,
+            Some(pressed),
+            egui::Modifiers::NONE,
+        );
+    }
+    let document = &app.session().unwrap().document;
+    assert_eq!(document.layers.len(), 2);
+    let id = document.active.unwrap();
+    assert!(document.active().unwrap().standalone_mask);
+    assert!(document.active().unwrap().parent.is_none());
+    assert!(document.layers[0].mask.is_none());
+    assert!(app.editing_mask());
+    app.command("undo");
+    assert!(app.session().unwrap().document.active.is_none());
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+    app.command("redo");
+    assert_eq!(app.session().unwrap().document.active, Some(id));
+
+    // Clicking the row (rather than its thumbnail) must still edit mask pixels.
+    let position = layer_label(&context, &mut app, "Mask");
+    pointer_frame(
+        &context,
+        &mut app,
+        position + Vec2::new(5.0, 5.0),
+        Some(true),
+        egui::Modifiers::NONE,
+    );
+    pointer_frame(
+        &context,
+        &mut app,
+        position + Vec2::new(5.0, 5.0),
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.editing_mask());
+    app.brush.color = [0, 0, 0, 255];
+    app.command("fill_fg");
+    assert_eq!(
+        render::render(&app.session().unwrap().document).get_pixel(32, 24)[3],
+        0
+    );
+    app.command("undo");
+    app.set_tool(Tool::Gradient);
+    app.background = [255; 4];
+    drag(
+        &context,
+        &mut app,
+        Point::new(10.5, 20.5),
+        Point::new(50.5, 20.5),
+        egui::Modifiers::NONE,
+    );
+    let layer = app.session().unwrap().document.active().unwrap();
+    assert!(layer.pixels.is_none());
+    let pixels = &layer.mask.as_ref().unwrap().pixels;
+    assert!(pixels.get_pixel(10, 20)[0] <= 1);
+    assert!((127..=129).contains(&pixels.get_pixel(30, 20)[0]));
+    assert!(pixels.get_pixel(50, 20)[0] >= 254);
+    app.set_tool(Tool::Move);
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::ArrowRight, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(
+        app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .transform
+            .x,
+        1.0
+    );
+    app.command("delete_mask");
+    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+    app.command("undo");
+    assert!(app.editing_mask());
+    app.session().unwrap().document.validate().unwrap();
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+#[test]
+fn standalone_mask_creation_uses_selection_and_supports_groups() {
+    let (context, mut app) = app();
+    app.dimensions = [16, 16];
+    app.new_document();
+    app.command("fill_fg");
+    app.command("group");
+    let group = app.session().unwrap().document.active;
+    let selection = GrayImage::from_fn(16, 16, |x, _| image::Luma([if x < 8 { 255 } else { 0 }]));
+    app.session_mut().unwrap().document.selection = Some(Arc::new(selection.clone()));
+    app.command("new_mask_layer");
+    let layer = app.session().unwrap().document.active().unwrap();
+    assert_eq!(layer.parent, group);
+    assert!(layer.standalone_mask);
+    assert_eq!(*layer.mask.as_ref().unwrap().pixels, selection);
+    let pixels = layer.mask.as_ref().unwrap().pixels.clone();
+    app.command("mask");
+    assert!(Arc::ptr_eq(
+        &pixels,
+        &app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .mask
+            .as_ref()
+            .unwrap()
+            .pixels
+    ));
+    app.command("deselect");
+    app.command("move_out");
+    assert!(
+        app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .parent
+            .is_none()
+    );
+    assert!(app.editing_mask());
+    app.command("duplicate");
+    assert!(
+        app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .standalone_mask
+    );
+    app.command("clip");
+    assert!(
+        app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .clip_to
+            .is_none()
+    );
+    frame(&context, &mut app);
+    app.session().unwrap().document.validate().unwrap();
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+#[test]
 fn layer_commands_and_tabs_have_independent_histories() {
     let (_, mut app) = app();
     app.dimensions = [16, 16];

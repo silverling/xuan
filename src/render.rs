@@ -93,6 +93,57 @@ pub fn inherited_coverage(document: &Document, layer: &Layer, point: Point) -> f
     coverage
 }
 
+pub(crate) enum CompositeStep<'a> {
+    BeginGroup,
+    Layer(&'a Layer),
+    EndGroup,
+}
+
+/// Save the backdrop of each group containing an active standalone mask. Masks
+/// fade the group's contribution back toward that backdrop, preserving outside
+/// layers and existing pass-through blending and adjustments.
+pub(crate) fn composite_steps(document: &Document) -> Vec<CompositeStep<'_>> {
+    fn visit<'a>(
+        document: &'a Document,
+        parent: Option<uuid::Uuid>,
+        out: &mut Vec<CompositeStep<'a>>,
+        depth: usize,
+    ) {
+        if depth > 64 {
+            return;
+        }
+        for layer in document
+            .layers
+            .iter()
+            .filter(|l| l.parent == parent && l.visible)
+        {
+            if layer.group {
+                let masked = document.layers.iter().any(|child| {
+                    child.parent == Some(layer.id)
+                        && child.standalone_mask
+                        && child.visible
+                        && child.opacity > 0.0
+                        && child.mask.as_ref().is_some_and(|m| m.enabled)
+                });
+                if masked {
+                    out.push(CompositeStep::BeginGroup);
+                }
+                visit(document, Some(layer.id), out, depth + 1);
+                if masked {
+                    out.push(CompositeStep::EndGroup);
+                }
+            } else if !layer.standalone_mask
+                || (layer.opacity > 0.0 && layer.mask.as_ref().is_some_and(|m| m.enabled))
+            {
+                out.push(CompositeStep::Layer(layer));
+            }
+        }
+    }
+    let mut steps = Vec::new();
+    visit(document, None, &mut steps, 0);
+    steps
+}
+
 /// Depth-first bottom-to-top traversal keeps each folder's subtree together.
 pub fn paint_order(document: &Document) -> Vec<&Layer> {
     fn visit<'a>(
@@ -210,31 +261,60 @@ pub fn render_thumbnail(document: &Document, width: u32, height: u32) -> RgbaIma
 
 fn render_pixels(document: &Document, width: u32, height: u32) -> RgbaImage {
     let mut output = RgbaImage::new(width, height);
-    let layers = paint_order(document);
+    let steps = composite_steps(document);
     output
         .as_mut()
         .par_chunks_exact_mut(4)
         .enumerate()
-        .for_each(|(index, target)| {
+        .for_each_init(Vec::new, |groups, (index, target)| {
             let x = index as u32 % width;
             let y = index as u32 / width;
             let point = Point::new(
                 (x as f32 + 0.5) * document.width as f32 / width as f32,
                 (y as f32 + 0.5) * document.height as f32 / height as f32,
             );
-            let pixel = composite_at(document, &layers, point);
+            let pixel = composite_at(document, &steps, point, groups);
             target.copy_from_slice(&pixel.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
         });
     output
 }
 
 pub fn pixel_at(document: &Document, point: Point) -> [f32; 4] {
-    composite_at(document, &paint_order(document), point)
+    composite_at(document, &composite_steps(document), point, &mut Vec::new())
 }
 
-fn composite_at(document: &Document, layers: &[&Layer], point: Point) -> [f32; 4] {
+fn composite_at(
+    document: &Document,
+    steps: &[CompositeStep<'_>],
+    point: Point,
+    groups: &mut Vec<[f32; 4]>,
+) -> [f32; 4] {
     let mut pixel = [0.0; 4];
-    for layer in layers {
+    groups.clear();
+    for step in steps {
+        let layer = match *step {
+            CompositeStep::BeginGroup => {
+                groups.push(pixel);
+                continue;
+            }
+            CompositeStep::EndGroup => {
+                groups.pop();
+                continue;
+            }
+            CompositeStep::Layer(layer) => layer,
+        };
+        if layer.standalone_mask {
+            let amount = 1.0 - layer.opacity * (1.0 - own_mask(layer, point));
+            let background = groups.last().copied().unwrap_or([0.0; 4]);
+            let alpha = background[3] * (1.0 - amount) + pixel[3] * amount;
+            for i in 0..3 {
+                pixel[i] = (background[i] * background[3] * (1.0 - amount)
+                    + pixel[i] * pixel[3] * amount)
+                    / alpha.max(0.000001);
+            }
+            pixel[3] = alpha;
+            continue;
+        }
         let coverage = inherited_coverage(document, layer, point);
         if coverage == 0.0 {
             continue;
@@ -270,9 +350,34 @@ pub fn hit_test(document: &Document, point: Point) -> Option<uuid::Uuid> {
             !layer.locked
                 && inherited_coverage(document, layer, point)
                     * layer_alpha(document, layer, point, 0)
+                    * standalone_coverage(document, layer, point)
                     > 0.05
         })
         .map(|l| l.id)
+}
+
+fn standalone_coverage(document: &Document, layer: &Layer, point: Point) -> f32 {
+    let mut coverage = 1.0;
+    let mut target = layer;
+    for _ in 0..65 {
+        let Some(index) = document.layers.iter().position(|l| l.id == target.id) else {
+            break;
+        };
+        for mask in document.layers[index + 1..]
+            .iter()
+            .filter(|l| l.standalone_mask && l.visible && l.parent == target.parent)
+        {
+            coverage *= 1.0 - mask.opacity * (1.0 - own_mask(mask, point));
+        }
+        let Some(parent) = target
+            .parent
+            .and_then(|id| document.layers.iter().find(|l| l.id == id))
+        else {
+            break;
+        };
+        target = parent;
+    }
+    coverage
 }
 
 /// Select by transformed layer bounds, ignoring pixel, mask, and opacity coverage.
@@ -281,7 +386,8 @@ pub fn hit_test_bounds(document: &Document, point: Point) -> Option<uuid::Uuid> 
         .into_iter()
         .rev()
         .find(|layer| {
-            if layer.locked || !layer.visible || layer.adjustment.is_some() {
+            if layer.locked || !layer.visible || layer.adjustment.is_some() || layer.standalone_mask
+            {
                 return false;
             }
             let unit = layer.transform.inverse(point);
@@ -313,6 +419,9 @@ pub fn flatten_white(image: &RgbaImage) -> image::RgbImage {
         )
     })
 }
+
+#[cfg(test)]
+mod mask_tests;
 
 #[cfg(test)]
 mod tests {

@@ -27,7 +27,7 @@ impl EditorApp {
     pub(super) fn tool_options(&mut self, ctx: &egui::Context) {
         let mut transform = self
             .session()
-            .and_then(|s| xuan::operations::transform_box(&s.document, self.mask_target));
+            .and_then(|s| xuan::operations::transform_box(&s.document, self.transforming_mask()));
         let mut changed = false;
         egui::TopBottomPanel::top("tool_options")
             .exact_height(42.0)
@@ -39,7 +39,7 @@ impl EditorApp {
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    RichText::new(if self.mask_target {
+                                    RichText::new(if self.transforming_mask() {
                                         "Mask"
                                     } else {
                                         self.tool.label()
@@ -269,7 +269,7 @@ impl EditorApp {
                 });
             });
         if changed && let Some(transform) = transform {
-            let mask_target = self.mask_target;
+            let mask_target = self.transforming_mask();
             self.edit_continuous("Transform", |doc| {
                 xuan::operations::apply_transform(doc, transform, mask_target)
             });
