@@ -579,20 +579,21 @@ impl EditorApp {
                     });
                     ui.separator();
                     ui.add_enabled_ui(interactive, |ui| {
-                        for (value, label) in [
-                            (Compare::Edited, "Edited"),
-                            (Compare::Original, "Original"),
-                            (Compare::Split, "Split"),
-                            (Compare::SideBySide, "Side by side"),
-                        ] {
-                            ui.selectable_value(&mut d.compare, value, label);
-                        }
+                        widgets::segmented(
+                            ui,
+                            &mut d.compare,
+                            &[
+                                (Compare::Edited, "Edited"),
+                                (Compare::Original, "Original"),
+                                (Compare::Split, "Split"),
+                                (Compare::SideBySide, "Side by side"),
+                            ],
+                        );
                         ui.separator();
-                        if ui.button("Fit").clicked() {
+                        if widgets::button(ui, "Fit").clicked() {
                             d.fit = true;
                         }
-                        if ui
-                            .button("100%")
+                        if widgets::button(ui, "100%")
                             .on_hover_text("Render all pixels to inspect detail at 100%")
                             .clicked()
                         {
@@ -601,7 +602,7 @@ impl EditorApp {
                             d.zoom = 1.0;
                             d.pan = Vec2::ZERO;
                         }
-                        ui.checkbox(&mut d.show_clipping, "Clipping");
+                        widgets::checkbox(ui, &mut d.show_clipping, "Clipping");
                     });
                 });
             });
@@ -647,7 +648,7 @@ impl EditorApp {
             });
         egui::SidePanel::right("develop_controls")
             .default_width(330.0)
-            .width_range(310.0..=420.0)
+            .width_range(330.0..=420.0)
             .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(12))
             .show(ctx, |ui| {
                 ui.add_enabled_ui(interactive, |ui| {
@@ -659,7 +660,7 @@ impl EditorApp {
             .show(ctx, |ui| {
                 if let Some(error) = &d.error {
                     ui.colored_label(Color32::from_rgb(255, 140, 140), error);
-                    if d.full.is_some() && ui.button("Retry preview").clicked() {
+                    if d.full.is_some() && widgets::button(ui, "Retry preview").clicked() {
                         d.changed();
                     }
                 }
@@ -1038,11 +1039,31 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = EditorApp::with_context(&ctx, vec![], false, None);
         app.develop = Some(ready(&ctx));
+        let d = app.develop.as_mut().unwrap();
+        d.settings.brightness = 12.34;
+        d.settings.rotation = 1.25;
+        // Presets can contain valid brush radii outside the control's edit range.
+        d.settings.overlays = [0.002, 0.75]
+            .map(|radius| raw::Overlay {
+                kind: OverlayKind::Brush,
+                radius,
+                ..Default::default()
+            })
+            .to_vec();
+        d.selected_overlay = Some(0);
+        let settings = d.settings.clone();
+        settings.validate().unwrap();
         for panel in 0..6 {
             app.develop.as_mut().unwrap().panel = panel;
             frame(&ctx, &mut app, vec![]);
         }
         let d = app.develop.as_mut().unwrap();
+        d.panel = 4;
+        d.selected_overlay = Some(1);
+        frame(&ctx, &mut app, vec![]);
+        let d = app.develop.as_mut().unwrap();
+        assert_eq!(d.settings, settings);
+        assert!(d.undo.is_empty(), "Viewing controls must not create edits");
         d.undo.push(d.settings.clone());
         d.settings.exposure = 1.0;
         let event = egui::Event::Key {

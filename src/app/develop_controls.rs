@@ -11,16 +11,15 @@ use super::{develop::Develop, theme, widgets};
 
 fn slider(ui: &mut egui::Ui, label: &str, value: &mut f32, range: RangeInclusive<f32>, unit: &str) {
     ui.horizontal(|ui| {
-        ui.add_sized([105.0, 20.0], egui::Label::new(label));
-        ui.spacing_mut().interact_size = vec2(widgets::NUMBER_WIDTH, 22.0);
-        let field_width = widgets::NUMBER_WIDTH + ui.spacing().item_spacing.x;
+        ui.add_sized(
+            [105.0, 22.0],
+            egui::Label::new(label).halign(egui::Align::Min),
+        );
+        let field_width = widgets::NUMBER_WIDTH + widgets::SLIDER_SPACING;
         ui.spacing_mut().slider_width = (ui.available_width() - field_width).max(40.0);
-        let size = vec2(ui.spacing().slider_width + field_width, 22.0);
-        widgets::fixed_size(
-            ui,
-            size,
-            egui::Slider::new(value, range)
-                .clamping(egui::SliderClamping::Edits)
+        ui.add(
+            widgets::Slider::new(value, range)
+                .clamp_existing_to_range(false)
                 .suffix(unit)
                 .max_decimals(2),
         );
@@ -36,74 +35,81 @@ pub(super) fn controls(ui: &mut egui::Ui, d: &mut Develop) {
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         if ui
-            .add_enabled(!d.undo.is_empty(), egui::Button::new("Undo"))
+            .add_enabled(!d.undo.is_empty(), widgets::Button::new("Undo"))
             .clicked()
         {
             d.undo(false);
         }
         if ui
-            .add_enabled(!d.redo.is_empty(), egui::Button::new("Redo"))
+            .add_enabled(!d.redo.is_empty(), widgets::Button::new("Redo"))
             .clicked()
         {
             d.undo(true);
         }
-        if ui
-            .button("Reset")
+        if widgets::button(ui, "Reset")
             .on_hover_text("Reset all Develop adjustments to defaults")
             .clicked()
         {
             d.settings = DevelopSettings::default();
             d.selected_overlay = None;
         }
-        ui.menu_button("Presets", |ui| {
-            for (name, preset) in [
-                ("Natural", DevelopSettings::default()),
-                (
-                    "Landscape",
-                    DevelopSettings {
-                        contrast: 12.0,
-                        highlights: -30.0,
-                        shadows: 20.0,
-                        vibrance: 20.0,
-                        clarity: 12.0,
-                        ..Default::default()
-                    },
-                ),
-                (
-                    "Black & white",
-                    DevelopSettings {
-                        monochrome: true,
-                        contrast: 18.0,
-                        ..Default::default()
-                    },
-                ),
-            ] {
-                if ui.button(name).clicked() {
-                    d.settings = preset;
-                    d.selected_overlay = None;
+        widgets::PopUp::from_id_salt("raw_presets")
+            .selected_text("Presets")
+            .width(90.0)
+            .show_ui(ui, |ui| {
+                ui.set_min_width(150.0);
+                for (name, preset) in [
+                    ("Natural", DevelopSettings::default()),
+                    (
+                        "Landscape",
+                        DevelopSettings {
+                            contrast: 12.0,
+                            highlights: -30.0,
+                            shadows: 20.0,
+                            vibrance: 20.0,
+                            clarity: 12.0,
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        "Black & white",
+                        DevelopSettings {
+                            monochrome: true,
+                            contrast: 18.0,
+                            ..Default::default()
+                        },
+                    ),
+                ] {
+                    if ui.button(name).clicked() {
+                        d.settings = preset;
+                        d.selected_overlay = None;
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui.button("Save settings…").clicked() {
+                    save_preset(d);
                     ui.close();
                 }
-            }
-            ui.separator();
-            if ui.button("Save settings…").clicked() {
-                save_preset(d);
-                ui.close();
-            }
-            if ui.button("Load settings…").clicked() {
-                load_preset(d);
-                ui.close();
-            }
-        });
+                if ui.button("Load settings…").clicked() {
+                    load_preset(d);
+                    ui.close();
+                }
+            });
     });
     ui.add_space(8.0);
-    ui.horizontal_wrapped(|ui| {
-        for (index, name) in ["Basic", "Tone", "Detail", "Lens", "Masks", "Info"]
-            .into_iter()
-            .enumerate()
-        {
-            ui.selectable_value(&mut d.panel, index, name);
-        }
-    });
+    widgets::segmented(
+        ui,
+        &mut d.panel,
+        &[
+            (0, "Basic"),
+            (1, "Tone"),
+            (2, "Detail"),
+            (3, "Lens"),
+            (4, "Masks"),
+            (5, "Info"),
+        ],
+    );
     ui.separator();
     egui::ScrollArea::vertical()
         .id_salt("raw_settings")
@@ -131,19 +137,21 @@ fn heading(ui: &mut egui::Ui, title: &str) {
 fn basic(ui: &mut egui::Ui, d: &mut Develop) {
     heading(ui, "White balance");
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("raw_wb")
+        widgets::PopUp::from_id_salt("raw_wb")
             .selected_text(match d.settings.white_balance {
                 WhiteBalance::AsShot => "As shot",
                 WhiteBalance::Temperature => "Temperature",
                 WhiteBalance::Custom => "Sampled neutral",
             })
             .show_ui(ui, |ui| {
-                ui.selectable_value(
+                widgets::menu_choice(
+                    ui,
                     &mut d.settings.white_balance,
                     WhiteBalance::AsShot,
                     "As shot",
                 );
-                ui.selectable_value(
+                widgets::menu_choice(
+                    ui,
                     &mut d.settings.white_balance,
                     WhiteBalance::Temperature,
                     "Temperature",
@@ -163,8 +171,7 @@ fn basic(ui: &mut egui::Ui, d: &mut Develop) {
                     }
                 }
             });
-        if ui.selectable_label(d.picker, "Pick neutral").clicked() {
-            d.picker = !d.picker;
+        if widgets::checkbox(ui, &mut d.picker, "Pick neutral").changed() {
             d.draw_overlay = false;
         }
     });
@@ -182,7 +189,7 @@ fn basic(ui: &mut egui::Ui, d: &mut Develop) {
     );
     slider(ui, "Tint", &mut d.settings.tint, -150.0..=150.0, "");
     heading(ui, "Light");
-    if ui.button("Auto exposure").clicked()
+    if widgets::button(ui, "Auto exposure").clicked()
         && let Some(raw) = &d.proxy
     {
         d.settings.exposure = raw::auto_exposure(raw);
@@ -210,25 +217,25 @@ fn basic(ui: &mut egui::Ui, d: &mut Develop) {
 
 fn tones(ui: &mut egui::Ui, d: &mut Develop) {
     heading(ui, "Tone curve");
-    ui.horizontal(|ui| {
-        for (i, name) in ["RGB", "Red", "Green", "Blue"].iter().enumerate() {
-            ui.selectable_value(&mut d.curve_channel, i, *name);
-        }
-    });
+    widgets::segmented(
+        ui,
+        &mut d.curve_channel,
+        &[(0, "RGB"), (1, "Red"), (2, "Green"), (3, "Blue")],
+    );
     curve(ui, &mut d.settings.curves[d.curve_channel], d.curve_channel);
     ui.horizontal(|ui| {
-        if ui.button("Linear").clicked() {
+        if widgets::button(ui, "Linear").clicked() {
             d.settings.curves[d.curve_channel] = [0.0, 0.25, 0.5, 0.75, 1.0];
         }
-        if ui.button("S curve").clicked() {
+        if widgets::button(ui, "S curve").clicked() {
             d.settings.curves[d.curve_channel] = [0.0, 0.18, 0.5, 0.82, 1.0];
         }
-        if ui.button("Lift blacks").clicked() {
+        if widgets::button(ui, "Lift blacks").clicked() {
             d.settings.curves[d.curve_channel] = [0.08, 0.28, 0.5, 0.75, 1.0];
         }
     });
     heading(ui, "Color mixer");
-    egui::ComboBox::from_id_salt("raw_hsl")
+    widgets::PopUp::from_id_salt("raw_hsl")
         .selected_text(
             [
                 "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta",
@@ -241,14 +248,14 @@ fn tones(ui: &mut egui::Ui, d: &mut Develop) {
             .iter()
             .enumerate()
             {
-                ui.selectable_value(&mut d.hsl_band, i, *name);
+                widgets::menu_choice(ui, &mut d.hsl_band, i, *name);
             }
         });
     percent(ui, "Hue", &mut d.settings.hsl[d.hsl_band][0]);
     percent(ui, "Saturation", &mut d.settings.hsl[d.hsl_band][1]);
     percent(ui, "Lightness", &mut d.settings.hsl[d.hsl_band][2]);
     heading(ui, "Black & white");
-    ui.checkbox(&mut d.settings.monochrome, "Monochrome");
+    widgets::checkbox(ui, &mut d.settings.monochrome, "Monochrome");
     ui.add_enabled_ui(d.settings.monochrome, |ui| {
         for (i, label) in ["Red mix", "Green mix", "Blue mix"].iter().enumerate() {
             slider(ui, label, &mut d.settings.bw_mix[i], -1.0..=2.0, "");
@@ -313,7 +320,7 @@ fn detail(ui: &mut egui::Ui, d: &mut Develop) {
         "",
     );
     ui.add_space(12.0);
-    ui.checkbox(&mut d.full_preview, "Full-resolution preview");
+    widgets::checkbox(ui, &mut d.full_preview, "Full-resolution preview");
     ui.label(egui::RichText::new("Use 100% to judge sharpening and noise reduction. Full-resolution previews take longer to update.").color(theme::MUTED));
 }
 
@@ -375,10 +382,10 @@ fn lens(ui: &mut egui::Ui, d: &mut Develop) {
         "",
     );
     ui.horizontal(|ui| {
-        if ui.button("Uncrop").clicked() {
+        if widgets::button(ui, "Uncrop").clicked() {
             d.settings.crop = [0.0, 0.0, 1.0, 1.0];
         }
-        if ui.button("Square").clicked()
+        if widgets::button(ui, "Square").clicked()
             && let Some(raw) = &d.proxy
         {
             let aspect = raw.camera.width() as f32 / raw.camera.height() as f32;
@@ -402,7 +409,7 @@ fn masks(ui: &mut egui::Ui, d: &mut Develop) {
                 ("Radial", OverlayKind::Radial),
                 ("Brush", OverlayKind::Brush),
             ] {
-                if ui.button(format!("+ {name}")).clicked() {
+                if widgets::button(ui, format!("+ {name}")).clicked() {
                     d.settings.overlays.push(Overlay {
                         name: format!("{name} {}", d.settings.overlays.len() + 1),
                         kind,
@@ -418,13 +425,8 @@ fn masks(ui: &mut egui::Ui, d: &mut Develop) {
     });
     for (i, overlay) in d.settings.overlays.iter_mut().enumerate() {
         ui.horizontal(|ui| {
-            ui.checkbox(&mut overlay.enabled, "");
-            if ui
-                .selectable_label(d.selected_overlay == Some(i), &overlay.name)
-                .clicked()
-            {
-                d.selected_overlay = Some(i);
-            }
+            widgets::checkbox(ui, &mut overlay.enabled, "");
+            widgets::selectable_value(ui, &mut d.selected_overlay, Some(i), &overlay.name);
         });
     }
     let Some(index) = d
@@ -436,15 +438,15 @@ fn masks(ui: &mut egui::Ui, d: &mut Develop) {
     };
     ui.separator();
     ui.horizontal(|ui| {
-        ui.checkbox(&mut d.draw_overlay, "Draw mask");
-        ui.checkbox(&mut d.show_mask, "Show guides");
+        widgets::checkbox(ui, &mut d.draw_overlay, "Draw mask");
+        widgets::checkbox(ui, &mut d.show_mask, "Show guides");
     });
     let overlay = &mut d.settings.overlays[index];
     ui.text_edit_singleline(&mut overlay.name);
-    ui.checkbox(&mut overlay.invert, "Invert mask");
+    widgets::checkbox(ui, &mut overlay.invert, "Invert mask");
     if overlay.kind == OverlayKind::Brush {
         slider(ui, "Brush radius", &mut overlay.radius, 0.005..=0.3, "");
-        if ui.button("Clear brush").clicked() {
+        if widgets::button(ui, "Clear brush").clicked() {
             overlay.points.clear();
         }
     }

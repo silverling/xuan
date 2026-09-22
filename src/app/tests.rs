@@ -3908,17 +3908,21 @@ fn number_wheel_changes_clamps_and_consumes_panel_scrolling() {
 
 #[test]
 fn slider_wheel_matches_number_steps_and_preserves_horizontal_scrolling() {
-    for (range, percentage, logarithmic, initial, step) in [
-        (0.0..=1.0, true, false, 0.5_f64, 0.01),
-        (-5.0..=5.0, false, false, 0.0, 0.01),
-        (0.1..=100.0, false, true, 10.0, 1.0),
+    for (range, percentage, logarithmic, decimals, initial, step) in [
+        (0.0..=1.0, true, false, None, 0.5_f64, 0.01),
+        (-5.0..=5.0, false, false, None, 0.0, 0.01),
+        (0.1..=100.0, false, true, None, 10.0, 1.0),
+        (-100.0..=100.0, false, false, Some(2), 12.34, 0.01),
     ] {
         let context = egui::Context::default();
         let mut value = initial;
         let mut draw = |events| {
             let (response, offset) = wheel_control_frame(&context, events, |ui| {
-                let slider =
+                let mut slider =
                     widgets::Slider::new(&mut value, range.clone()).logarithmic(logarithmic);
+                if let Some(decimals) = decimals {
+                    slider = slider.max_decimals(decimals);
+                }
                 ui.add(if percentage {
                     slider.percentage()
                 } else {

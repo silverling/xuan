@@ -232,6 +232,7 @@ pub struct Number<'a, N> {
     range: RangeInclusive<f64>,
     suffix: String,
     max_decimals: Option<usize>,
+    clamp_existing_to_range: bool,
     size: egui::Vec2,
 }
 impl<'a, N: egui::emath::Numeric> Number<'a, N> {
@@ -242,6 +243,7 @@ impl<'a, N: egui::emath::Numeric> Number<'a, N> {
             range: N::MIN.to_f64()..=N::MAX.to_f64(),
             suffix: String::new(),
             max_decimals: N::INTEGRAL.then_some(0),
+            clamp_existing_to_range: true,
             size: vec2(NUMBER_WIDTH, 22.0),
         }
     }
@@ -288,6 +290,7 @@ impl<N: egui::emath::Numeric> Widget for Number<'_, N> {
             let mut number = egui::DragValue::new(&mut *self.value)
                 .speed(self.speed)
                 .range(self.range.clone())
+                .clamp_existing_to_range(self.clamp_existing_to_range)
                 .suffix(self.suffix);
             if let Some(decimals) = self.max_decimals {
                 number = number.max_decimals(decimals);
@@ -370,6 +373,8 @@ pub struct Slider<'a, N> {
     suffix: String,
     logarithmic: bool,
     percentage: bool,
+    max_decimals: Option<usize>,
+    clamp_existing_to_range: bool,
     value_size: egui::Vec2,
 }
 impl<'a, N: egui::emath::Numeric> Slider<'a, N> {
@@ -381,6 +386,8 @@ impl<'a, N: egui::emath::Numeric> Slider<'a, N> {
             suffix: String::new(),
             logarithmic: false,
             percentage: false,
+            max_decimals: None,
+            clamp_existing_to_range: true,
             value_size: vec2(NUMBER_WIDTH, 22.0),
         }
     }
@@ -406,6 +413,15 @@ impl<'a, N: egui::emath::Numeric> Slider<'a, N> {
         self.value_size.x = width;
         self
     }
+    pub fn max_decimals(mut self, decimals: usize) -> Self {
+        self.max_decimals = Some(decimals);
+        self
+    }
+    /// Keep loaded values intact while still clamping edits to the slider range.
+    pub fn clamp_existing_to_range(mut self, clamp: bool) -> Self {
+        self.clamp_existing_to_range = clamp;
+        self
+    }
 }
 impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
     fn ui(self, ui: &mut Ui) -> Response {
@@ -413,11 +429,13 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
         let mut value = old;
         let range = self.range.start().to_f64()..=self.range.end().to_f64();
         let scale = if self.percentage { 100.0 } else { 1.0 };
-        let decimals = if N::INTEGRAL || self.percentage || range.end() - range.start() > 20.0 {
-            0
-        } else {
-            2
-        };
+        let decimals = self.max_decimals.unwrap_or(
+            if N::INTEGRAL || self.percentage || range.end() - range.start() > 20.0 {
+                0
+            } else {
+                2
+            },
+        );
         let speed = if decimals == 0 { 1.0 } else { 0.01 };
         let result = ui.horizontal(|ui| {
             ui.set_min_height(self.value_size.y.max(ui.spacing().interact_size.y));
@@ -437,6 +455,12 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
                     let mut slider = egui::Slider::new(&mut value, range.clone())
                         .show_value(false)
                         .logarithmic(self.logarithmic)
+                        .max_decimals_opt(self.max_decimals)
+                        .clamping(if self.clamp_existing_to_range {
+                            egui::SliderClamping::Always
+                        } else {
+                            egui::SliderClamping::Edits
+                        })
                         .handle_shape(egui::style::HandleShape::Circle);
                     if N::INTEGRAL {
                         slider = slider.integer();
@@ -500,14 +524,14 @@ impl<N: egui::emath::Numeric> Widget for Slider<'_, N> {
             );
             focus_ring(ui, &response, 4.0);
             let mut display = value * scale;
-            let number = ui.add(
-                Number::new(&mut display)
-                    .size(self.value_size)
-                    .range(range.start() * scale..=range.end() * scale)
-                    .speed(speed)
-                    .suffix(self.suffix)
-                    .max_decimals(decimals),
-            );
+            let mut number = Number::new(&mut display)
+                .size(self.value_size)
+                .range(range.start() * scale..=range.end() * scale)
+                .speed(speed)
+                .suffix(self.suffix)
+                .max_decimals(decimals);
+            number.clamp_existing_to_range = self.clamp_existing_to_range;
+            let number = ui.add(number);
             if number.changed() {
                 value = display / scale;
             }
@@ -977,6 +1001,19 @@ pub fn menu_choice<T: PartialEq>(
     option: T,
     label: impl ToString,
 ) -> Response {
+    let response = selectable_value(ui, value, option, label);
+    if response.clicked() {
+        ui.close();
+    }
+    response
+}
+
+pub fn selectable_value<T: PartialEq>(
+    ui: &mut Ui,
+    value: &mut T,
+    option: T,
+    label: impl ToString,
+) -> Response {
     let label = label.to_string();
     let selected = *value == option;
     let galley =
@@ -1013,12 +1050,9 @@ pub fn menu_choice<T: PartialEq>(
         galley,
         theme::TEXT,
     );
-    if response.clicked() {
-        if !selected {
-            *value = option;
-            response.mark_changed();
-        }
-        ui.close();
+    if response.clicked() && !selected {
+        *value = option;
+        response.mark_changed();
     }
     response
 }
