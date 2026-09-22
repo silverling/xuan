@@ -534,11 +534,11 @@ impl EditorApp {
         // Keep the state in the app while drawing window controls, so native close
         // takes the Develop discard path even when there is no document tab yet.
         egui::TopBottomPanel::top("develop_title")
-            .exact_height(40.0)
+            .exact_height(32.0)
             .frame(
                 egui::Frame::new()
                     .fill(theme::TITLEBAR)
-                    .inner_margin(egui::Margin::symmetric(14, 9)),
+                    .inner_margin(egui::Margin::symmetric(14, 5)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {

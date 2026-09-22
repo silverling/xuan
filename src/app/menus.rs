@@ -112,7 +112,7 @@ impl EditorApp {
             || self.close_app
             || self.close_tab.is_some();
         egui::TopBottomPanel::top("menubar")
-            .exact_height(40.0)
+            .exact_height(32.0)
             .frame(
                 egui::Frame::new()
                     .fill(theme::TITLEBAR)
@@ -122,7 +122,7 @@ impl EditorApp {
                         sw: 0,
                         se: 0,
                     })
-                    .inner_margin(egui::Margin::symmetric(14, 9)),
+                    .inner_margin(egui::Margin::symmetric(14, 5)),
             )
             .show(ctx, |ui| {
                 egui::MenuBar::new()
