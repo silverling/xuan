@@ -2730,6 +2730,74 @@ fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
 }
 
 #[test]
+fn native_window_gestures_work_without_a_mouse_release_event() {
+    let (context, mut app) = app();
+    frame(&context, &mut app);
+    frame(&context, &mut app);
+
+    // Wayland can consume the release while the compositor moves or resizes
+    // the window. Each new gesture must work without an intervening click.
+    for resize in [false, false, true, true, false] {
+        let start = if resize {
+            Pos2::new(1.0, 400.0)
+        } else {
+            Pos2::new(950.0, 20.0)
+        };
+        pointer_frame(&context, &mut app, start, None, egui::Modifiers::NONE);
+        let mut output =
+            pointer_frame(&context, &mut app, start, Some(true), egui::Modifiers::NONE);
+        if !resize {
+            output = pointer_frame(
+                &context,
+                &mut app,
+                start + egui::vec2(20.0, 5.0),
+                None,
+                egui::Modifiers::NONE,
+            );
+        }
+        assert!(has_command(&output, |command| if resize {
+            matches!(
+                command,
+                egui::ViewportCommand::BeginResize(egui::ResizeDirection::West)
+            )
+        } else {
+            matches!(command, egui::ViewportCommand::StartDrag)
+        }));
+
+        // The pointer leaves and returns, but no button-up reaches the app.
+        keyboard_frame(
+            &context,
+            &mut app,
+            vec![egui::Event::PointerGone],
+            egui::Modifiers::NONE,
+        );
+        frame(&context, &mut app);
+    }
+
+    // A normal control must also respond to the first click after a drag.
+    let minimize = Pos2::new(41.0, 20.0);
+    pointer_frame(&context, &mut app, minimize, None, egui::Modifiers::NONE);
+    pointer_frame(
+        &context,
+        &mut app,
+        minimize,
+        Some(true),
+        egui::Modifiers::NONE,
+    );
+    let output = pointer_frame(
+        &context,
+        &mut app,
+        minimize,
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+    assert!(has_command(&output, |command| matches!(
+        command,
+        egui::ViewportCommand::Minimized(true)
+    )));
+}
+
+#[test]
 fn titlebar_double_click_toggles_maximize_without_starting_a_drag() {
     for maximized in [false, true] {
         for x in [640.0, 950.0] {

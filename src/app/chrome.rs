@@ -138,7 +138,7 @@ impl EditorApp {
                 .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
         } else if response.drag_started_by(egui::PointerButton::Primary) {
             // A native drag grabs the pointer, so let clicks finish before handing it off.
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            start_native_drag(ui.ctx(), egui::ViewportCommand::StartDrag);
         }
     }
 
@@ -163,11 +163,19 @@ impl EditorApp {
                     if response.is_pointer_button_down_on()
                         && ui.input(|i| i.pointer.primary_pressed())
                     {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+                        start_native_drag(ctx, egui::ViewportCommand::BeginResize(direction));
                     }
                 });
         }
     }
+}
+
+fn start_native_drag(ctx: &egui::Context, command: egui::ViewportCommand) {
+    ctx.send_viewport_cmd(command);
+    // The compositor can consume the release event (notably on Wayland).
+    // End egui's gesture now so the next drag does not need a clearing click.
+    ctx.stop_dragging();
+    ctx.input_mut(|input| input.pointer = egui::PointerState::default());
 }
 
 fn resize_regions(rect: Rect) -> [(Rect, egui::ResizeDirection, egui::CursorIcon); 8] {
