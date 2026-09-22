@@ -990,7 +990,7 @@ impl EditorApp {
                     let targets = if transform_mask {
                         gesture.original.active.into_iter().collect()
                     } else {
-                        gesture.original.transform_targets()
+                        gesture.original.movement_targets()
                     };
                     if let Some(reference) = gesture.reference {
                         let moved = Point::new(gesture.start.x + dx, gesture.start.y + dy);

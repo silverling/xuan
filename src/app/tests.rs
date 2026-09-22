@@ -2231,6 +2231,27 @@ fn gradient_gestures_respect_the_mask_target_and_undo() {
             )
             .unwrap();
             app.command("mask");
+            let owner = app
+                .session()
+                .unwrap()
+                .document
+                .active()
+                .unwrap()
+                .parent
+                .unwrap();
+            let original_pixels = app
+                .session()
+                .unwrap()
+                .document
+                .layers
+                .iter()
+                .find(|l| l.id == owner)
+                .unwrap()
+                .pixels
+                .clone();
+            if !mask_target {
+                app.session_mut().unwrap().document.select(owner, false);
+            }
             app.mask_target = mask_target;
             app.set_tool(Tool::Gradient);
             app.radial = radial;
@@ -2251,19 +2272,22 @@ fn gradient_gestures_respect_the_mask_target_and_undo() {
             assert_eq!(session.history.undo_name(), Some("Gradient"));
             let after = session.document.active().unwrap().clone();
             if mask_target {
-                assert!(Arc::ptr_eq(
-                    before.pixels.as_ref().unwrap(),
-                    after.pixels.as_ref().unwrap(),
-                ));
+                assert_eq!(
+                    session
+                        .document
+                        .layers
+                        .iter()
+                        .find(|l| l.id == owner)
+                        .unwrap()
+                        .pixels,
+                    original_pixels
+                );
                 let mask = &after.mask.as_ref().unwrap().pixels;
                 assert!(mask.get_pixel(10, 20)[0] <= 1);
                 assert!((127..=129).contains(&mask.get_pixel(30, 20)[0]));
                 assert!(mask.get_pixel(50, 20)[0] >= 254);
             } else {
-                assert!(Arc::ptr_eq(
-                    &before.mask.as_ref().unwrap().pixels,
-                    &after.mask.as_ref().unwrap().pixels,
-                ));
+                assert!(before.mask.is_none() && after.mask.is_none());
                 let pixels = after.pixels.as_ref().unwrap();
                 assert!(pixels.get_pixel(10, 20)[0] <= 1);
                 assert!((127..=129).contains(&pixels.get_pixel(30, 20)[0]));
@@ -2275,8 +2299,8 @@ fn gradient_gestures_respect_the_mask_target_and_undo() {
                 let layer = app.session().unwrap().document.active().unwrap();
                 assert_eq!(layer.pixels, expected.pixels);
                 assert_eq!(
-                    layer.mask.as_ref().unwrap().pixels,
-                    expected.mask.as_ref().unwrap().pixels,
+                    layer.mask.as_ref().map(|m| &m.pixels),
+                    expected.mask.as_ref().map(|m| &m.pixels),
                 );
             }
         }
@@ -2397,6 +2421,193 @@ fn welcome_and_all_tool_panels_render_without_panics() {
 }
 
 #[test]
+fn image_children_collapse_and_effect_layers_attach_by_dragging() {
+    let (context, mut app) = app();
+    app.dimensions = [32, 24];
+    app.new_document();
+    app.command("fill_fg");
+    let owner = app.session().unwrap().document.active.unwrap();
+    for name in ["First mask", "Second mask"] {
+        app.command("mask");
+        let mask = app.session_mut().unwrap().document.active_mut().unwrap();
+        mask.name = name.into();
+        assert_eq!(mask.parent, Some(owner));
+        assert!(mask.standalone_mask);
+    }
+    assert_eq!(app.session().unwrap().document.layers.len(), 3);
+    let original = render::render(&app.session().unwrap().document);
+    let owner_label = layer_label(&context, &mut app, "Layer 1");
+    let chevron = frame(&context, &mut app)
+        .shapes
+        .into_iter()
+        .find_map(|shape| match shape.shape {
+            egui::Shape::Path(path)
+                if path.points.len() == 3
+                    && path.stroke.width == 1.5
+                    && path.points[1].x < owner_label.x
+                    && (owner_label.y..owner_label.y + 36.0).contains(&path.points[1].y) =>
+            {
+                Some(path.points[1])
+            }
+            _ => None,
+        })
+        .expect("Image disclosure chevron");
+    for collapsed in [true, false] {
+        pointer_frame(
+            &context,
+            &mut app,
+            chevron,
+            Some(true),
+            egui::Modifiers::NONE,
+        );
+        pointer_frame(
+            &context,
+            &mut app,
+            chevron,
+            Some(false),
+            egui::Modifiers::NONE,
+        );
+        let output = frame(&context, &mut app);
+        let has_child = output.shapes.iter().any(|shape| {
+            matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.text() == "First mask")
+        });
+        assert_eq!(has_child, !collapsed);
+        assert_eq!(app.session().unwrap().collapsed.contains(&owner), collapsed);
+        assert_eq!(render::render(&app.session().unwrap().document), original);
+    }
+
+    let filter = Filter::GaussianBlur { radius: 1.0 };
+    app.start_filter_layer(filter.clone());
+    frame(&context, &mut app);
+    let apply = layer_label(&context, &mut app, "Apply") + Vec2::splat(5.0);
+    pointer_frame(&context, &mut app, apply, Some(true), egui::Modifiers::NONE);
+    pointer_frame(
+        &context,
+        &mut app,
+        apply,
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+    assert!(app.dialog.is_none());
+    let filter_id = app.session().unwrap().document.active.unwrap();
+    assert!(
+        app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .parent
+            .is_none()
+    );
+    let from = layer_label(&context, &mut app, "Gaussian Blur") + Vec2::splat(5.0);
+    let to = layer_label(&context, &mut app, "Layer 1") + Vec2::new(5.0, 18.0);
+    drag_pointer(&context, &mut app, from, to, egui::Modifiers::NONE);
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().parent,
+        Some(owner)
+    );
+    app.command("undo");
+    assert!(
+        app.session()
+            .unwrap()
+            .document
+            .layers
+            .iter()
+            .find(|l| l.id == filter_id)
+            .unwrap()
+            .parent
+            .is_none()
+    );
+    app.command("redo");
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().parent,
+        Some(owner)
+    );
+
+    app.edit_filter_layer(filter_id);
+    let edit = app.effect.as_mut().unwrap();
+    edit.filter = Some(Filter::GaussianBlur { radius: 2.0 });
+    edit.refresh = true;
+    frame(&context, &mut app);
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().filter,
+        Some(filter)
+    );
+
+    app.start_adjustment(Adjustment::Invert, true);
+    frame(&context, &mut app);
+    let apply = layer_label(&context, &mut app, "Apply") + Vec2::splat(5.0);
+    pointer_frame(&context, &mut app, apply, Some(true), egui::Modifiers::NONE);
+    pointer_frame(
+        &context,
+        &mut app,
+        apply,
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+    assert!(
+        app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .parent
+            .is_none()
+    );
+    let from = layer_label(&context, &mut app, "Invert") + Vec2::splat(5.0);
+    let to = layer_label(&context, &mut app, "Layer 1") + Vec2::new(5.0, 18.0);
+    drag_pointer(&context, &mut app, from, to, egui::Modifiers::NONE);
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().parent,
+        Some(owner)
+    );
+    assert_eq!(
+        app.session()
+            .unwrap()
+            .document
+            .layers
+            .iter()
+            .filter(|l| l.parent == Some(owner))
+            .count(),
+        4
+    );
+
+    let from = layer_label(&context, &mut app, "Invert") + Vec2::splat(5.0);
+    let to = layer_label(&context, &mut app, "First mask") + Vec2::new(5.0, 34.0);
+    drag_pointer(&context, &mut app, from, to, egui::Modifiers::NONE);
+    let document = &app.session().unwrap().document;
+    let children: Vec<_> = document
+        .layers
+        .iter()
+        .filter(|l| l.parent == Some(owner))
+        .map(|l| l.name.as_str())
+        .collect();
+    assert_eq!(
+        children,
+        ["Invert", "First mask", "Second mask", "Gaussian Blur"]
+    );
+    app.command("move_out");
+    assert!(
+        app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .parent
+            .is_none()
+    );
+    app.session().unwrap().document.validate().unwrap();
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+#[test]
 fn standalone_mask_creation_editing_and_history_follow_layer_selection() {
     let (context, mut app) = app();
     app.dimensions = [64, 48];
@@ -2404,14 +2615,18 @@ fn standalone_mask_creation_editing_and_history_follow_layer_selection() {
     app.command("fill_fg");
     // An active layer still receives an attached mask.
     app.command("mask");
-    assert_eq!(app.session().unwrap().document.layers.len(), 1);
+    assert_eq!(app.session().unwrap().document.layers.len(), 2);
     assert!(
-        !app.session()
+        app.session()
             .unwrap()
             .document
             .active()
             .unwrap()
             .standalone_mask
+    );
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().parent,
+        Some(app.session().unwrap().document.layers[0].id)
     );
     app.command("undo");
 

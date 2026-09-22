@@ -40,6 +40,7 @@ impl LayerThumbnail {
 struct Actions {
     command: Option<&'static str>,
     adjustment: Option<Adjustment>,
+    filter: Option<xuan::effects::Filter>,
     visibility: Option<Uuid>,
     select: Option<(Uuid, bool)>,
     deselect: bool,
@@ -49,6 +50,7 @@ struct Actions {
     appearance: Option<(BlendMode, f32, bool)>,
     rename: Option<(Uuid, String)>,
     edit_adjustment: Option<Uuid>,
+    edit_filter: Option<Uuid>,
     edit_text: Option<Uuid>,
     edit_raw: Option<Uuid>,
 }
@@ -88,7 +90,7 @@ fn rows(document: &Document, collapsed: &std::collections::HashSet<Uuid>) -> Vec
         }
         for layer in document.layers.iter().rev().filter(|l| l.parent == parent) {
             output.push((layer.clone(), depth));
-            if layer.group && !collapsed.contains(&layer.id) {
+            if !collapsed.contains(&layer.id) {
                 visit(document, collapsed, Some(layer.id), depth + 1, output);
             }
         }
@@ -214,6 +216,19 @@ impl EditorApp {
     fn layer_row(&mut self, ui: &mut egui::Ui, layer: &Layer, depth: usize, actions: &mut Actions) {
         let session = &self.sessions[self.current];
         let selected = session.document.selected.contains(&layer.id);
+        let expandable = layer.group
+            || session
+                .document
+                .layers
+                .iter()
+                .any(|l| l.parent == Some(layer.id));
+        let attached = layer.parent.is_some_and(|id| {
+            session
+                .document
+                .layers
+                .iter()
+                .any(|l| l.id == id && l.can_attach_effects())
+        });
         let project = session.document.id;
         let width = ui.available_width();
         // Register the row behind its controls so it cannot steal their clicks.
@@ -245,13 +260,15 @@ impl EditorApp {
                                     egui::Layout::left_to_right(egui::Align::Center),
                                     |ui| {
                                         ui.add_space((depth as f32 * 24.0).min(72.0));
-                                        if layer.group {
+                                        if expandable {
                                             let collapsed = self.sessions[self.current]
                                                 .collapsed
                                                 .contains(&layer.id);
                                             if icons::disclosure(ui, collapsed).clicked() {
                                                 actions.collapse = Some(layer.id);
                                             }
+                                        }
+                                        if layer.group {
                                             if icons::action_button(ui, "group").clicked() {
                                                 actions.select = Some((layer.id, false));
                                             }
@@ -289,9 +306,16 @@ impl EditorApp {
                                             let detail = if layer.group {
                                                 "Folder".to_owned()
                                             } else if layer.standalone_mask {
-                                                "Mask · Layers below".to_owned()
+                                                if attached {
+                                                    "Mask · Image only"
+                                                } else {
+                                                    "Mask · Layers below"
+                                                }
+                                                .to_owned()
                                             } else if let Some(adjustment) = &layer.adjustment {
                                                 adjustment.name().to_owned()
+                                            } else if let Some(filter) = &layer.filter {
+                                                filter.name().to_owned()
                                             } else if layer.raw.is_some() {
                                                 "RAW · Embedded · Double-click to develop"
                                                     .to_owned()
@@ -337,6 +361,8 @@ impl EditorApp {
                 actions.edit_raw = Some(layer.id);
             } else if layer.adjustment.is_some() {
                 actions.edit_adjustment = Some(layer.id);
+            } else if layer.filter.is_some() {
+                actions.edit_filter = Some(layer.id);
             } else if layer.text.is_some() {
                 actions.edit_text = Some(layer.id);
             } else {
@@ -374,6 +400,10 @@ impl EditorApp {
                 actions.edit_adjustment = Some(layer.id);
                 ui.close();
             }
+            if layer.filter.is_some() && ui.button("Edit filter…").clicked() {
+                actions.edit_filter = Some(layer.id);
+                ui.close();
+            }
             if ui.button("Rename…").clicked() {
                 actions.rename = Some((layer.id, layer.name.clone()));
                 ui.close();
@@ -381,7 +411,7 @@ impl EditorApp {
             for (label, command) in [
                 ("Duplicate", "duplicate"),
                 ("New Group", "group"),
-                ("Move Out of Group", "move_out"),
+                ("Move Out of Parent", "move_out"),
                 ("Merge Down / Selected", "merge"),
                 ("Add Mask", "mask"),
                 ("Clipping Mask", "clip"),
@@ -403,7 +433,7 @@ impl EditorApp {
                     ("Link / Unlink Mask", "link_mask"),
                     ("Delete Mask", "delete_mask"),
                 ] {
-                    if layer.standalone_mask && command == "link_mask" {
+                    if layer.standalone_mask && !attached && command == "link_mask" {
                         continue;
                     }
                     if ui.button(label).clicked() {
@@ -422,7 +452,20 @@ impl EditorApp {
                     .contains(&layer.id))
             && let Some(pointer) = ui.input(|i| i.pointer.hover_pos())
         {
-            let position = DropPosition::at(response.rect, pointer.y, layer.group);
+            let source_layer = self
+                .sessions
+                .iter()
+                .find(|s| s.document.id == source.project)
+                .and_then(|s| s.document.layers.iter().find(|l| l.id == source.layer));
+            let can_attach =
+                layer.can_attach_effects() && source_layer.is_some_and(Layer::is_effect);
+            let position = DropPosition::at(response.rect, pointer.y, layer.group || can_attach);
+            if !matches!(position, DropPosition::Inside)
+                && attached
+                && !source_layer.is_some_and(Layer::is_effect)
+            {
+                return;
+            }
             let stroke = Stroke::new(2.0_f32, theme::ACCENT);
             actions.drop_indicator = Some(match position {
                 DropPosition::Above => egui::Shape::line_segment(
@@ -460,7 +503,7 @@ impl EditorApp {
             36.0
         };
         let canvas_size = vec2(document.width as f32, document.height as f32);
-        let size = if layer.adjustment.is_some() {
+        let size = if layer.adjustment.is_some() || layer.filter.is_some() {
             vec2(side, side)
         } else {
             canvas_size * (side / canvas_size.max_elem())
@@ -565,7 +608,7 @@ impl EditorApp {
         }
         if !mask && layer.pixels.is_none() {
             let center = response.rect.center();
-            if layer.adjustment.is_some() {
+            if layer.adjustment.is_some() || layer.filter.is_some() {
                 ui.painter().circle_filled(center, 7.0, theme::MUTED);
                 ui.painter().rect_filled(
                     egui::Rect::from_min_max(center - vec2(0.0, 7.0), center + vec2(7.0, 7.0)),
@@ -615,6 +658,10 @@ impl EditorApp {
                             .on_hover_text("New adjustment layer");
                         egui::Popup::menu(&adjustment).show(|ui| {
                             actions.adjustment = menus::adjustment_menu(ui);
+                            ui.separator();
+                            ui.menu_button("New Filter Layer", |ui| {
+                                actions.filter = menus::filter_menu(ui);
+                            });
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if icons::action_button(ui, "delete_layer")
@@ -681,6 +728,9 @@ impl EditorApp {
         if let Some(id) = actions.edit_adjustment {
             self.edit_adjustment_layer(id);
         }
+        if let Some(id) = actions.edit_filter {
+            self.edit_filter_layer(id);
+        }
         if let Some(id) = actions.edit_text {
             self.start_text(Some(id), xuan::document::Point::default());
         }
@@ -695,6 +745,9 @@ impl EditorApp {
         }
         if let Some(adjustment) = actions.adjustment {
             self.start_adjustment(adjustment, true);
+        }
+        if let Some(filter) = actions.filter {
+            self.start_filter_layer(filter);
         }
     }
 

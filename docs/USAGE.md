@@ -60,6 +60,25 @@ Xuan has a charcoal theme, contextual controls above the canvas, a vertical tool
 
 See [keyboard shortcuts](SHORTCUTS.md) for tool and command bindings.
 
+### Attached image effects
+
+An image can contain multiple masks, filters, and adjustment layers. Use its
+chevron to expand or collapse the attached layers. Each child affects only that
+image; effects run from the bottom child upward. Drag children to reorder them,
+use their eye icons to bypass them, and double-click a filter or adjustment to
+edit its settings. The original image pixels remain unchanged.
+
+**Layer → New Adjustment Layer** and **Layer → New Filter Layer** create standalone
+layers that affect the stack below. Drag an effect onto the middle of an image
+row to attach it. Drag it beside an outside row or use **Move Out of Parent** to
+detach it. The existing **Filter** menu still applies raster edits directly.
+
+**Add Layer Mask** adds a new mask child to the selected image (or the image of
+the selected child); it can be used repeatedly. **New Mask Layer** creates a
+standalone mask. Select a mask child to paint it, and use **Link / Unlink** to
+control whether it follows its image's transforms. Older single image masks are
+shown as children when a project is opened. Save as `.xuan` to preserve the stack.
+
 ## Files and export
 
 Use **File → Open Compositor Project…** to import an original `.comp` folder package. Save it as `.xuan` to keep editing on Linux. Image export supports PNG, JPEG, TIFF, and WebP; JPEG has a quality preview and PNG/JPEG carry print resolution.

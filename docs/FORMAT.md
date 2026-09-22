@@ -21,3 +21,18 @@ Documents containing RAW layers are written as version 2, preventing older reade
 A RAW image layer has an optional `raw` object containing the original filename, camera metadata, and validated `DevelopSettings`. Its original bytes are stored in `raw/<layer UUID>.nef` (also for NRW sources); the current developed render stays in `images/<layer UUID>.png`. Loading restores the image without decoding the sensor data. Reopening Develop decodes the embedded bytes, so moving/deleting the original file does not break the project. Missing sources, invalid settings, and oversized sources fail validation. RAW byte buffers are shared by layer duplicates and history snapshots, and included in history's memory accounting.
 
 The archive allows up to 30,001 entries to accommodate an image, mask and RAW source for each layer. Aggregate embedded RAW bytes are limited to 512 MiB. Develop settings store crop/overlay coordinates relative to the full oriented image; curve knots and all numeric parameters are finite and range-checked. Develop's transient preview, comparison view, clipping indicators, worker state, and local undo history are not serialized.
+
+## Attached effect stacks (version 4)
+
+Documents with image children or filter layers use version 4. The reader still
+accepts versions 1–3. A mask, adjustment, or filter layer can name an image layer
+as its `parent`; image and folder children remain restricted to folders. Each
+image's effect children are evaluated in document order, bottom to top, before
+its opacity, blending, and clipping are composited with other images.
+
+Mask children use `standalone_mask: true` and the existing mask PNG assets. Their
+parent distinguishes image-only coverage from standalone masks over lower
+siblings. The `filter` field stores Gaussian Blur, Motion Blur, Add Noise, or Lens
+Correction settings. Parameters, hierarchy, and cycles are validated on load.
+Source pixels are retained; intermediate effect rasters are not saved. Legacy
+single image masks are promoted to child layers when opened in the editor.

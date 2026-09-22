@@ -303,7 +303,7 @@ pub fn apply_adjustment(
     Ok(())
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Filter {
     GaussianBlur { radius: f32 },
     MotionBlur { distance: f32, angle: f32 },
@@ -312,6 +312,35 @@ pub enum Filter {
 }
 
 impl Filter {
+    pub fn validate(&self) -> Result<()> {
+        let valid = match *self {
+            Self::GaussianBlur { radius } => (0.0..=100.0).contains(&radius),
+            Self::MotionBlur { distance, angle } => {
+                (0.0..=200.0).contains(&distance) && (-180.0..=180.0).contains(&angle)
+            }
+            Self::Noise { amount, .. } => (0.0..=100.0).contains(&amount),
+            Self::LensCorrection {
+                distortion,
+                vignette,
+            } => (-50.0..=50.0).contains(&distortion) && (-100.0..=100.0).contains(&vignette),
+        };
+        ensure!(valid, "Invalid filter settings");
+        Ok(())
+    }
+
+    pub fn scaled(&self, scale: f32) -> Self {
+        match *self {
+            Self::GaussianBlur { radius } => Self::GaussianBlur {
+                radius: radius * scale,
+            },
+            Self::MotionBlur { distance, angle } => Self::MotionBlur {
+                distance: distance * scale,
+                angle,
+            },
+            _ => self.clone(),
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Self::GaussianBlur { .. } => "Gaussian Blur",

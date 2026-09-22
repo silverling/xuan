@@ -38,6 +38,31 @@ fn item(
     }
 }
 
+pub(super) fn filter_menu(ui: &mut egui::Ui) -> Option<Filter> {
+    let mut result = None;
+    for filter in [
+        Filter::GaussianBlur { radius: 4.0 },
+        Filter::MotionBlur {
+            distance: 15.0,
+            angle: 0.0,
+        },
+        Filter::Noise {
+            amount: 10.0,
+            monochrome: true,
+        },
+        Filter::LensCorrection {
+            distortion: 0.0,
+            vignette: 0.0,
+        },
+    ] {
+        if ui.button(filter.name()).clicked() {
+            result = Some(filter);
+            ui.close();
+        }
+    }
+    result
+}
+
 pub(super) fn adjustment_menu(ui: &mut egui::Ui) -> Option<Adjustment> {
     let mut result = None;
     for adjustment in [
@@ -80,6 +105,7 @@ impl EditorApp {
         let mut adjustment = None;
         let mut filter = None;
         let mut adjustment_layer = false;
+        let mut filter_layer = false;
         let has_doc = self.session().is_some();
         let blocked = self.job.is_some()
             || self.dialog.is_some()
@@ -267,6 +293,10 @@ impl EditorApp {
                                         adjustment = adjustment_menu(ui);
                                         adjustment_layer = true;
                                     });
+                                    ui.menu_button("New Filter Layer", |ui| {
+                                        filter = filter_menu(ui);
+                                        filter_layer = true;
+                                    });
                                     ui.menu_button("Layer Mask", |ui| {
                                         item(
                                             ui,
@@ -385,7 +415,11 @@ impl EditorApp {
             self.start_adjustment(adjustment, adjustment_layer);
         }
         if let Some(filter) = filter {
-            self.start_filter(filter);
+            if filter_layer {
+                self.start_filter_layer(filter);
+            } else {
+                self.start_filter(filter);
+            }
         }
     }
 

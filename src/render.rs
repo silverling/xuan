@@ -6,6 +6,9 @@ use crate::{
     document::{Document, Layer, Point},
 };
 
+mod attachments;
+pub(crate) use attachments::prepare as prepare_attachments;
+
 pub fn sample(image: &RgbaImage, unit: Point) -> [f32; 4] {
     if !(0.0..1.0).contains(&unit.x) || !(0.0..1.0).contains(&unit.y) {
         return [0.0; 4];
@@ -96,6 +99,7 @@ pub fn inherited_coverage(document: &Document, layer: &Layer, point: Point) -> f
 pub(crate) enum CompositeStep<'a> {
     BeginGroup,
     Layer(&'a Layer),
+    Filtered(&'a Layer, RgbaImage),
     EndGroup,
 }
 
@@ -234,6 +238,8 @@ pub fn render(document: &Document) -> RgbaImage {
 }
 
 pub fn render_scaled(document: &Document, width: u32, height: u32) -> RgbaImage {
+    let prepared = prepare_attachments(document);
+    let document = prepared.as_ref();
     if let Some(result) = crate::gpu::compose(document, width, height) {
         return result;
     }
@@ -259,9 +265,34 @@ pub fn render_thumbnail(document: &Document, width: u32, height: u32) -> RgbaIma
     )
 }
 
-fn render_pixels(document: &Document, width: u32, height: u32) -> RgbaImage {
+pub(crate) fn render_pixels(document: &Document, width: u32, height: u32) -> RgbaImage {
+    let prepared = prepare_attachments(document);
+    let document = prepared.as_ref();
+    let mut steps = Vec::new();
+    for step in composite_steps(document) {
+        if let CompositeStep::Layer(layer) = step
+            && let Some(filter) = &layer.filter
+        {
+            let backdrop = render_steps(document, &steps, width, height);
+            let filter = filter.scaled(width as f32 / document.width as f32);
+            steps.push(CompositeStep::Filtered(
+                layer,
+                crate::effects::filtered(&backdrop, &filter),
+            ));
+        } else {
+            steps.push(step);
+        }
+    }
+    render_steps(document, &steps, width, height)
+}
+
+fn render_steps(
+    document: &Document,
+    steps: &[CompositeStep<'_>],
+    width: u32,
+    height: u32,
+) -> RgbaImage {
     let mut output = RgbaImage::new(width, height);
-    let steps = composite_steps(document);
     output
         .as_mut()
         .par_chunks_exact_mut(4)
@@ -273,13 +304,24 @@ fn render_pixels(document: &Document, width: u32, height: u32) -> RgbaImage {
                 (x as f32 + 0.5) * document.width as f32 / width as f32,
                 (y as f32 + 0.5) * document.height as f32 / height as f32,
             );
-            let pixel = composite_at(document, &steps, point, groups);
+            let pixel = composite_at(document, steps, point, groups);
             target.copy_from_slice(&pixel.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
         });
     output
 }
 
 pub fn pixel_at(document: &Document, point: Point) -> [f32; 4] {
+    let prepared = prepare_attachments(document);
+    let document = prepared.as_ref();
+    if document.layers.iter().any(|l| l.filter.is_some()) {
+        return sample(
+            &render_pixels(document, document.width, document.height),
+            Point::new(
+                point.x / document.width as f32,
+                point.y / document.height as f32,
+            ),
+        );
+    }
     composite_at(document, &composite_steps(document), point, &mut Vec::new())
 }
 
@@ -292,7 +334,7 @@ fn composite_at(
     let mut pixel = [0.0; 4];
     groups.clear();
     for step in steps {
-        let layer = match *step {
+        let layer = match step {
             CompositeStep::BeginGroup => {
                 groups.push(pixel);
                 continue;
@@ -301,7 +343,21 @@ fn composite_at(
                 groups.pop();
                 continue;
             }
-            CompositeStep::Layer(layer) => layer,
+            CompositeStep::Layer(layer) => *layer,
+            CompositeStep::Filtered(layer, image) => {
+                let filtered = sample(
+                    image,
+                    Point::new(
+                        point.x / document.width as f32,
+                        point.y / document.height as f32,
+                    ),
+                );
+                let amount = layer.opacity
+                    * own_mask(layer, point)
+                    * inherited_coverage(document, layer, point);
+                pixel = attachments::mix(pixel, filtered, amount);
+                continue;
+            }
         };
         if layer.standalone_mask {
             let amount = 1.0 - layer.opacity * (1.0 - own_mask(layer, point));
@@ -343,6 +399,8 @@ fn composite_at(
 }
 
 pub fn hit_test(document: &Document, point: Point) -> Option<uuid::Uuid> {
+    let prepared = prepare_attachments(document);
+    let document = prepared.as_ref();
     paint_order(document)
         .into_iter()
         .rev()
@@ -386,8 +444,7 @@ pub fn hit_test_bounds(document: &Document, point: Point) -> Option<uuid::Uuid> 
         .into_iter()
         .rev()
         .find(|layer| {
-            if layer.locked || !layer.visible || layer.adjustment.is_some() || layer.standalone_mask
-            {
+            if layer.locked || !layer.visible || layer.is_effect() {
                 return false;
             }
             let unit = layer.transform.inverse(point);
@@ -422,6 +479,9 @@ pub fn flatten_white(image: &RgbaImage) -> image::RgbImage {
 
 #[cfg(test)]
 mod mask_tests;
+
+#[cfg(test)]
+mod attachment_tests;
 
 #[cfg(test)]
 mod tests {

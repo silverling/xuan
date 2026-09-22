@@ -590,7 +590,7 @@ impl EditorApp {
                 }
                 if edit.as_layer {
                     ui.label(
-                        RichText::new("Non-destructive adjustment layer")
+                        RichText::new("Non-destructive effect layer")
                             .small()
                             .color(theme::MUTED),
                     );
@@ -605,7 +605,7 @@ impl EditorApp {
             self.dialog = None;
             return;
         }
-        if edit.filter.is_some() {
+        if edit.filter.is_some() && !edit.as_layer && edit.target.is_none() {
             if !self.update_filter_preview(&mut edit, changed, apply) {
                 self.effect = Some(edit);
             }
@@ -616,21 +616,26 @@ impl EditorApp {
             if let Some(session) = self.session_mut() {
                 session.document = edit.original.clone();
                 if edit.preview || apply {
-                    let result = if let Some(adjustment) = &edit.adjustment {
+                    let result = if edit.as_layer || edit.target.is_some() {
                         if let Some(target) = edit.target {
                             if let Some(layer) =
                                 session.document.layers.iter_mut().find(|l| l.id == target)
                             {
-                                layer.adjustment = Some(adjustment.clone());
+                                layer.adjustment = edit.adjustment.clone();
+                                layer.filter = edit.filter.clone();
                             }
                             Ok(())
-                        } else if edit.as_layer {
-                            let mut layer = Layer::blank(
-                                adjustment.name(),
-                                session.document.width,
-                                session.document.height,
-                            );
-                            layer.adjustment = Some(adjustment.clone());
+                        } else {
+                            let name = edit
+                                .adjustment
+                                .as_ref()
+                                .map(Adjustment::name)
+                                .or_else(|| edit.filter.as_ref().map(Filter::name))
+                                .unwrap();
+                            let mut layer =
+                                Layer::blank(name, session.document.width, session.document.height);
+                            layer.adjustment = edit.adjustment.clone();
+                            layer.filter = edit.filter.clone();
                             if session.document.selection.is_some() {
                                 let mask =
                                     xuan::paint::mask_from_selection(&session.document, &layer);
@@ -641,13 +646,9 @@ impl EditorApp {
                             }
                             session.document.insert(layer);
                             Ok(())
-                        } else {
-                            effects::apply_adjustment(
-                                &mut session.document,
-                                adjustment,
-                                mask_target,
-                            )
                         }
+                    } else if let Some(adjustment) = &edit.adjustment {
+                        effects::apply_adjustment(&mut session.document, adjustment, mask_target)
                     } else {
                         Ok(())
                     };

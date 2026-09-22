@@ -287,6 +287,8 @@ pub struct Layer {
     #[serde(default)]
     pub standalone_mask: bool,
     pub adjustment: Option<Adjustment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<crate::effects::Filter>,
     #[serde(default)]
     pub shape: Option<ShapeStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -298,6 +300,14 @@ pub struct Layer {
 }
 
 impl Layer {
+    pub fn is_effect(&self) -> bool {
+        self.standalone_mask || self.adjustment.is_some() || self.filter.is_some()
+    }
+
+    pub fn can_attach_effects(&self) -> bool {
+        !self.group && !self.is_effect()
+    }
+
     pub fn blank(name: impl Into<String>, width: u32, height: u32) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -313,6 +323,7 @@ impl Layer {
             mask: None,
             standalone_mask: false,
             adjustment: None,
+            filter: None,
             shape: None,
             text: None,
             raw: None,
@@ -418,12 +429,55 @@ impl Document {
             layer.parent = if active.group {
                 Some(active.id)
             } else {
-                active.parent
+                self.sibling_parent(active)
             };
         }
         self.select(layer.id, false);
         self.layers
             .insert(index.map_or(self.layers.len(), |i| i + 1), layer);
+    }
+
+    /// New standalone layers stay outside an image's attached effect stack.
+    pub fn sibling_parent(&self, layer: &Layer) -> Option<Uuid> {
+        layer.parent.and_then(|id| {
+            let parent = self.layers.iter().find(|l| l.id == id)?;
+            if parent.can_attach_effects() {
+                parent.parent
+            } else {
+                Some(id)
+            }
+        })
+    }
+
+    pub fn attachment_owner(&self, layer: &Layer) -> Option<Uuid> {
+        if layer.can_attach_effects() {
+            Some(layer.id)
+        } else {
+            layer.parent.filter(|id| {
+                self.layers
+                    .iter()
+                    .any(|l| l.id == *id && l.can_attach_effects())
+            })
+        }
+    }
+
+    /// Upgrade the original single-mask slot to a reorderable child without
+    /// changing its placement, coverage, or the selected image.
+    pub fn promote_image_masks(&mut self) {
+        let mut masks = Vec::new();
+        for layer in &mut self.layers {
+            if layer.can_attach_effects()
+                && let Some(mask) = layer.mask.take()
+            {
+                let mut child = Layer::mask("Mask", self.width, self.height);
+                child.parent = Some(layer.id);
+                child.transform = layer.transform;
+                child.mask = Some(mask);
+                masks.push(child);
+            }
+        }
+        // Legacy masks ran after the image's existing effects.
+        self.layers.extend(masks);
     }
 
     pub fn descendants(&self, id: Uuid) -> HashSet<Uuid> {
@@ -448,6 +502,20 @@ impl Document {
             result.extend(self.descendants(*id));
         }
         result
+    }
+
+    pub fn movement_targets(&self) -> HashSet<Uuid> {
+        self.transform_targets()
+            .into_iter()
+            .filter(|id| {
+                self.selected.contains(id)
+                    || self.layers.iter().find(|l| l.id == *id).is_none_or(|l| {
+                        !l.standalone_mask
+                            || self.attachment_owner(l).is_none()
+                            || l.mask.as_ref().is_none_or(|m| m.linked)
+                    })
+            })
+            .collect()
     }
 
     pub fn delete_selected(&mut self) {
@@ -487,6 +555,7 @@ impl Document {
                     || (layer.mask.is_some()
                         && !layer.group
                         && layer.adjustment.is_none()
+                        && layer.filter.is_none()
                         && layer.pixels.is_none()
                         && layer.clip_to.is_none()),
                 "Invalid standalone mask layer"
@@ -517,6 +586,13 @@ impl Document {
             if let Some(adjustment) = &layer.adjustment {
                 crate::effects::validate_adjustment(adjustment)?;
             }
+            if let Some(filter) = &layer.filter {
+                filter.validate()?;
+                ensure!(
+                    !layer.group && layer.adjustment.is_none() && layer.clip_to.is_none(),
+                    "Invalid filter layer"
+                );
+            }
             ensure!(
                 !layer.name.trim().is_empty() && layer.name.len() <= 16_384,
                 "Invalid layer name"
@@ -527,8 +603,9 @@ impl Document {
                 "Invalid opacity"
             );
             ensure!(
-                !(layer.group || layer.adjustment.is_some()) || layer.pixels.is_none(),
-                "Group/adjustment cannot contain pixels"
+                !(layer.group || layer.adjustment.is_some() || layer.filter.is_some())
+                    || layer.pixels.is_none(),
+                "Group/effect cannot contain pixels"
             );
             if let Some(image) = &layer.pixels {
                 validate_size(image.width(), image.height())?;
@@ -543,15 +620,24 @@ impl Document {
                 mask_pixels += u64::from(mask.pixels.width()) * u64::from(mask.pixels.height());
             }
             let mut parent = layer.parent;
+            let mut child = layer;
             let mut visited = HashSet::from([layer.id]);
             while let Some(id) = parent {
                 ensure!(
                     visited.insert(id) && visited.len() <= 65,
                     "Cyclic or excessively nested groups"
                 );
-                let group = self.layers.iter().find(|l| l.id == id);
-                ensure!(group.is_some_and(|l| l.group), "Missing parent group");
-                parent = group.and_then(|l| l.parent);
+                let container = self
+                    .layers
+                    .iter()
+                    .find(|l| l.id == id)
+                    .ok_or_else(|| anyhow::anyhow!("Missing parent layer"))?;
+                ensure!(
+                    container.group || (container.can_attach_effects() && child.is_effect()),
+                    "Only masks, filters, and adjustments can attach to an image"
+                );
+                child = container;
+                parent = container.parent;
             }
             let mut source = layer.clip_to;
             let mut visited = HashSet::from([layer.id]);
@@ -562,7 +648,7 @@ impl Document {
                 );
                 let target = self.layers.iter().find(|l| l.id == id);
                 ensure!(
-                    target.is_some_and(|l| !l.group && !l.standalone_mask),
+                    target.is_some_and(|l| !l.group && !l.standalone_mask && l.filter.is_none()),
                     "Missing clipping source"
                 );
                 source = target.and_then(|l| l.clip_to);
@@ -609,6 +695,28 @@ mod tests {
         clipped.clip_to = document.active;
         document.insert(clipped);
         assert!(document.validate().is_err());
+    }
+
+    #[test]
+    fn image_parents_only_accept_valid_effect_children() {
+        let mut doc = Document::new(4, 4).unwrap();
+        let owner = doc.active.unwrap();
+        let mut child = Layer::blank("Child", 4, 4);
+        child.parent = Some(owner);
+        let child_id = child.id;
+        doc.layers.push(child);
+        assert!(doc.validate().is_err());
+        doc.layers[1].filter = Some(crate::effects::Filter::GaussianBlur { radius: 2.0 });
+        doc.validate().unwrap();
+        doc.layers[1].filter = Some(crate::effects::Filter::GaussianBlur { radius: f32::NAN });
+        assert!(doc.validate().is_err());
+        doc.layers[1].filter = None;
+        doc.layers[1].adjustment = Some(Adjustment::Invert);
+        doc.validate().unwrap();
+        let mut mask = Layer::mask("Nested effect", 4, 4);
+        mask.parent = Some(child_id);
+        doc.layers.push(mask);
+        assert!(doc.validate().is_err());
     }
 
     #[test]

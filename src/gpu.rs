@@ -48,10 +48,11 @@ pub fn can_preview_motion_blur(document: &Document) -> bool {
                 && !layer.group
                 && layer.adjustment.is_none()
                 && layer.raw.is_none()
-                && !document
-                    .layers
-                    .iter()
-                    .any(|other| other.clip_to == Some(layer.id))
+                && !document.layers.iter().any(|other| {
+                    other.clip_to == Some(layer.id)
+                        || other.parent == Some(layer.id)
+                        || other.filter.is_some()
+                })
         })
 }
 
@@ -183,6 +184,23 @@ impl GpuCompositor {
         motion_blur: Option<[f32; 2]>,
         straight_output: bool,
     ) {
+        let prepared = render::prepare_attachments(document);
+        let flattened;
+        let document = if prepared.layers.iter().any(|l| l.filter.is_some()) {
+            // Neighborhood filters need the accumulated raster, including all
+            // lower effects. Upload that result through the usual display path.
+            let pixels = render::render_pixels(&prepared, size[0], size[1]);
+            let mut layer = Layer::image("Filtered composite", pixels);
+            layer.transform.width = document.width as f32;
+            layer.transform.height = document.height as f32;
+            flattened = Document {
+                layers: vec![layer],
+                ..prepared.into_owned()
+            };
+            &flattened
+        } else {
+            prepared.as_ref()
+        };
         let motion_blur = motion_blur.filter(|_| can_preview_motion_blur(document));
         if size != self.size {
             self.size = size;
@@ -240,6 +258,9 @@ impl GpuCompositor {
                     continue;
                 }
                 render::CompositeStep::Layer(layer) => layer,
+                render::CompositeStep::Filtered(..) => {
+                    unreachable!("Filters are rasterized before GPU composition")
+                }
             };
             if !layer.standalone_mask && layer.pixels.is_none() && layer.adjustment.is_none() {
                 continue;
@@ -775,6 +796,67 @@ impl Processor {
 mod tests {
     use super::*;
     use image::Rgba;
+
+    #[test]
+    #[ignore = "requires a Vulkan or OpenGL compute adapter"]
+    fn image_effect_stacks_match_cpu_in_preview_and_export() {
+        use crate::effects::Filter;
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).unwrap();
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&Default::default())).unwrap();
+        let processor = Processor::new(device.clone(), queue.clone());
+        let mut compositor = GpuCompositor::new(device, queue);
+        let mut document = Document::new(160, 144).unwrap();
+        let mut owner = Layer::image(
+            "Image",
+            RgbaImage::from_pixel(160, 144, Rgba([60, 110, 170, 255])),
+        );
+        owner.opacity = 0.8;
+        let mut mask = Layer::mask("Mask", 160, 144);
+        mask.parent = Some(owner.id);
+        mask.mask.as_mut().unwrap().pixels =
+            Arc::new(image::GrayImage::from_fn(160, 144, |x, _| {
+                image::Luma([if x < 80 { 255 } else { 0 }])
+            }));
+        let mut blur = Layer::blank("Blur", 160, 144);
+        blur.parent = Some(owner.id);
+        blur.filter = Some(Filter::GaussianBlur { radius: 2.0 });
+        let mut invert = Layer::blank("Invert", 160, 144);
+        invert.parent = Some(owner.id);
+        invert.adjustment = Some(Adjustment::Invert);
+        document.select(owner.id, false);
+        document.layers = vec![owner, mask, blur, invert];
+        for standalone in [false, true] {
+            if standalone {
+                document.layers[2].parent = None;
+            }
+            document.validate().unwrap();
+            let expected = render::render(&document);
+            for accelerated in [false, true] {
+                scope(accelerated.then(|| processor.clone()), || {
+                    compositor.render(&document, [160, 144])
+                });
+                compare(&document, &readback(&compositor), "Image effect stack");
+                let actual = scope(accelerated.then(|| processor.clone()), || {
+                    processor.compose(&document, 160, 144).unwrap()
+                });
+                for (a, b) in actual.pixels().zip(expected.pixels()) {
+                    // RGB at zero alpha is not observable and is canonicalized by the GPU.
+                    assert!(a[3].abs_diff(b[3]) <= 2, "GPU {a:?}, CPU {b:?}");
+                    if a[3].min(b[3]) > 8 {
+                        assert!(
+                            a.0[..3]
+                                .iter()
+                                .zip(&b.0[..3])
+                                .all(|(a, b)| a.abs_diff(*b) <= 3),
+                            "GPU {a:?}, CPU {b:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     #[ignore = "requires a Vulkan or OpenGL compute adapter; run explicitly for native verification"]

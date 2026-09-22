@@ -58,7 +58,7 @@ pub fn apply_transform(document: &mut Document, new: Transform, mask_target: boo
     let targets = if mask_target {
         document.active.into_iter().collect()
     } else {
-        document.transform_targets()
+        document.movement_targets()
     };
     for layer in &mut document.layers {
         if !targets.contains(&layer.id) || layer.locked {
@@ -134,8 +134,13 @@ pub fn copy_layers(source: &Document, destination: &mut Document, root: Uuid) ->
         if let Some(clip) = layer.clip_to.filter(|id| !targets.contains(id))
             && let Some(pixels) = &layer.pixels
         {
-            let base = source.layers.iter().find(|l| l.id == clip).unwrap();
-            let baked = crate::gpu::bake_alpha(source, base, pixels, layer.transform)
+            let prepared_source = render::prepare_attachments(source);
+            let base = prepared_source
+                .layers
+                .iter()
+                .find(|l| l.id == clip)
+                .unwrap();
+            let baked = crate::gpu::bake_alpha(&prepared_source, base, pixels, layer.transform)
                 .unwrap_or_else(|| {
                     let mut baked = (**pixels).clone();
                     let (width, height) = baked.dimensions();
@@ -144,8 +149,9 @@ pub fn copy_layers(source: &Document, destination: &mut Document, root: Uuid) ->
                             (x as f32 + 0.5) / width as f32,
                             (y as f32 + 0.5) / height as f32,
                         ));
-                        pixel[3] = (pixel[3] as f32 * render::layer_alpha(source, base, point, 0))
-                            .round() as u8;
+                        pixel[3] = (pixel[3] as f32
+                            * render::layer_alpha(&prepared_source, base, point, 0))
+                        .round() as u8;
                     }
                     baked
                 });
@@ -172,6 +178,9 @@ pub fn copy_layers(source: &Document, destination: &mut Document, root: Uuid) ->
 
 pub fn group(document: &mut Document) {
     let parent = document.active().and_then(|l| l.parent);
+    if parent.is_some_and(|id| document.layers.iter().any(|l| l.id == id && !l.group)) {
+        return;
+    }
     let mut group = Layer::blank("Group", document.width, document.height);
     group.group = true;
     group.parent = parent;
@@ -206,6 +215,15 @@ pub fn ungroup(document: &mut Document) {
 
 pub fn merge_selected(document: &mut Document, down: bool) -> Result<()> {
     let mut targets = document.transform_targets();
+    // An attached effect can only be baked together with its image and stack.
+    for layer in &document.layers {
+        if targets.contains(&layer.id)
+            && layer.is_effect()
+            && let Some(owner) = document.attachment_owner(layer)
+        {
+            targets.extend(document.descendants(owner));
+        }
+    }
     if down && targets.len() == 1 {
         let index = document
             .layers
@@ -223,10 +241,9 @@ pub fn merge_selected(document: &mut Document, down: bool) -> Result<()> {
             }
         }
     }
-    // Baking a standalone mask must include its entire lower stack, otherwise
-    // removing it would reveal layers that were previously masked out.
+    // Baking a standalone mask or filter must include its entire lower stack.
     for (index, mask) in document.layers.iter().enumerate().rev() {
-        if mask.standalone_mask && targets.contains(&mask.id) {
+        if (mask.standalone_mask || mask.filter.is_some()) && targets.contains(&mask.id) {
             for layer in document.layers[..index]
                 .iter()
                 .filter(|l| l.parent == mask.parent)
@@ -389,12 +406,16 @@ pub fn copy_pixels(document: &Document, merged: bool) -> Option<(RgbaImage, Poin
     } else {
         let layer = document.active()?;
         let mut isolated = document.clone();
-        isolated.layers = vec![Layer {
-            parent: None,
-            visible: true,
-            clip_to: None,
-            ..layer.clone()
-        }];
+        let targets = document.descendants(layer.id);
+        isolated.layers.retain(|l| targets.contains(&l.id));
+        let root = isolated
+            .layers
+            .iter_mut()
+            .find(|l| l.id == layer.id)
+            .unwrap();
+        root.parent = None;
+        root.visible = true;
+        root.clip_to = None;
         render::render(&isolated)
     };
     let (left, top, right, bottom) = if let Some(mask) = &document.selection {
@@ -414,11 +435,17 @@ pub fn copy_pixels(document: &Document, merged: bool) -> Option<(RgbaImage, Poin
 }
 
 pub fn selection_from_layer(document: &mut Document, mask_target: bool) {
-    let Some(layer) = document.active() else {
+    let prepared = if mask_target {
+        std::borrow::Cow::Borrowed(&*document)
+    } else {
+        render::prepare_attachments(document)
+    };
+    let source = prepared.as_ref();
+    let Some(layer) = source.active() else {
         return;
     };
     if let Some(mask) = crate::gpu::coverage_image(
-        document,
+        source,
         layer,
         [document.width, document.height],
         if mask_target {
@@ -436,7 +463,7 @@ pub fn selection_from_layer(document: &mut Document, mask_target: bool) {
         let value = if mask_target {
             render::own_mask(layer, point)
         } else {
-            render::layer_alpha(document, layer, point, 0)
+            render::layer_alpha(source, layer, point, 0)
         };
         Luma([(value * 255.0).round() as u8])
     });

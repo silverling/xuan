@@ -233,13 +233,13 @@ pub fn disclosure(ui: &mut Ui, collapsed: bool) -> egui::Response {
             egui::WidgetType::CollapsingHeader,
             ui.is_enabled(),
             !collapsed,
-            "Folder",
+            "Layer contents",
         )
     });
     response.on_hover_text(if collapsed {
-        "Expand folder"
+        "Expand layers"
     } else {
-        "Collapse folder"
+        "Collapse layers"
     })
 }
 

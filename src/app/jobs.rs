@@ -72,6 +72,7 @@ impl EditorApp {
             match result {
                 Ok(document) if !job.cancel.load(Ordering::Relaxed) => {
                     session.document = document;
+                    session.document.promote_image_masks();
                     session.history.commit();
                     self.status = job.name;
                 }

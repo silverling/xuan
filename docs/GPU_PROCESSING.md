@@ -42,6 +42,15 @@ independent image-wide preparation and postprocessing use compute.
 
 ## Execution and fidelity
 
+Attached image effects are materialized in source coordinates before composition,
+using the existing GPU filter and adjustment routines when available. Mask
+coverage and effect opacity are combined in premultiplied color on the CPU. A
+standalone filter materializes its accumulated backdrop with the CPU compositor,
+runs the raster filter, and returns the result through the regular display path.
+The source image and saved effect settings remain unchanged. This path prioritizes
+the same bottom-to-top result in preview, export, merging, and clipboard copies;
+long effect stacks can increase recomposition time.
+
 - Full-resolution processing uses original image dimensions. Preview downsampling
   never sets the Apply/export resolution.
 - Device limits are checked before buffer/texture work. The desktop requests the

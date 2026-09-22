@@ -184,6 +184,7 @@ struct Session {
 impl Session {
     fn new(mut document: Document, title: String, path: Option<PathBuf>) -> Self {
         document.id = Uuid::new_v4();
+        document.promote_image_masks();
         Self {
             document,
             history: History::default(),
@@ -566,6 +567,7 @@ impl EditorApp {
             .and_then(|()| paint::refresh_shapes(&mut session.document))
         {
             Ok(()) => {
+                session.document.promote_image_masks();
                 session.history.commit();
                 session.invalidate();
                 self.status = name.into();
@@ -836,6 +838,26 @@ impl EditorApp {
         }
     }
 
+    fn start_filter_layer(&mut self, filter: Filter) {
+        self.start_filter(filter);
+        if let Some(edit) = &mut self.effect {
+            edit.as_layer = true;
+        }
+    }
+
+    fn edit_filter_layer(&mut self, id: Uuid) {
+        let filter = self
+            .session()
+            .and_then(|s| s.document.layers.iter().find(|l| l.id == id))
+            .and_then(|l| l.filter.clone());
+        if let Some(filter) = filter {
+            self.start_filter(filter);
+            if let Some(edit) = &mut self.effect {
+                edit.target = Some(id);
+            }
+        }
+    }
+
     fn add_demo(&mut self) {
         let mut document = Document::new(1200, 900).unwrap();
         document.layers.clear();
@@ -1014,6 +1036,17 @@ impl EditorApp {
                         doc.insert(layer);
                         return Ok(());
                     }
+                    if let Some(owner) = doc.active().and_then(|l| doc.attachment_owner(l)) {
+                        let image = doc.layers.iter().find(|l| l.id == owner).unwrap();
+                        let mut layer = Layer::mask("Mask", doc.width, doc.height);
+                        layer.transform = image.transform;
+                        layer.parent = Some(owner);
+                        layer.mask.as_mut().unwrap().pixels =
+                            Arc::new(paint::mask_from_selection(doc, image));
+                        doc.select(layer.id, false);
+                        doc.layers.push(layer);
+                        return Ok(());
+                    }
                     if doc.active().is_some_and(|l| l.standalone_mask) {
                         return Ok(());
                     }
@@ -1027,6 +1060,11 @@ impl EditorApp {
                     Ok(())
                 });
                 self.mask_target = true;
+                if let Some(session) = self.session_mut()
+                    && let Some(parent) = session.document.active().and_then(|l| l.parent)
+                {
+                    session.collapsed.remove(&parent);
+                }
                 self.brush.color = [255; 4];
                 self.background = [0, 0, 0, 255];
             }
@@ -1051,8 +1089,11 @@ impl EditorApp {
                 Ok(())
             }),
             "link_mask" => self.edit("Link Mask", |doc| {
+                let attached = doc
+                    .active()
+                    .is_some_and(|l| l.is_effect() && doc.attachment_owner(l).is_some());
                 if let Some(layer) = doc.active_mut()
-                    && !layer.standalone_mask
+                    && (!layer.standalone_mask || attached)
                     && let Some(mask) = &mut layer.mask
                 {
                     mask.linked = !mask.linked;
@@ -1068,10 +1109,13 @@ impl EditorApp {
                         .iter()
                         .rev()
                         .find(|l| {
-                            l.parent == doc.layers[index].parent && !l.group && !l.standalone_mask
+                            l.parent == doc.layers[index].parent && !l.group && !l.is_effect()
                         })
                         .map(|l| l.clip_to.unwrap_or(l.id));
-                    if !doc.layers[index].group && !doc.layers[index].standalone_mask {
+                    if !doc.layers[index].group
+                        && !doc.layers[index].standalone_mask
+                        && doc.layers[index].filter.is_none()
+                    {
                         doc.layers[index].clip_to = if doc.layers[index].clip_to.is_some() {
                             None
                         } else {
