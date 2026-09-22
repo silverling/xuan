@@ -3299,6 +3299,62 @@ fn window_title_updates_on_document_and_dirty_state_changes() {
 }
 
 #[test]
+fn menu_bar_hover_switches_only_while_a_menu_is_open() {
+    let (context, mut app) = app();
+    let file = layer_label(&context, &mut app, "File") + Vec2::splat(5.0);
+    let help = layer_label(&context, &mut app, "Help") + Vec2::splat(5.0);
+    let expect_menu = |app: &mut EditorApp, expected: Option<&str>| {
+        let output = frame(&context, app);
+        for label in ["Open Compositor Package…", "About Xuan"] {
+            let visible = output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)
+            });
+            assert_eq!(visible, expected == Some(label), "Menu item: {label}");
+        }
+        assert_eq!(egui::Popup::is_any_open(&context), expected.is_some());
+    };
+
+    pointer_frame(&context, &mut app, file, None, egui::Modifiers::NONE);
+    expect_menu(&mut app, None);
+
+    pointer_frame(&context, &mut app, file, Some(true), egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, file, Some(false), egui::Modifiers::NONE);
+    expect_menu(&mut app, Some("Open Compositor Package…"));
+
+    // Switching works in either direction without another click.
+    for (position, label) in [(help, "About Xuan"), (file, "Open Compositor Package…")] {
+        pointer_frame(&context, &mut app, position, None, egui::Modifiers::NONE);
+        expect_menu(&mut app, Some(label));
+    }
+
+    // Clicking the active heading closes it and ends hover switching.
+    pointer_frame(&context, &mut app, file, Some(true), egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, file, Some(false), egui::Modifiers::NONE);
+    expect_menu(&mut app, None);
+    pointer_frame(&context, &mut app, help, None, egui::Modifiers::NONE);
+    expect_menu(&mut app, None);
+
+    pointer_frame(&context, &mut app, help, Some(true), egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, help, Some(false), egui::Modifiers::NONE);
+    expect_menu(&mut app, Some("About Xuan"));
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    pointer_frame(&context, &mut app, file, None, egui::Modifiers::NONE);
+    expect_menu(&mut app, None);
+
+    // An unrelated popup must not activate the menu bar's hover behavior.
+    let unrelated = egui::Id::new("unrelated_popup");
+    egui::Popup::open_id(&context, unrelated);
+    pointer_frame(&context, &mut app, help, None, egui::Modifiers::NONE);
+    assert!(egui::Popup::is_id_open(&context, unrelated));
+    egui::Popup::close_all(&context);
+}
+
+#[test]
 fn client_titlebar_moves_resizes_and_preserves_unsaved_close_flow() {
     let (context, mut app) = app();
     frame(&context, &mut app);

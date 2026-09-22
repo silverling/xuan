@@ -10,13 +10,27 @@ fn menu_bar_button(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egu
     let background = ui.painter().add(egui::Shape::Noop);
     let response = ui.add(Button::new(label).fill(egui::Color32::TRANSPARENT));
     let rect = response.rect.expand2(egui::vec2(4.0, 0.0));
+    let popup_id = egui::Popup::default_response_id(&response);
+    let open_menu_id = ui.id().with("menu_bar_open_popup");
+    let open_menu = ui
+        .data(|data| data.get_temp::<egui::Id>(open_menu_id))
+        .filter(|id| egui::Popup::is_id_open(ui.ctx(), *id));
+    if response.hovered() && !response.clicked() && open_menu.is_some_and(|id| id != popup_id) {
+        egui::Popup::open_id(ui.ctx(), popup_id);
+    }
+
     let config = egui::containers::menu::MenuConfig::find(ui);
     egui::Popup::menu(&response)
         .anchor(rect)
         .close_behavior(config.close_behavior)
         .style(config.style)
         .show(content);
-    let visuals = ui.style().interact(&response);
+    let visuals = if egui::Popup::is_id_open(ui.ctx(), popup_id) {
+        ui.data_mut(|data| data.insert_temp(open_menu_id, popup_id));
+        &ui.visuals().widgets.open
+    } else {
+        ui.style().interact(&response)
+    };
 
     // The dropdown and the expanded highlight share the same left edge.
     ui.painter().set(
