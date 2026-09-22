@@ -19,7 +19,22 @@ jobs:
       - name: Install Linux libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libvulkan1 mesa-vulkan-drivers desktop-file-utils xvfb dpkg rpm cpio binutils
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libvulkan1 mesa-vulkan-drivers desktop-file-utils xvfb dpkg rpm cpio binutils
+      - name: Set up AppImage packaging
+        run: |
+          mkdir -p "$RUNNER_TEMP/appimage-tools"
+          curl --fail --location --retry 3 \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage \
+            --output "$RUNNER_TEMP/appimage-tools/linuxdeploy"
+          echo "c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  $RUNNER_TEMP/appimage-tools/linuxdeploy" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/appimage-tools/linuxdeploy"
+          curl --fail --location --retry 3 \
+            https://github.com/NixOS/patchelf/releases/download/0.19.1/patchelf-0.19.1-x86_64.tar.gz \
+            --output "$RUNNER_TEMP/patchelf.tar.gz"
+          echo "a6818fef80128fb354423234ecacdcca3e993913d774e5d8346bc63f70fed4cf  $RUNNER_TEMP/patchelf.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/patchelf.tar.gz" -C "$RUNNER_TEMP/appimage-tools" ./bin/patchelf
+          echo "$RUNNER_TEMP/appimage-tools" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/appimage-tools/bin" >> "$GITHUB_PATH"
       - name: Set up Rust
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
@@ -32,6 +47,13 @@ jobs:
         run: scripts/package.sh all
       - name: Verify distribution packages
         run: python3 scripts/check-packages.py
+      - name: AppImage X11 smoke test
+        run: |
+          mkdir -p "$RUNNER_TEMP/appimage smoke"
+          cd "$RUNNER_TEMP/appimage smoke"
+          xvfb-run -a env -u WAYLAND_DISPLAY APPIMAGE_EXTRACT_AND_RUN=1 \
+            "$GITHUB_WORKSPACE"/dist/*.AppImage --demo --screenshot "xuan demo.png"
+          test -s "xuan demo.png"
       - name: Install Debian package
         run: sudo apt-get install -y ./dist/*.deb
       - name: Native X11 smoke test

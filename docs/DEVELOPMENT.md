@@ -58,11 +58,17 @@ On Linux:
 scripts/package.sh                 # portable archive (default)
 scripts/package.sh deb             # Debian/Ubuntu package
 scripts/package.sh rpm             # RPM package
-scripts/package.sh all             # all three binary formats and matching sources
+scripts/package.sh appimage        # standalone AppImage
+scripts/package.sh all             # all four binary formats and matching sources
 python3 scripts/check-packages.py  # inspect binary packages and source archive
+python3 scripts/check-packages.py --appimage  # inspect only AppImage and sources
 ```
 
 Outputs and individual SHA-256 checksums are written to `dist/`. Both packaging scripts also produce `xuan-<version>-source.tar.gz`; distribute that matching source archive alongside the binaries. Linux packaging requires Python **3.11+**, binutils, and the normal build prerequisites. Debian packaging additionally needs `dpkg-deb`; RPM packaging needs `rpmbuild`. On Debian/Ubuntu, install the packaging and inspection tools with `sudo apt install dpkg rpm cpio binutils desktop-file-utils`. Linux packaging supports native x86_64 and aarch64 builds. The packaging scripts do not support cross-compilation.
+
+AppImage packaging additionally requires [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy/releases/tag/1-alpha-20251107-1) with its AppImage output plugin and [patchelf 0.19.1](https://github.com/NixOS/patchelf/releases/tag/0.19.1), available as `linuxdeploy` and `patchelf` on `PATH`, plus `ldconfig` and the desktop libraries listed in `scripts/package-native.py`. On Debian/Ubuntu, also install `libxkbcommon-x11-0`. The separate patchelf avoids startup crashes caused by linuxdeploy's older bundled version rewriting modern ELF libraries. CI downloads pinned releases of both tools and verifies their SHA-256 checksums before use. Packaging runs without FUSE; the AppImage output plugin downloads the runtime, so internet access is required.
+
+The AppImage includes the shared application payload, an `AppRun` launcher, and X11/Wayland libraries (including libraries loaded through `dlopen`) with their license notices. glibc, the Vulkan loader, GPU drivers, and desktop portals come from the host. `AppRun` preserves the calling directory and arguments, so opening relative file paths works. Package verification extracts the image without FUSE, checks its contents and checksum, and runs both the extracted launcher and the AppImage's extract-and-run mode.
 
 A portable Linux archive includes `bin/xuan`, `scripts/install.sh`, and a `share/` directory for desktop integration, icons, licenses, and user guides. It can run directly after extraction. Debian and RPM packages install the same application files under `/usr`. Binary packages omit source code, CI workflows, original artwork, development guides, and screenshots. Their `share/doc/xuan/SOURCES.md` notice points to the exact source download; links to development documentation point to the release's repository tag.
 
@@ -74,7 +80,7 @@ Build on the oldest distribution you intend to support. The locally produced arc
 
 ## GitHub releases
 
-The [release workflow](../.github/workflows/release.yml) runs when a `v*` tag is pushed. It rejects tags that do not match the package version in `Cargo.toml`, then runs the shared Linux and Windows checks. Linux builds all three x86_64 packages and the matching source archive on Ubuntu 24.04 and tests Debian installation, native startup, and removal. The [Windows workflow](../.github/workflows/windows.yml) runs on Windows Server 2022, builds the portable MSVC x86_64 ZIP, verifies its payload and checksums, and launches the packaged application with DirectX 12 to capture a demo screenshot. Both jobs must pass before publishing. Package checks reject development files in binary payloads and verify the source archive's vendored dependencies and resolved lockfile.
+The [release workflow](../.github/workflows/release.yml) runs when a `v*` tag is pushed. It rejects tags that do not match the package version in `Cargo.toml`, then runs the shared Linux and Windows checks. Linux builds all four x86_64 packages and the matching source archive on Ubuntu 24.04, tests AppImage startup without FUSE under Xvfb, and tests Debian installation, native startup, and removal. The [Windows workflow](../.github/workflows/windows.yml) runs on Windows Server 2022, builds the portable MSVC x86_64 ZIP, verifies its payload and checksums, and launches the packaged application with DirectX 12 to capture a demo screenshot. Both jobs must pass before publishing. Package checks reject development files in binary payloads and verify the source archive's vendored dependencies and resolved lockfile.
 
 To release, update the version in `Cargo.toml` and the `xuan` entry in `Cargo.lock`, commit the changes, then create and push the matching tag. For example, for version `0.2.0`:
 
@@ -83,7 +89,7 @@ git tag -a v0.2.0 -m 'Release v0.2.0'
 git push origin v0.2.0
 ```
 
-After validation succeeds, [changelogithub](https://github.com/antfu-collective/changelogithub) generates release notes from conventional commits. The GitHub CLI uploads the three Linux binary packages, Windows ZIP, matching source archive, and all five checksums. Missing artifacts fail the workflow before publication; retries replace matching assets and upload failures fail the workflow. The workflow fetches the full Git history and uses pinned changelogithub **15.0.5** with Node.js 24. Only the publishing job receives `contents: write`; it uses the built-in `GITHUB_TOKEN` and needs no separate release secret. Prerelease tags such as `v0.2.0-rc.1` are marked as GitHub prereleases.
+After validation succeeds, [changelogithub](https://github.com/antfu-collective/changelogithub) generates release notes from conventional commits. The GitHub CLI uploads the four Linux binary packages, Windows ZIP, matching source archive, and all six checksums. Missing artifacts fail the workflow before publication; retries replace matching assets and upload failures fail the workflow. The workflow fetches the full Git history and uses pinned changelogithub **15.0.5** with Node.js 24. Only the publishing job receives `contents: write`; it uses the built-in `GITHUB_TOKEN` and needs no separate release secret. Prerelease tags such as `v0.2.0-rc.1` are marked as GitHub prereleases.
 
 Preview release notes locally without publishing:
 

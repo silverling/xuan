@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+appdir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export LD_LIBRARY_PATH="$appdir/usr/lib:$appdir/usr/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export XDG_DATA_DIRS="$appdir/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+
+# Preserve the caller's working directory so relative image paths keep working.
+exec "$appdir/usr/bin/xuan" "$@"

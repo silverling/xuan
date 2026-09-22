@@ -49,6 +49,8 @@ def check_tools(package_format):
         commands.append("dpkg-deb")
     if package_format in ("rpm", "all"):
         commands.append("rpmbuild")
+    if package_format in ("appimage", "all"):
+        commands.extend(("linuxdeploy", "patchelf", "ldconfig"))
     missing = [command for command in commands if not shutil.which(command)]
     if missing:
         raise ValueError(f"Missing packaging tools: {', '.join(missing)}")
@@ -186,11 +188,103 @@ def build_rpm(payload, output, version, architecture, temporary):
     )
 
 
+def copy_rpm_library_licenses(payload, cache):
+    # linuxdeploy collects Debian copyright files, but has no RPM backend.
+    if not Path("/etc/redhat-release").exists():
+        return
+    for library in (payload / "usr/lib").glob("*.so.*"):
+        original = re.search(
+            rf"^\s*{re.escape(library.name)} .* => (.+)$", cache, re.MULTILINE
+        )
+        package = subprocess.check_output(
+            ["rpm", "-qf", "--qf", "%{NAME}", original[1]], text=True
+        )
+        # These runtime packages share notices with their common/base package.
+        package = {
+            "libX11": "libX11-common",
+            "libX11-xcb": "libX11-common",
+            "libxkbcommon-x11": "libxkbcommon",
+        }.get(package, package)
+        files = subprocess.check_output(["rpm", "-ql", package], text=True).splitlines()
+        notices = [
+            Path(name)
+            for name in files
+            if "/licenses/" in name
+            or Path(name).name in ("COPYING", "LICENSE", "copyright")
+        ]
+        if not any(path.is_file() for path in notices):
+            raise ValueError(f"Missing AppImage library license notices: {package}")
+        for notice in notices:
+            if notice.is_file():
+                destination = payload / notice.relative_to("/")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(notice, destination)
+
+
+def build_appimage(payload, output, version, architecture):
+    # These libraries are opened with dlopen, so ELF dependency scanning misses them.
+    # Keep the Vulkan loader and GPU drivers on the host.
+    cache = subprocess.check_output(["ldconfig", "-p"], text=True)
+    libraries = []
+    for name in RPM_LIBRARIES:
+        if name == "libvulkan.so.1":
+            continue
+        for candidate in re.findall(
+            rf"^\s*{re.escape(name)} .* => (.+)$", cache, re.MULTILINE
+        ):
+            with Path(candidate).open("rb") as library:
+                header = library.read(20)
+            if (
+                header[:6] == b"\x7fELF\x02\x01"
+                and struct.unpack("<H", header[18:20])[0]
+                == ARCHITECTURES[architecture][1]
+            ):
+                libraries.extend(("--library", candidate))
+                break
+        else:
+            raise ValueError(f"Missing AppImage runtime library: {name}")
+    environment = {
+        **os.environ,
+        "ARCH": architecture,
+        "LINUXDEPLOY_OUTPUT_VERSION": version,
+        "APPIMAGE_EXTRACT_AND_RUN": "1",
+        # linuxdeploy's bundled patchelf is too old for some modern ELF layouts.
+        "PATCHELF": shutil.which("patchelf"),
+        "NO_STRIP": "1",  # The staged executable is already stripped.
+        "LDAI_OUTPUT": str(output),
+        "LDAI_NO_APPSTREAM": "1",
+    }
+    subprocess.run(
+        [
+            "linuxdeploy",
+            "--appdir",
+            payload,
+            "--custom-apprun",
+            ROOT / "packaging/AppRun",
+            "--desktop-file",
+            payload / "usr/share/applications/me.silverl.xuan.desktop",
+            "--icon-file",
+            payload / "usr/share/icons/hicolor/256x256/apps/me.silverl.xuan.png",
+            *libraries,
+        ],
+        env=environment,
+        check=True,
+    )
+    copy_rpm_library_licenses(payload, cache)
+    subprocess.run(
+        ["linuxdeploy", "--appdir", payload, "--output", "appimage"],
+        env=environment,
+        check=True,
+    )
+    output.chmod(0o755)
+
+
 def main():
     os.umask(0o022)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--check-tools", choices=("deb", "rpm", "all"))
-    parser.add_argument("format", nargs="?", choices=("deb", "rpm", "all"))
+    formats = ("deb", "rpm", "appimage", "all")
+    parser.add_argument("--check-tools", choices=formats)
+    parser.add_argument("format", nargs="?", choices=formats)
     parser.add_argument("stage", nargs="?", type=Path)
     parser.add_argument("version", nargs="?")
     parser.add_argument("output", nargs="?", type=Path)
@@ -209,16 +303,19 @@ def main():
         temporary = Path(directory).resolve()
         payload = temporary / "payload"
         stage_payload(args.stage, payload)
-        formats = ("deb", "rpm") if args.format == "all" else (args.format,)
+        formats = ("deb", "rpm", "appimage") if args.format == "all" else (args.format,)
         for package_format in formats:
+            extension = "AppImage" if package_format == "appimage" else package_format
             output = (
                 args.output.resolve()
-                / f"xuan-{args.version}-linux-{architecture}.{package_format}"
+                / f"xuan-{args.version}-linux-{architecture}.{extension}"
             )
             if package_format == "deb":
                 build_deb(payload, output, version, architecture, glibc)
-            else:
+            elif package_format == "rpm":
                 build_rpm(payload, output, version, architecture, temporary)
+            else:
+                build_appimage(payload, output, args.version, architecture)
             with output.open("rb") as stream:
                 digest = hashlib.file_digest(stream, "sha256").hexdigest()
             output.with_name(output.name + ".sha256").write_text(

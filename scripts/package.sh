@@ -6,11 +6,11 @@ xuan_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$xuan_root"
 xuan_format=${1:-archive}
 case "$xuan_format" in
-    archive|deb|rpm|all) ;;
-    *) printf 'Usage: %s [archive|deb|rpm|all]\n' "$0" >&2; exit 1 ;;
+    archive|deb|rpm|appimage|all) ;;
+    *) printf 'Usage: %s [archive|deb|rpm|appimage|all]\n' "$0" >&2; exit 1 ;;
 esac
 if [[ $# -gt 1 ]]; then
-    printf 'Usage: %s [archive|deb|rpm|all]\n' "$0" >&2
+    printf 'Usage: %s [archive|deb|rpm|appimage|all]\n' "$0" >&2
     exit 1
 fi
 for xuan_tool in python3 strip; do

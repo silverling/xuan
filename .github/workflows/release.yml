@@ -64,6 +64,7 @@ jobs:
           for artifact in "xuan-$version-linux-x86_64.tar.gz" \
                           "xuan-$version-linux-x86_64.deb" \
                           "xuan-$version-linux-x86_64.rpm" \
+                          "xuan-$version-linux-x86_64.AppImage" \
                           "xuan-$version-windows-x86_64.zip" \
                           "xuan-$version-source.tar.gz"; do
             test -f "$artifact"
@@ -77,7 +78,7 @@ jobs:
           npx --yes changelogithub@15.0.5 --to "$RELEASE_TAG" --github "$GITHUB_REPOSITORY"
           version="${RELEASE_TAG#v}"
           gh release upload "$RELEASE_TAG" \
-            dist/xuan-"$version"-linux-x86_64.{tar.gz,deb,rpm}{,.sha256} \
+            dist/xuan-"$version"-linux-x86_64.{tar.gz,deb,rpm,AppImage}{,.sha256} \
             dist/xuan-"$version"-windows-x86_64.zip{,.sha256} \
             dist/xuan-"$version"-source.tar.gz{,.sha256} \
             --clobber --repo "$GITHUB_REPOSITORY"

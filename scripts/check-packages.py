@@ -31,7 +31,7 @@ def check_checksum(package):
         assert hashlib.file_digest(stream, "sha256").hexdigest() == digest, package
 
 
-def check_files(prefix, portable=False, windows=False):
+def check_files(prefix, portable=False, windows=False, appimage=False):
     expected = {
         "share/licenses/xuan/LICENSE",
         "share/licenses/xuan/rawler-LGPL-2.1.txt",
@@ -73,12 +73,36 @@ def check_files(prefix, portable=False, windows=False):
         for path in prefix.rglob("*")
         if path.is_file()
     }
+    if appimage:
+        # linuxdeploy adds shared libraries and their upstream license notices.
+        expected.update(
+            name
+            for name in actual - expected
+            if name.startswith(("lib/", "lib64/"))
+            or (
+                name.startswith(("share/doc/", "share/licenses/"))
+                and not name.startswith(("share/doc/xuan/", "share/licenses/xuan/"))
+            )
+        )
     assert actual == expected, (
         f"Unexpected files: {actual - expected}; missing: {expected - actual}"
     )
     allowed_directories = {parent for name in expected for parent in Path(name).parents}
+    if appimage:
+        allowed_directories.update(
+            Path(name)
+            for name in (
+                "share/pixmaps",
+                "share/icons/hicolor/scalable",
+                "share/icons/hicolor/scalable/apps",
+            )
+        )
     for path in prefix.rglob("*"):
-        assert not path.is_symlink(), f"Unexpected symlink: {path}"
+        if appimage and path.is_symlink():
+            assert path.resolve().is_relative_to(prefix.resolve()), path
+            assert path.exists(), f"Broken symlink: {path}"
+        else:
+            assert not path.is_symlink(), f"Unexpected symlink: {path}"
         if path.is_dir():
             assert path.relative_to(prefix) in allowed_directories, path
         if not windows:
@@ -143,8 +167,11 @@ def check_source(temporary):
         "src/io/fixtures/checker-grid.heic",
         "licenses/heic-rs-MIT.txt",
         "scripts/package.sh",
+        "scripts/package-native.py",
         "scripts/package-windows.py",
         "scripts/package-source.py",
+        "packaging/AppRun",
+        ".github/workflows/linux.yml",
         ".github/workflows/windows.yml",
         "docs/DEVELOPMENT.md",
         "LICENSE",
@@ -185,16 +212,86 @@ def check_source(temporary):
     )
 
 
+def check_appimage(temporary):
+    package = ROOT / "dist" / f"{NAME}.AppImage"
+    check_checksum(package)
+    assert package.stat().st_mode & 0o777 == 0o755
+    with package.open("rb") as stream:
+        header = stream.read(11)
+    assert header[:4] == b"\x7fELF" and header[8:11] == b"AI\x02", (
+        "Expected a type 2 AppImage"
+    )
+    destination = temporary / "AppImage with spaces"
+    destination.mkdir()
+    subprocess.run(
+        [package, "--appimage-extract"],
+        cwd=destination,
+        stdout=subprocess.DEVNULL,
+        check=True,
+        timeout=60,
+    )
+    appdir = destination / "squashfs-root"
+    assert {path.name for path in appdir.iterdir()} == {
+        "AppRun",
+        ".DirIcon",
+        "me.silverl.xuan.desktop",
+        "me.silverl.xuan.png",
+        "usr",
+    }
+    assert (appdir / "AppRun").read_bytes() == (ROOT / "packaging/AppRun").read_bytes()
+    assert (appdir / "AppRun").stat().st_mode & 0o777 == 0o755
+    for name in (".DirIcon", "me.silverl.xuan.desktop", "me.silverl.xuan.png"):
+        assert (appdir / name).resolve().is_relative_to(appdir), name
+        assert (appdir / name).is_file(), name
+    assert (appdir / ".DirIcon").read_bytes() == (
+        appdir / "me.silverl.xuan.png"
+    ).read_bytes()
+    subprocess.run(
+        ["desktop-file-validate", appdir / "me.silverl.xuan.desktop"], check=True
+    )
+    check_files(appdir / "usr", appimage=True)
+    for name in (
+        "libxkbcommon.so.0",
+        "libxkbcommon-x11.so.0",
+        "libwayland-client.so.0",
+    ):
+        assert any(
+            (appdir / "usr" / lib / name).is_file() for lib in ("lib", "lib64")
+        ), f"Missing bundled runtime library: {name}"
+    notices = [
+        path
+        for directory in ("share/doc", "share/licenses")
+        for path in (appdir / "usr" / directory).glob("*/*")
+        if path.parent.name != "xuan" and path.is_file()
+    ]
+    assert notices, "Missing bundled library license notices"
+    for command in ([appdir / "AppRun"], [package, "--appimage-extract-and-run"]):
+        actual_version = subprocess.check_output(
+            [*command, "--version"], cwd=destination, text=True, timeout=60
+        ).strip()
+        assert actual_version == f"xuan {VERSION}", actual_version
+    print(
+        f"Verified {package.name}: payload, desktop entry, bundled libraries, FUSE-free launch"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    formats = parser.add_mutually_exclusive_group()
+    formats.add_argument(
         "--windows", action="store_true", default=sys.platform == "win32"
+    )
+    formats.add_argument(
+        "--appimage", action="store_true", help="check only AppImage and sources"
     )
     args = parser.parse_args()
     os.umask(0o022)
     with tempfile.TemporaryDirectory(prefix="xuan-package-check-") as directory:
         temporary = Path(directory)
         check_source(temporary)
+        if args.appimage:
+            check_appimage(temporary)
+            return
         if args.windows:
             name = f"xuan-{VERSION}-windows-x86_64"
             package = ROOT / "dist" / f"{name}.zip"
@@ -289,6 +386,7 @@ def main():
             print(
                 f"Verified {package.name}: runtime files, documentation, metadata, ownership"
             )
+        check_appimage(temporary)
     print("All binary packages, source archive, and checksums passed.")
 
 

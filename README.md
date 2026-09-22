@@ -18,7 +18,7 @@ This project is inspired by [Compositor](https://github.com/robbietilton/Composi
 
 ## Get started
 
-Download a Linux `.deb`, `.rpm`, portable archive, or Windows `.zip` from [Releases](https://github.com/silverling/xuan/releases). Follow the [installation instructions](docs/USAGE.md#install-and-launch), then launch the demo:
+Download a Linux AppImage, `.deb`, `.rpm`, portable archive, or Windows `.zip` from [Releases](https://github.com/silverling/xuan/releases). Follow the [installation instructions](docs/USAGE.md#install-and-launch), then launch the demo:
 
 ```sh
 xuan --demo
