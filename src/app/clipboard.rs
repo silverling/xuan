@@ -5,7 +5,7 @@ use image::RgbaImage;
 use url::Url;
 use xuan::{document::validate_size, io};
 
-use super::{EditorApp, Layer, Point};
+use super::{Document, EditorApp, Layer, Point, Session};
 
 pub(super) enum ClipboardContent {
     Image(RgbaImage),
@@ -117,6 +117,63 @@ impl EditorApp {
                 self.error = Some(format!("Could not paste\n\n{error:#}"));
             }
         }
+    }
+
+    pub(super) fn open_clipboard(&mut self) {
+        self.connect_clipboard();
+        let result = read_clipboard(self.system_clipboard.as_mut(), None)
+            .and_then(|content| self.open_clipboard_content(content));
+        if let Err(error) = result {
+            self.clipboard = None;
+            self.error = Some(format!("Could not open image from clipboard\n\n{error:#}"));
+        }
+    }
+
+    pub(super) fn open_clipboard_content(&mut self, content: ClipboardContent) -> Result<()> {
+        let pixels = match content {
+            ClipboardContent::Image(pixels) => {
+                if self
+                    .clipboard
+                    .as_ref()
+                    .is_some_and(|(cached, _)| *cached != pixels)
+                {
+                    self.clipboard = None;
+                }
+                pixels
+            }
+            ClipboardContent::Files(paths) => {
+                self.clipboard = None;
+                for path in paths {
+                    self.open_path(&path, false);
+                }
+                return Ok(());
+            }
+            ClipboardContent::Unavailable => match &self.clipboard {
+                Some((pixels, _)) => pixels.clone(),
+                None => {
+                    self.status = "The system clipboard is unavailable".into();
+                    return Ok(());
+                }
+            },
+            ClipboardContent::Empty => {
+                self.clipboard = None;
+                self.status = "The clipboard does not contain an image or image file".into();
+                return Ok(());
+            }
+        };
+
+        let mut document = Document::new(pixels.width(), pixels.height())?;
+        let layer = Layer::image("Clipboard image", pixels);
+        document.select(layer.id, false);
+        document.layers = vec![layer];
+        let mut session = Session::new(document, "Clipboard".into(), None);
+        session.history.mark_modified();
+        self.sessions.push(session);
+        self.current = self.sessions.len() - 1;
+        self.mask_target = false;
+        self.dialog = None;
+        self.status = "Opened image from clipboard".into();
+        Ok(())
     }
 
     pub(super) fn paste_content(&mut self, content: ClipboardContent) {

@@ -951,6 +951,7 @@ impl EditorApp {
             }
             "new" => self.dialog = Some(Dialog::New),
             "open" => self.open_dialog(false),
+            "open_clipboard" => self.open_clipboard(),
             "import" => self.open_dialog(true),
             "open_comp" => {
                 if let Some(path) = rfd::FileDialog::new()

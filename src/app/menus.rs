@@ -149,6 +149,13 @@ impl EditorApp {
                             menu_bar_button(ui, "File", |ui| {
                                 item(ui, "New Canvas…", "Ctrl+N", "new", &mut action);
                                 item(ui, "Open…", "Ctrl+O", "open", &mut action);
+                                item(
+                                    ui,
+                                    "Open Image from Clipboard",
+                                    "",
+                                    "open_clipboard",
+                                    &mut action,
+                                );
                                 item(ui, "Open Compositor Package…", "", "open_comp", &mut action);
                                 item(
                                     ui,

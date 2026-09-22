@@ -1321,6 +1321,129 @@ fn clipboard_paste_creates_a_document_when_none_is_open() {
 }
 
 #[test]
+fn clipboard_open_creates_an_image_sized_document_without_changing_existing_tabs() {
+    use super::clipboard::ClipboardContent;
+
+    let (context, mut app) = app();
+    let pixels = RgbaImage::from_pixel(6, 4, image::Rgba([21, 87, 163, 127]));
+    app.clipboard = Some((pixels.clone(), Point::new(7.0, 9.0)));
+    for expected_count in 1..=2 {
+        app.mask_target = true;
+        app.open_clipboard_content(ClipboardContent::Image(pixels.clone()))
+            .unwrap();
+        assert_eq!(app.sessions.len(), expected_count);
+        assert_eq!(app.current, expected_count - 1);
+        assert!(!app.mask_target);
+        let session = app.session().unwrap();
+        assert!(session.path.is_none());
+        assert!(session.history.dirty());
+        assert!(session.history.undo_name().is_none());
+        for session in &app.sessions {
+            let document = &session.document;
+            assert_eq!((document.width, document.height), (6, 4));
+            assert_eq!(document.layers.len(), 1);
+            let layer = document.active().unwrap();
+            assert_eq!(layer.pixels.as_deref(), Some(&pixels));
+            assert_eq!((layer.transform.x, layer.transform.y), (0.0, 0.0));
+            document.validate().unwrap();
+        }
+    }
+    assert_ne!(app.sessions[0].document.id, app.sessions[1].document.id);
+    app.command("close");
+    assert_eq!(app.close_tab, Some(1));
+    frame(&context, &mut app);
+    assert_eq!(
+        app.sessions.len(),
+        2,
+        "Unsaved clipboard images require a prompt"
+    );
+}
+
+#[test]
+fn clipboard_open_handles_empty_unavailable_and_invalid_images() {
+    use super::clipboard::ClipboardContent;
+
+    let (_, mut app) = app();
+    app.open_clipboard_content(ClipboardContent::Unavailable)
+        .unwrap();
+    assert!(app.sessions.is_empty());
+    assert!(app.status.contains("unavailable"));
+
+    let pixels = RgbaImage::from_pixel(6, 4, image::Rgba([21, 87, 163, 127]));
+    app.clipboard = Some((pixels.clone(), Point::new(7.0, 9.0)));
+    app.open_clipboard_content(ClipboardContent::Unavailable)
+        .unwrap();
+    assert_eq!(
+        app.session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .pixels
+            .as_deref(),
+        Some(&pixels)
+    );
+    let original = serde_json::to_value(&app.session().unwrap().document).unwrap();
+
+    app.open_clipboard_content(ClipboardContent::Empty).unwrap();
+    assert!(app.clipboard.is_none());
+    assert!(app.status.contains("does not contain an image"));
+    app.open_clipboard_content(ClipboardContent::Unavailable)
+        .unwrap();
+    assert!(
+        app.open_clipboard_content(ClipboardContent::Image(RgbaImage::new(0, 4)))
+            .is_err()
+    );
+    assert_eq!(app.sessions.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&app.session().unwrap().document).unwrap(),
+        original
+    );
+}
+
+#[test]
+fn clipboard_open_files_creates_separate_tabs_and_reports_invalid_files() {
+    use super::clipboard::ClipboardContent;
+
+    let (_, mut app) = app();
+    app.dimensions = [20, 16];
+    app.new_document();
+    let original = serde_json::to_value(&app.session().unwrap().document).unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let paths = [
+        temporary.path().join("one.png"),
+        temporary.path().join("two.png"),
+    ];
+    let pixels = RgbaImage::from_pixel(6, 4, image::Rgba([21, 87, 163, 127]));
+    for path in &paths {
+        pixels.save(path).unwrap();
+    }
+    app.open_clipboard_content(ClipboardContent::Files(paths.to_vec()))
+        .unwrap();
+    assert!(app.error.is_none(), "{:?}", app.error);
+    assert_eq!(app.sessions.len(), 3);
+    assert_eq!(
+        serde_json::to_value(&app.sessions[0].document).unwrap(),
+        original
+    );
+    for (session, title) in app.sessions[1..].iter().zip(["one", "two"]) {
+        assert_eq!(session.title, title);
+        assert_eq!((session.document.width, session.document.height), (6, 4));
+        assert_eq!(session.document.layers.len(), 1);
+        assert_eq!(
+            session.document.active().unwrap().pixels.as_deref(),
+            Some(&pixels)
+        );
+    }
+    app.open_clipboard_content(ClipboardContent::Files(vec![
+        temporary.path().join("missing.png"),
+    ]))
+    .unwrap();
+    assert_eq!(app.sessions.len(), 3);
+    assert!(app.error.as_ref().unwrap().contains("missing.png"));
+}
+
+#[test]
 fn clipboard_invalid_files_do_not_partially_paste_or_reuse_cached_pixels() {
     use super::clipboard::ClipboardContent;
 
@@ -1490,6 +1613,41 @@ fn system_clipboard_images_and_files_paste_from_another_process() {
     );
     assert_eq!(app.session().unwrap().document.layers.len(), 5);
     assert!(app.clipboard.is_none());
+
+    // Exercise the File menu against another process's native clipboard.
+    app.sessions.clear();
+    for kind in ["image", "file"] {
+        copy(kind);
+        let count = app.sessions.len();
+        for label in ["File", "Open Image from Clipboard"] {
+            let position = layer_label(&context, &mut app, label) + Vec2::splat(5.0);
+            pointer_frame(
+                &context,
+                &mut app,
+                position,
+                Some(true),
+                egui::Modifiers::NONE,
+            );
+            pointer_frame(
+                &context,
+                &mut app,
+                position,
+                Some(false),
+                egui::Modifiers::NONE,
+            );
+        }
+        assert!(app.error.is_none(), "{:?}", app.error);
+        assert!(!egui::Popup::is_any_open(&context));
+        assert_eq!(app.sessions.len(), count + 1);
+        let document = &app.session().unwrap().document;
+        assert_eq!((document.width, document.height), (6, 4));
+        assert_eq!(document.layers.len(), 1);
+        assert_eq!(document.active().unwrap().pixels.as_deref(), Some(&pixels));
+    }
+    copy("text");
+    app.command("open_clipboard");
+    assert_eq!(app.sessions.len(), 2);
+    assert!(app.status.contains("does not contain an image"));
 }
 
 fn frame(context: &egui::Context, app: &mut EditorApp) -> egui::FullOutput {
