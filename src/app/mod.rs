@@ -393,7 +393,7 @@ pub struct EditorApp {
     effect: Option<EffectEdit>,
     error: Option<String>,
     status: String,
-    rename: Option<(Uuid, String)>,
+    rename: Option<layers::LayerRename>,
     close_tab: Option<usize>,
     close_app: bool,
     allow_close: bool,

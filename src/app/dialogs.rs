@@ -105,37 +105,6 @@ impl EditorApp {
                 }
             }
         }
-        if let Some((id, mut name)) = self.rename.clone() {
-            let mut done = false;
-            let mut cancel = false;
-            widgets::Window::new("Rename layer").show(ctx, |ui| {
-                let response = ui.text_edit_singleline(&mut name);
-                response.request_focus();
-                ui.horizontal(|ui| {
-                    cancel = widgets::button(ui, "Cancel").clicked();
-                    done = ui
-                        .add_enabled(
-                            !name.trim().is_empty(),
-                            widgets::Button::new("Rename").primary(),
-                        )
-                        .clicked()
-                        || ui.input(|i| i.key_pressed(egui::Key::Enter));
-                });
-            });
-            self.rename = Some((id, name.clone()));
-            if done && !name.trim().is_empty() {
-                self.edit("Rename Layer", |doc| {
-                    if let Some(layer) = doc.layers.iter_mut().find(|l| l.id == id) {
-                        layer.name = name;
-                    }
-                    Ok(())
-                });
-                self.rename = None;
-            }
-            if cancel || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.rename = None;
-            }
-        }
         self.close_dialog(ctx);
         if let Some(error) = self.error.clone() {
             let mut dismiss = false;

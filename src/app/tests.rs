@@ -1177,7 +1177,8 @@ fn native_clipboard_shortcuts_leave_text_editing_to_the_focused_field() {
     app.new_document();
     let layer_id = app.session().unwrap().document.active.unwrap();
     let layer_count = app.session().unwrap().document.layers.len();
-    app.rename = Some((layer_id, String::new()));
+    app.start_layer_rename(layer_id);
+    app.rename.as_mut().unwrap().name.clear();
     frame(&context, &mut app);
     assert!(context.wants_keyboard_input());
     keyboard_frame(
@@ -1186,7 +1187,7 @@ fn native_clipboard_shortcuts_leave_text_editing_to_the_focused_field() {
         vec![egui::Event::Paste("Layer name".into())],
         egui::Modifiers::CTRL,
     );
-    assert_eq!(app.rename.as_ref().unwrap().1, "Layer name");
+    assert_eq!(app.rename.as_ref().unwrap().name, "Layer name");
     for event in [
         egui::Event::Copy,
         egui::Event::Cut,
@@ -1573,6 +1574,197 @@ fn layer_eye(context: &egui::Context, app: &mut EditorApp, name: &str) -> Pos2 {
             _ => None,
         })
         .unwrap_or_else(|| panic!("Missing visible layer eye: {name}"))
+}
+
+fn double_click_layer_name(context: &egui::Context, app: &mut EditorApp, name: &str) {
+    let pos = layer_label(context, app, name) + Vec2::new(5.0, 5.0);
+    for _ in 0..2 {
+        pointer_frame(context, app, pos, Some(true), egui::Modifiers::NONE);
+        pointer_frame(context, app, pos, Some(false), egui::Modifiers::NONE);
+    }
+    frame(context, app);
+    assert!(app.rename.is_some(), "Double-click must rename {name}");
+    assert!(context.wants_keyboard_input());
+    assert!(app.dialog.is_none());
+    assert!(app.develop.is_none());
+}
+
+#[test]
+fn layer_name_double_click_renames_inline_with_one_undo_step() {
+    let (context, mut app) = app();
+    app.dimensions = [32, 24];
+    app.new_document();
+    let original = app
+        .session()
+        .unwrap()
+        .document
+        .active()
+        .unwrap()
+        .name
+        .clone();
+    let pos = layer_label(&context, &mut app, &original) + Vec2::new(5.0, 5.0);
+    app.session_mut().unwrap().document.active = None;
+    pointer_frame(&context, &mut app, pos, Some(true), egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, pos, Some(false), egui::Modifiers::NONE);
+    assert!(app.session().unwrap().document.active.is_some());
+    assert!(app.rename.is_none());
+    pointer_frame(&context, &mut app, pos, Some(true), egui::Modifiers::NONE);
+    pointer_frame(&context, &mut app, pos, Some(false), egui::Modifiers::NONE);
+    frame(&context, &mut app);
+    assert!(context.wants_keyboard_input());
+    assert!(app.dialog.is_none());
+    let edited_pos = layer_label(&context, &mut app, &original);
+    assert!(
+        (edited_pos - pos).length() < 12.0,
+        "Name must be edited in its row"
+    );
+
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![egui::Event::Text("背景 – sky".into())],
+        egui::Modifiers::NONE,
+    );
+    assert_eq!(app.rename.as_ref().unwrap().name, "背景 – sky");
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().name,
+        original
+    );
+    assert_eq!(app.session().unwrap().history.names().count(), 0);
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::Enter, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    assert!(app.rename.is_none());
+    assert!(!context.wants_keyboard_input());
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().name,
+        "背景 – sky"
+    );
+    assert_eq!(
+        app.session().unwrap().history.undo_name(),
+        Some("Rename Layer")
+    );
+    assert_eq!(app.session().unwrap().history.names().count(), 1);
+    app.command("undo");
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().name,
+        original
+    );
+    app.command("redo");
+    assert_eq!(
+        app.session().unwrap().document.active().unwrap().name,
+        "背景 – sky"
+    );
+}
+
+#[test]
+fn layer_name_rename_cancel_empty_and_unchanged_leave_history_clean() {
+    for (replacement, key) in [
+        (Some("Cancelled"), egui::Key::Escape),
+        (Some("   "), egui::Key::Enter),
+        (None, egui::Key::Enter),
+    ] {
+        let (context, mut app) = app();
+        app.dimensions = [32, 24];
+        app.new_document();
+        let original = app
+            .session()
+            .unwrap()
+            .document
+            .active()
+            .unwrap()
+            .name
+            .clone();
+        double_click_layer_name(&context, &mut app, &original);
+        if let Some(name) = replacement {
+            keyboard_frame(
+                &context,
+                &mut app,
+                vec![egui::Event::Text(name.into())],
+                egui::Modifiers::NONE,
+            );
+        }
+        keyboard_frame(
+            &context,
+            &mut app,
+            vec![text_key(key, egui::Modifiers::NONE)],
+            egui::Modifiers::NONE,
+        );
+        assert!(app.rename.is_none());
+        assert!(!context.wants_keyboard_input());
+        assert_eq!(
+            app.session().unwrap().document.active().unwrap().name,
+            original
+        );
+        assert_eq!(app.session().unwrap().history.names().count(), 0);
+        assert!(app.error.is_none());
+    }
+}
+
+#[test]
+fn layer_name_rename_saves_on_click_away_for_special_layer_types() {
+    for kind in ["Group", "Mask", "Adjustment", "Filter", "Text", "Locked"] {
+        let (context, mut app) = app();
+        app.dimensions = [32, 24];
+        app.new_document();
+        let name = format!("{kind} layer");
+        let mut target = Layer::blank(&name, 32, 24);
+        match kind {
+            "Group" => target.group = true,
+            "Mask" => target = Layer::mask(&name, 32, 24),
+            "Adjustment" => target.adjustment = Some(Adjustment::Invert),
+            "Filter" => target.filter = Some(Filter::GaussianBlur { radius: 1.0 }),
+            "Text" => target.text = Some(xuan::text::TextStyle::default()),
+            "Locked" => target.locked = true,
+            _ => unreachable!(),
+        }
+        let id = target.id;
+        let other = Layer::blank("Other", 32, 24);
+        let other_id = other.id;
+        let document = &mut app.session_mut().unwrap().document;
+        document.layers = vec![other, target];
+        document.select(other_id, false);
+        let other_pos = layer_label(&context, &mut app, "Other") + Vec2::new(5.0, 5.0);
+        double_click_layer_name(&context, &mut app, &name);
+        keyboard_frame(
+            &context,
+            &mut app,
+            vec![egui::Event::Text("Renamed".into())],
+            egui::Modifiers::NONE,
+        );
+        pointer_frame(
+            &context,
+            &mut app,
+            other_pos,
+            Some(true),
+            egui::Modifiers::NONE,
+        );
+        pointer_frame(
+            &context,
+            &mut app,
+            other_pos,
+            Some(false),
+            egui::Modifiers::NONE,
+        );
+        assert!(app.rename.is_none());
+        let session = app.session().unwrap();
+        assert_eq!(session.document.active, Some(other_id));
+        assert_eq!(
+            session
+                .document
+                .layers
+                .iter()
+                .find(|l| l.id == id)
+                .unwrap()
+                .name,
+            "Renamed"
+        );
+        assert_eq!(session.history.names().count(), 1);
+        assert!(app.error.is_none(), "{:?}", app.error);
+    }
 }
 
 fn drag_pointer(
@@ -3727,7 +3919,15 @@ fn double_click_raw_layer_opens_develop_and_rasterization_is_undoable() {
         },
         settings: xuan::raw::DevelopSettings::default(),
     });
-    let pos = layer_label(&context, &mut app, "Camera RAW") + Vec2::new(5.0, 5.0);
+    double_click_layer_name(&context, &mut app, "Camera RAW");
+    keyboard_frame(
+        &context,
+        &mut app,
+        vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)],
+        egui::Modifiers::NONE,
+    );
+    app.frames += 40;
+    let pos = layer_label(&context, &mut app, "Camera RAW") + Vec2::new(5.0, 25.0);
     for _ in 0..2 {
         pointer_frame(&context, &mut app, pos, Some(true), egui::Modifiers::NONE);
         pointer_frame(&context, &mut app, pos, Some(false), egui::Modifiers::NONE);

@@ -58,6 +58,11 @@ Xuan has a charcoal theme, contextual controls above the canvas, a vertical tool
 - **RAW Develop:** NEF/NRW opens in a dedicated Develop workspace. Adjust white balance, exposure, tone curves, HSL, monochrome and split toning, noise reduction, sharpening, manual lens correction, crop, and brush/gradient masks. Compare before/after and inspect clipping or full-resolution detail. Develop creates an embedded RAW layer; double-click it to edit the original RAW again. Save `.xuan` to retain the source and adjustments, or export a 16-bit sRGB TIFF directly from Develop. See [RAW workflow and limits](RAW.md).
 - **Documents:** independent tab histories, crop, canvas/image size, high-quality downsampling, pixel grid, pasting copied images or image files as layers, Copy Merged, and save-on-close prompts. Undo retains up to 64 steps with a 512 MiB asset budget, keeping at least one step.
 
+Double-click a layer name to rename it inline. Press Enter or click elsewhere to
+save, or Escape to cancel. **Rename…** in the layer's context menu opens the same
+inline editor. Double-click elsewhere on a text, RAW, filter, or adjustment row
+to reopen its settings.
+
 See [keyboard shortcuts](SHORTCUTS.md) for tool and command bindings.
 
 ### Attached image effects

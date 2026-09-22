@@ -10,6 +10,19 @@ use xuan::{
 
 use super::{EditorApp, LayerDrag, icons, menus, theme};
 
+pub(super) struct LayerRename {
+    project: Uuid,
+    layer: Uuid,
+    pub(super) name: String,
+    focus: bool,
+}
+
+impl LayerRename {
+    fn input_id(&self) -> egui::Id {
+        egui::Id::new(("layer_name", self.project, self.layer))
+    }
+}
+
 pub(super) struct LayerThumbnail {
     texture: egui::TextureHandle,
     canvas: [u32; 2],
@@ -48,7 +61,8 @@ struct Actions {
     reorder: Option<(LayerDrag, Uuid, DropPosition, bool)>,
     drop_indicator: Option<egui::Shape>,
     appearance: Option<(BlendMode, f32, bool)>,
-    rename: Option<(Uuid, String)>,
+    rename: Option<Uuid>,
+    finish_rename: Option<bool>,
     edit_adjustment: Option<Uuid>,
     edit_filter: Option<Uuid>,
     edit_text: Option<Uuid>,
@@ -102,6 +116,14 @@ fn rows(document: &Document, collapsed: &std::collections::HashSet<Uuid>) -> Vec
 
 impl EditorApp {
     pub(super) fn layers_panel(&mut self, ctx: &egui::Context) {
+        if let Some(rename) = &self.rename
+            && self.session().is_none_or(|session| {
+                session.document.id != rename.project
+                    || !session.document.layers.iter().any(|l| l.id == rename.layer)
+            })
+        {
+            self.finish_layer_rename(ctx, false);
+        }
         let mut actions = Actions::default();
         egui::SidePanel::right("layers_panel")
             .default_width(252.0)
@@ -231,6 +253,11 @@ impl EditorApp {
         });
         let project = session.document.id;
         let width = ui.available_width();
+        let renaming = self
+            .rename
+            .as_ref()
+            .is_some_and(|edit| edit.layer == layer.id);
+        let mut name_rect = egui::Rect::NOTHING;
         // Register the row behind its controls so it cannot steal their clicks.
         let row = ui.scope_builder(
             egui::UiBuilder::new()
@@ -294,15 +321,8 @@ impl EditorApp {
                                         };
                                         ui.vertical(|ui| {
                                             ui.spacing_mut().item_spacing.y = 3.0;
-                                            ui.add(
-                                                egui::Label::new(
-                                                    RichText::new(&layer.name)
-                                                        .size(13.0)
-                                                        .color(color),
-                                                )
-                                                .truncate()
-                                                .sense(Sense::hover()),
-                                            );
+                                            name_rect =
+                                                self.layer_name(ui, layer, color, actions).rect;
                                             let detail = if layer.group {
                                                 "Folder".to_owned()
                                             } else if layer.standalone_mask {
@@ -356,8 +376,13 @@ impl EditorApp {
         if response.clicked() {
             actions.select = Some((layer.id, false));
         }
-        if response.double_clicked() {
-            if layer.raw.is_some() {
+        if response.double_clicked() && !renaming {
+            if response
+                .interact_pointer_pos()
+                .is_some_and(|p| name_rect.contains(p))
+            {
+                actions.rename = Some(layer.id);
+            } else if layer.raw.is_some() {
                 actions.edit_raw = Some(layer.id);
             } else if layer.adjustment.is_some() {
                 actions.edit_adjustment = Some(layer.id);
@@ -366,7 +391,7 @@ impl EditorApp {
             } else if layer.text.is_some() {
                 actions.edit_text = Some(layer.id);
             } else {
-                actions.rename = Some((layer.id, layer.name.clone()));
+                actions.rename = Some(layer.id);
             }
         }
         ui.painter().line_segment(
@@ -405,7 +430,7 @@ impl EditorApp {
                 ui.close();
             }
             if ui.button("Rename…").clicked() {
-                actions.rename = Some((layer.id, layer.name.clone()));
+                actions.rename = Some(layer.id);
                 ui.close();
             }
             for (label, command) in [
@@ -677,6 +702,9 @@ impl EditorApp {
     }
 
     fn apply_layer_actions(&mut self, ctx: &egui::Context, actions: Actions) {
+        if let Some(apply) = actions.finish_rename {
+            self.finish_layer_rename(ctx, apply);
+        }
         if actions.deselect {
             if let Some(session) = self.session_mut() {
                 session.document.selected.clear();
@@ -737,8 +765,9 @@ impl EditorApp {
         if let Some(id) = actions.edit_raw {
             self.start_develop_layer(id);
         }
-        if let Some(rename) = actions.rename {
-            self.rename = Some(rename);
+        if let Some(id) = actions.rename {
+            self.start_layer_rename(id);
+            ctx.request_repaint();
         }
         if let Some(command) = actions.command {
             self.command(command);
@@ -748,6 +777,87 @@ impl EditorApp {
         }
         if let Some(filter) = actions.filter {
             self.start_filter_layer(filter);
+        }
+    }
+
+    fn layer_name(
+        &mut self,
+        ui: &mut egui::Ui,
+        layer: &Layer,
+        color: Color32,
+        actions: &mut Actions,
+    ) -> egui::Response {
+        let Some(edit) = self.rename.as_mut().filter(|edit| edit.layer == layer.id) else {
+            return ui.add(
+                egui::Label::new(RichText::new(&layer.name).size(13.0).color(color))
+                    .truncate()
+                    .sense(Sense::hover()),
+            );
+        };
+        let id = edit.input_id();
+        let cancel = ui.input(|input| input.key_pressed(egui::Key::Escape));
+        let mut output = egui::TextEdit::singleline(&mut edit.name)
+            .id(id)
+            .font(egui::FontId::proportional(13.0))
+            .desired_width(ui.available_width())
+            .show(ui);
+        if edit.focus {
+            output.response.request_focus();
+            output
+                .state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(edit.name.chars().count()),
+                )));
+            output.state.store(ui.ctx(), id);
+            edit.focus = false;
+        } else if cancel {
+            actions.finish_rename = Some(false);
+        } else if output.response.lost_focus() || output.response.clicked_elsewhere() {
+            actions.finish_rename = Some(true);
+        }
+        output.response
+    }
+
+    pub(super) fn start_layer_rename(&mut self, id: Uuid) {
+        let Some(session) = self.session() else {
+            return;
+        };
+        let Some(layer) = session.document.layers.iter().find(|layer| layer.id == id) else {
+            return;
+        };
+        self.rename = Some(LayerRename {
+            project: session.document.id,
+            layer: id,
+            name: layer.name.clone(),
+            focus: true,
+        });
+    }
+
+    fn finish_layer_rename(&mut self, ctx: &egui::Context, apply: bool) {
+        let Some(rename) = self.rename.take() else {
+            return;
+        };
+        ctx.memory_mut(|memory| memory.surrender_focus(rename.input_id()));
+        if !apply || rename.name.trim().is_empty() || rename.name.len() > 16_384 {
+            return;
+        }
+        let changed = self.session().is_some_and(|session| {
+            session.document.id == rename.project
+                && session
+                    .document
+                    .layers
+                    .iter()
+                    .any(|layer| layer.id == rename.layer && layer.name != rename.name)
+        });
+        if changed {
+            self.edit("Rename Layer", |doc| {
+                if let Some(layer) = doc.layers.iter_mut().find(|layer| layer.id == rename.layer) {
+                    layer.name = rename.name;
+                }
+                Ok(())
+            });
         }
     }
 
