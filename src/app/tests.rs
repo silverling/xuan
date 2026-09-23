@@ -1818,20 +1818,35 @@ fn layer_label(context: &egui::Context, app: &mut EditorApp, name: &str) -> Pos2
 
 fn layer_eye(context: &egui::Context, app: &mut EditorApp, name: &str) -> Pos2 {
     let label = layer_label(context, app, name);
-    frame(context, app)
+    svg_icon_rects(context, &frame(context, app), "eye")
+        .into_iter()
+        .map(|rect| rect.center())
+        .find(|center| center.x > label.x && (label.y..label.y + 36.0).contains(&center.y))
+        .unwrap_or_else(|| panic!("Missing visible layer eye: {name}"))
+}
+
+fn svg_icon_rects(
+    context: &egui::Context,
+    output: &egui::FullOutput,
+    name: &str,
+) -> Vec<egui::Rect> {
+    let uri = format!("bytes://../../assets/svg/{name}.svg");
+    let textures = context.tex_manager();
+    let textures = textures.read();
+    output
         .shapes
         .iter()
-        .find_map(|shape| match &shape.shape {
-            egui::Shape::Circle(circle)
-                if circle.radius == 2.0
-                    && circle.center.x > label.x
-                    && (label.y..label.y + 36.0).contains(&circle.center.y) =>
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Rect(rect)
+                if textures
+                    .meta(rect.fill_texture_id())
+                    .is_some_and(|texture| texture.name == uri) =>
             {
-                Some(circle.center)
+                Some(rect.rect)
             }
             _ => None,
         })
-        .unwrap_or_else(|| panic!("Missing visible layer eye: {name}"))
+        .collect()
 }
 
 fn double_click_layer_name(context: &egui::Context, app: &mut EditorApp, name: &str) {
@@ -3091,15 +3106,10 @@ fn standalone_mask_creation_editing_and_history_follow_layer_selection() {
         );
     }
     assert!(app.session().unwrap().document.active.is_none());
-    let button = frame(&context, &mut app)
-        .shapes
-        .iter()
-        .find_map(|shape| match &shape.shape {
-            egui::Shape::Circle(circle) if circle.radius == 3.5 && circle.center.x > 1000.0 => {
-                Some(circle.center)
-            }
-            _ => None,
-        })
+    let button = svg_icon_rects(&context, &frame(&context, &mut app), "mask")
+        .into_iter()
+        .map(|rect| rect.center())
+        .find(|center| center.x > 1000.0)
         .expect("Add layer mask button");
     for pressed in [true, false] {
         pointer_frame(

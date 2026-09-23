@@ -62,6 +62,7 @@ def main():
             "LICENSE",
             "licenses/rawler-LGPL-2.1.txt",
             "licenses/heic-rs-MIT.txt",
+            "licenses/tabler-icons-MIT.txt",
             "assets/fonts/Inter-LICENSE.txt",
         ):
             shutil.copy2(ROOT / filename, licenses / Path(filename).name)

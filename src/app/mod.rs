@@ -486,6 +486,7 @@ impl EditorApp {
         screenshot: Option<PathBuf>,
     ) -> Self {
         theme::apply(ctx);
+        egui_extras::install_image_loaders(ctx);
         let mut app = Self {
             tablet: None,
             context: ctx.clone(),

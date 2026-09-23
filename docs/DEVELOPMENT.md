@@ -109,6 +109,15 @@ scripts/generate-icons.sh
 
 This requires ImageMagick 7. The generated transparent PNGs cover sizes from 16 to 1024 pixels and are committed, so building, packaging, and installing do not require ImageMagick. Rebuild the application after regenerating the icons.
 
+## Tool icons
+
+Toolbar and layer controls embed the icons in [`assets/svg`](../assets/svg)
+with `egui::include_image!` in `src/app/icons.rs`. The Gradient icon is drawn in Rust.
+SVG image loaders are registered when the editor starts; egui caches the rendered
+image at the display's pixel scale.
+Monochrome SVGs use `color="white"` with `stroke="currentColor"` so the icon can be
+tinted with the toolbar's text color. Rebuild the app after editing an embedded SVG.
+
 ## Checks
 
 ```sh
