@@ -14,6 +14,8 @@ pub const SLIDER_LABEL_WIDTH: f32 = 82.0;
 pub const SLIDER_SPACING: f32 = 6.0;
 pub const SLIDER_FIELD_WIDTH: f32 = SLIDER_LABEL_WIDTH + 2.0 * SLIDER_SPACING + NUMBER_WIDTH;
 
+const COLOR_PICKER_WIDTH: f32 = 260.0;
+
 pub fn gradient(ui: &Ui, rect: Rect, radius: f32, top: Color32, bottom: Color32) {
     if !rect.is_positive() {
         return;
@@ -706,18 +708,67 @@ pub fn color_well(ui: &mut Ui, color: &mut [u8; 4]) -> Response {
     egui::Popup::menu(&response)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
-            let mut hsva = egui::ecolor::Hsva::from_srgba_unmultiplied(*color);
-            if egui::color_picker::color_picker_hsva_2d(
-                ui,
-                &mut hsva,
-                egui::color_picker::Alpha::BlendOrAdditive,
-            ) {
-                *color = hsva.to_srgba_unmultiplied();
+            if color_picker(ui, color) {
                 response.mark_changed();
             }
         });
     response
 }
+
+fn color_picker(ui: &mut Ui, color: &mut [u8; 4]) -> bool {
+    ui.set_width(COLOR_PICKER_WIDTH);
+    ui.spacing_mut().slider_width = ui.available_width();
+
+    let before = *color;
+    let state_id = ui.id().with("color_picker_state");
+    // RGB cannot retain hue for gray or black, or saturation for black. Keep the
+    // full picker state until the color is changed outside this popup.
+    let mut hsva = ui
+        .data(|data| data.get_temp::<([u8; 4], egui::ecolor::Hsva)>(state_id))
+        .filter(|(rgba, _)| *rgba == before)
+        .map(|(_, hsva)| hsva)
+        .unwrap_or_else(|| {
+            let [r, g, b, a] = before;
+            egui::ecolor::Hsva {
+                a: a as f32 / 255.0,
+                ..egui::ecolor::Hsva::from_srgb([r, g, b])
+            }
+        });
+
+    let first_shape = ui
+        .ctx()
+        .graphics_mut(|graphics| graphics.entry(ui.layer_id()).next_idx());
+    if egui::color_picker::color_picker_hsva_2d(
+        ui,
+        &mut hsva,
+        egui::color_picker::Alpha::BlendOrAdditive,
+    ) {
+        *color = hsva.to_srgba_unmultiplied();
+    }
+    ui.data_mut(|data| data.insert_temp(state_id, (*color, hsva)));
+
+    // egui 0.33 sizes the map marker to 1/12 of the map width and exposes no
+    // radius setting. Restyle only that circle in this picker's paint range.
+    let marker_radius = ui.spacing().slider_width / 12.0;
+    ui.ctx().graphics_mut(|graphics| {
+        let shapes = graphics.entry(ui.layer_id());
+        for index in first_shape.0..shapes.next_idx().0 {
+            shapes.mutate_shape(egui::layers::ShapeIdx(index), |shape| {
+                if let egui::Shape::Circle(circle) = &mut shape.shape
+                    && (circle.radius - marker_radius).abs() < f32::EPSILON
+                {
+                    circle.radius = 5.0;
+                }
+            });
+        }
+    });
+
+    *color != before
+}
+
+#[cfg(test)]
+#[path = "tests/color_picker.rs"]
+mod color_picker_tests;
 
 pub fn checkerboard(ui: &Ui, rect: Rect, cell: f32) {
     ui.painter().rect_filled(rect, 2.0, Color32::from_gray(115));
@@ -942,14 +993,7 @@ pub fn palette(ui: &mut Ui, foreground: &mut [u8; 4], background: &mut [u8; 4]) 
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
                 ui.label(label);
-                let mut hsva = egui::ecolor::Hsva::from_srgba_unmultiplied(*color);
-                if egui::color_picker::color_picker_hsva_2d(
-                    ui,
-                    &mut hsva,
-                    egui::color_picker::Alpha::BlendOrAdditive,
-                ) {
-                    *color = hsva.to_srgba_unmultiplied();
-                }
+                color_picker(ui, color);
             });
     }
     let swap_rect = Rect::from_min_size(rect.min + vec2(26.0, -4.0), vec2(13.0, 13.0));
