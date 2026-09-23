@@ -483,6 +483,13 @@ impl EditorApp {
                         && !panning
                         && let Some(p) = pointer
                     {
+                        let p = self
+                            .gesture
+                            .as_ref()
+                            .filter(|gesture| gesture.smoothing.is_some())
+                            .map_or(p, |gesture| {
+                                origin + vec2(gesture.last.x, gesture.last.y) * zoom
+                            });
                         let tilt = if self.tilt_shape {
                             pen.and_then(|sample| sample.tilt).unwrap_or([0.0; 2])
                         } else {
@@ -540,6 +547,14 @@ impl EditorApp {
                                     .any(|sample| sample.phase != super::tablet::Phase::Leave))));
                 if pen_brush {
                     self.paint_pen_samples(&pen_frames, &response, canvas, ctx, modifiers);
+                } else if !continuing_pan
+                    && (self
+                        .gesture
+                        .as_ref()
+                        .is_some_and(|gesture| gesture.smoothing.is_some())
+                        || (!panning && self.tool.is_brush() && self.brush_smoothing > 0.0))
+                {
+                    self.paint_smoothed_mouse_samples(ctx, &response, canvas, modifiers);
                 } else {
                     let started = response.drag_started()
                         || response.drag_started_by(egui::PointerButton::Middle);
@@ -662,6 +677,70 @@ impl EditorApp {
         }
     }
 
+    fn paint_smoothed_mouse_samples(
+        &mut self,
+        ctx: &egui::Context,
+        response: &egui::Response,
+        canvas: Rect,
+        modifiers: egui::Modifiers,
+    ) {
+        let zoom = self.session().unwrap().zoom;
+        let events = ctx.input(|input| input.events.clone());
+        // Process contact as well as motion: a complete stroke can arrive between
+        // GUI frames, before egui has had a chance to recognize a drag.
+        for event in events {
+            match event {
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers,
+                } if response.rect.contains(pos)
+                    && ctx.layer_id_at(pos) == Some(response.layer_id) =>
+                {
+                    let point =
+                        Point::new((pos.x - canvas.min.x) / zoom, (pos.y - canvas.min.y) / zoom);
+                    let from = if modifiers.shift {
+                        self.last_brush.unwrap_or(point)
+                    } else {
+                        point
+                    };
+                    self.begin_gesture(from, pos, false, None, modifiers);
+                    self.update_gesture(point, pos, modifiers);
+                }
+                egui::Event::PointerMoved(pos)
+                | egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    ..
+                } => {
+                    let point =
+                        Point::new((pos.x - canvas.min.x) / zoom, (pos.y - canvas.min.y) / zoom);
+                    if self.gesture.as_ref().is_some_and(|gesture| {
+                        gesture
+                            .smoothing
+                            .as_ref()
+                            .map_or(gesture.last, |smoothing| smoothing.input)
+                            != point
+                    }) {
+                        self.update_gesture(point, pos, modifiers);
+                    }
+                    if matches!(event, egui::Event::PointerButton { pressed: false, .. }) {
+                        self.end_gesture(modifiers);
+                    }
+                }
+                egui::Event::PointerGone | egui::Event::WindowFocused(false) => {
+                    self.end_gesture(modifiers);
+                }
+                _ => {}
+            }
+        }
+        if self.gesture.is_some() && !ctx.input(|input| input.pointer.primary_down()) {
+            self.end_gesture(modifiers);
+        }
+    }
+
     fn paint_pen_samples(
         &mut self,
         samples: &[super::tablet::Sample],
@@ -702,10 +781,14 @@ impl EditorApp {
                     // A zero pressure Up is a release, not an extra transparent dab.
                     // Include its final position using the preceding brush state.
                     if sample.phase == Phase::Up
-                        && self
-                            .gesture
-                            .as_ref()
-                            .is_some_and(|gesture| gesture.last.distance(point) > 0.001)
+                        && self.gesture.as_ref().is_some_and(|gesture| {
+                            gesture
+                                .smoothing
+                                .as_ref()
+                                .map_or(gesture.last, |smoothing| smoothing.input)
+                                .distance(point)
+                                > 0.001
+                        })
                     {
                         self.pen_sample = Some(super::tablet::Sample {
                             pressure: None,
@@ -869,6 +952,7 @@ impl EditorApp {
                 tool,
                 brush: brush.clone(),
                 brushes: vec![brush],
+                smoothing: None,
                 start: point,
                 last: point,
                 screen_start: screen,
@@ -1001,6 +1085,15 @@ impl EditorApp {
             tool,
             brush: brush.clone(),
             brushes: vec![brush],
+            smoothing: (tool.is_brush() && self.brush_smoothing > 0.0 && !modifiers.shift).then(
+                || {
+                    super::stroke_smoothing::StrokeSmoother::new(
+                        point,
+                        self.brush_smoothing,
+                        session.zoom,
+                    )
+                },
+            ),
             start: point,
             last: point,
             screen_start: screen,
@@ -1015,16 +1108,29 @@ impl EditorApp {
         });
     }
 
-    fn update_gesture(&mut self, mut point: Point, screen: Pos2, modifiers: egui::Modifiers) {
+    fn update_gesture(&mut self, point: Point, screen: Pos2, modifiers: egui::Modifiers) {
+        let brush = self.input_brush();
+        self.update_gesture_with_brush(point, screen, modifiers, brush);
+    }
+
+    fn update_gesture_with_brush(
+        &mut self,
+        mut point: Point,
+        screen: Pos2,
+        modifiers: egui::Modifiers,
+        brush: paint::Brush,
+    ) {
         let Some(mut gesture) = self.gesture.take() else {
             return;
         };
         let tool = gesture.tool;
-        let brush = self.input_brush();
         if gesture.panning {
             self.sessions[self.current].pan = gesture.pan_start + (screen - gesture.screen_start);
             self.gesture = Some(gesture);
             return;
+        }
+        if let Some(smoothing) = &mut gesture.smoothing {
+            point = smoothing.update(point);
         }
         if modifiers.shift && matches!(tool, Tool::Shape | Tool::Marquee | Tool::Crop) {
             let dx = point.x - gesture.start.x;
@@ -1230,6 +1336,16 @@ impl EditorApp {
     }
 
     fn end_gesture(&mut self, modifiers: egui::Modifiers) {
+        let tail = self.gesture.as_mut().and_then(|gesture| {
+            let smoothing = gesture.smoothing.take()?;
+            (gesture.last.distance(smoothing.input) > 0.001)
+                .then(|| (smoothing.input, gesture.brush.clone()))
+        });
+        if let Some((point, brush)) = tail {
+            // Finish at the last input position using the last contact pressure
+            // and tilt. The tail belongs to the same history transaction.
+            self.update_gesture_with_brush(point, Pos2::ZERO, modifiers, brush);
+        }
         let Some(gesture) = self.gesture.take() else {
             return;
         };

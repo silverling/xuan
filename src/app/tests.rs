@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "tests/stroke_smoothing.rs"]
+mod stroke_smoothing;
+
 // Tests that publish images share the desktop's system clipboard.
 static CLIPBOARD_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

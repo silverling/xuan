@@ -96,6 +96,20 @@ to reopen its settings.
 
 See [keyboard shortcuts](SHORTCUTS.md) for tool and command bindings.
 
+### Brush stroke smoothing
+
+Select a painting tool and increase **Smoothing** in its toolbar to reduce small
+shakes in mouse or pen strokes. **0%** (the default) turns smoothing off; higher
+values produce steadier curves with more distance between the pointer and the
+painted tip. The brush outline follows the painted tip, and the smoothing distance
+stays consistent on screen when you zoom. Release the mouse or lift the pen to
+finish the stroke at its final input position, as a single undo step.
+
+Smoothing applies to the brush, eraser, clone stamp, blur/smudge, spot healing,
+and painting on layer masks. Pressure and tilt continue to control the brush.
+Shift-click straight lines bypass smoothing. RAW Develop's mask brushes are
+unchanged. **Hardness** controls edge softness independently of stroke smoothing.
+
 ### Drawing tablets
 
 Wacom, Parblo, and other tablets supported by your system's driver can draw and

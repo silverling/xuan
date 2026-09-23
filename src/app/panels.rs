@@ -184,6 +184,15 @@ impl EditorApp {
                                             widgets::checkbox(ui, &mut self.pressure_opacity, "Pressure: opacity");
                                             widgets::checkbox(ui, &mut self.tilt_shape, "Tilt: shape");
                                         });
+                                        ui.label("Smoothing");
+                                        ui.add(
+                                            widgets::Slider::new(&mut self.brush_smoothing, 0.0..=1.0)
+                                                .value_width(DEFAULT_PERCENT_VALUE_WIDTH)
+                                                .percentage(),
+                                        )
+                                        .on_hover_text(
+                                            "Reduce hand jitter. Higher values make the brush follow farther behind the pointer. 0% turns smoothing off.",
+                                        );
                                     }
                                     tool if tool.is_selection() => {
                                         widgets::segmented(

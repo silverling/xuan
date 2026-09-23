@@ -14,6 +14,7 @@ mod levels_controls;
 mod menus;
 mod panels;
 mod shortcuts;
+mod stroke_smoothing;
 mod tablet;
 #[cfg(test)]
 mod tests;
@@ -319,6 +320,7 @@ struct Gesture {
     tool: Tool,
     brush: Brush,
     brushes: Vec<Brush>,
+    smoothing: Option<stroke_smoothing::StrokeSmoother>,
     start: Point,
     last: Point,
     screen_start: Pos2,
@@ -364,6 +366,7 @@ pub struct EditorApp {
     current: usize,
     tool: Tool,
     brush: Brush,
+    brush_smoothing: f32,
     pressure_size: bool,
     pressure_opacity: bool,
     tilt_shape: bool,
@@ -490,6 +493,7 @@ impl EditorApp {
             current: 0,
             tool: Tool::Move,
             brush: Brush::default(),
+            brush_smoothing: 0.0,
             pressure_size: true,
             pressure_opacity: false,
             tilt_shape: false,
