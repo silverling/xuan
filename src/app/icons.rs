@@ -314,6 +314,15 @@ pub fn action_button(ui: &mut Ui, kind: &str) -> egui::Response {
                 Stroke::NONE,
             ));
         }
+        "filter" => {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "fx",
+                egui::FontId::proportional(14.0),
+                theme::MUTED,
+            );
+        }
         "mask" => {
             painter.rect_stroke(rect, 1.0, stroke, StrokeKind::Inside);
             painter.circle_filled(rect.center(), 3.5, super::theme::MUTED);

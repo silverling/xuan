@@ -127,7 +127,7 @@ impl EditorApp {
         let mut actions = Actions::default();
         egui::SidePanel::right("layers_panel")
             .default_width(252.0)
-            .width_range(202.0..=352.0)
+            .width_range(206.0..=352.0)
             .resizable(true)
             .frame(egui::Frame::new().fill(theme::PANEL))
             .show(ctx, |ui| {
@@ -688,10 +688,11 @@ impl EditorApp {
                             .on_hover_text("New adjustment layer");
                         egui::Popup::menu(&adjustment).show(|ui| {
                             actions.adjustment = menus::adjustment_menu(ui);
-                            ui.separator();
-                            ui.menu_button("New Filter Layer", |ui| {
-                                actions.filter = menus::filter_menu(ui);
-                            });
+                        });
+                        let filter =
+                            icons::action_button(ui, "filter").on_hover_text("New filter layer");
+                        egui::Popup::menu(&filter).show(|ui| {
+                            actions.filter = menus::filter_menu(ui);
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if icons::action_button(ui, "delete_layer")
