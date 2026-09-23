@@ -189,6 +189,14 @@ cargo test --release --locked --bin xuan benchmark_large_image -- --ignored --no
 
 These measure UI updates, tessellation, and compositor completion on a 3000×3000 image: 48 zoom steps and 24 pointer updates each for moving a layer, marquee, lasso, brush, and eraser, plus gesture release. The Levels benchmark also measures 24 pointer updates and 24 live preview changes with its adjustment-layer dialog open. Set `XUAN_ZOOM_BENCH_IMAGE` to use a local image instead of the generated image. Window presentation is not included.
 
+Verify pixel-grid alignment at 6400% zoom with GPU-rendered frames at 1× and 1.7× display scale:
+
+```sh
+cargo test --locked --bin xuan magnified_gpu_preview -- --ignored
+```
+
+This uses a 5712-pixel-wide test image by default. Set `XUAN_ZOOM_BENCH_IMAGE` to an opaque photo to check its original pixels, and optionally set `XUAN_PIXEL_GRID_SCREENSHOT=/tmp/pixel-grid.png` to save the rendered frame.
+
 The Motion Blur benchmarks measure live GPU preview updates and full-resolution Apply, including GPU readback, against CPU filtering at distances 15 and 200. Apply uses original layer pixels even when the preview texture is downsampled. See the [GPU processing audit](GPU_PROCESSING.md) for backend routing, CPU exceptions, and transfer-inclusive benchmarks.
 
 To measure standalone filter-layer slider updates on a local image:

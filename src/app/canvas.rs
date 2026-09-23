@@ -211,7 +211,10 @@ impl EditorApp {
                     StrokeKind::Outside,
                 );
                 let map = |p: Point| origin + vec2(p.x, p.y) * zoom;
-                if zoom >= 8.0 {
+                // A hardware-limited preview cannot represent individual document pixels.
+                if zoom >= 8.0
+                    && session.preview_size == [session.document.width, session.document.height]
+                {
                     let start = ((visible.left() - origin.x) / zoom).floor().max(0.0) as u32;
                     let end = ((visible.right() - origin.x) / zoom)
                         .ceil()

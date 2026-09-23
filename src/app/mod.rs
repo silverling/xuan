@@ -212,18 +212,27 @@ impl Session {
     }
 
     fn refresh(&mut self, ctx: &egui::Context, state: Option<&eframe::egui_wgpu::RenderState>) {
-        let max_side = state.map_or(1600, |s| {
-            s.device.limits().max_texture_dimension_2d.min(4096)
-        });
-        // Zoom only changes how the cached composition is drawn. Rebuilding it here
-        // can also resize source images on the UI thread.
+        let texture_limit = state.map_or_else(
+            || ctx.input(|i| i.max_texture_side as u32),
+            |s| s.device.limits().max_texture_dimension_2d,
+        );
+        // Pixel inspection needs one preview texel per document pixel. Stretching
+        // the overview preview makes its texels larger than the pixel grid cells.
+        let max_side = if self.zoom >= 1.0 {
+            texture_limit
+        } else {
+            texture_limit.min(if state.is_some() { 4096 } else { 1600 })
+        };
         let factor =
             (max_side as f32 / self.document.width.max(self.document.height) as f32).min(1.0);
         let size = [
             (self.document.width as f32 * factor).round().max(1.0) as u32,
             (self.document.height as f32 * factor).round().max(1.0) as u32,
         ];
-        if !self.dirty_preview && size == self.preview_size {
+        // Keep a sharper cached preview when zooming back out. Only edits may
+        // reduce its resolution, so zooming and panning do not repeatedly render.
+        if !self.dirty_preview && self.preview_size[0] >= size[0] && self.preview_size[1] >= size[1]
+        {
             return;
         }
         self.thumbnails.retain(|(id, mask), _| {
@@ -261,14 +270,15 @@ impl Session {
             [image.width() as usize, image.height() as usize],
             image.as_raw(),
         );
+        let options = egui::TextureOptions {
+            magnification: egui::TextureFilter::Nearest,
+            ..egui::TextureOptions::LINEAR
+        };
         if let Some(texture) = &mut self.texture {
-            texture.set(color, egui::TextureOptions::LINEAR);
+            texture.set(color, options);
         } else {
-            self.texture = Some(ctx.load_texture(
-                format!("canvas-{}", self.document.id),
-                color,
-                egui::TextureOptions::LINEAR,
-            ));
+            self.texture =
+                Some(ctx.load_texture(format!("canvas-{}", self.document.id), color, options));
         }
         self.composite = Some(Arc::new(image));
         self.dirty_preview = false;
