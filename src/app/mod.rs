@@ -3,6 +3,7 @@ mod chrome;
 mod clipboard;
 mod develop;
 mod develop_controls;
+mod develop_preview;
 mod dialogs;
 mod filter_preview;
 mod font_picker;
@@ -442,11 +443,17 @@ impl EditorApp {
             })
             .map(|state| xuan::gpu::Processor::new(state.device.clone(), state.queue.clone()));
         let mut app = xuan::gpu::scope(processor.clone(), || {
-            Self::with_context(&cc.egui_ctx, paths, demo, screenshot)
+            Self::with_context(&cc.egui_ctx, vec![], demo, screenshot)
         });
         app.processor = processor;
         app.gpu_state = cc.wgpu_render_state.clone();
         app.tablet = tablet::TabletInput::new(cc);
+        // Install the native renderer before the first RAW worker is started.
+        xuan::gpu::scope(app.processor.clone(), || {
+            for path in paths {
+                app.open_path(&path, false);
+            }
+        });
         app
     }
 

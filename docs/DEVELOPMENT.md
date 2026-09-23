@@ -181,3 +181,19 @@ cargo test --release --locked --bin xuan benchmark_large_image -- --ignored --no
 These measure UI updates, tessellation, and compositor completion on a 3000×3000 image: 48 zoom steps and 24 pointer updates each for moving a layer, marquee, lasso, brush, and eraser, plus gesture release. The Levels benchmark also measures 24 pointer updates and 24 live preview changes with its adjustment-layer dialog open. Set `XUAN_ZOOM_BENCH_IMAGE` to use a local image instead of the generated image. Window presentation is not included.
 
 The Motion Blur benchmarks measure live GPU preview updates and full-resolution Apply, including GPU readback, against CPU filtering at distances 15 and 200. Apply uses original layer pixels even when the preview texture is downsampled. See the [GPU processing audit](GPU_PROCESSING.md) for backend routing, CPU exceptions, and transfer-inclusive benchmarks.
+
+
+### RAW preview performance
+
+Benchmark the worker's resident GPU path and UI texture registration separately:
+
+```sh
+XUAN_TEST_RAW=/path/to/photo.CR3 cargo test --release --locked --bin xuan benchmark_raw_develop_preview -- --ignored --nocapture --test-threads=1
+```
+
+Without a camera file, this generates a 24-megapixel linear RGB image. It measures
+1600-pixel, 3200-pixel, and full-resolution previews, with and without clipping
+textures. Exposure changes between runs; reported medians exclude the first
+allocation/compilation run and include GPU completion plus histogram readback.
+Registration timings exclude window presentation. See the [GPU processing
+audit](GPU_PROCESSING.md) for sample measurements and the remaining decode costs.

@@ -4,15 +4,21 @@
 @group(0) @binding(3) var<storage, read> config: array<vec4<f32>>;
 var<workgroup> bins: array<atomic<u32>, 1027>;
 @compute @workgroup_size(8, 8)
-fn analyze_pixels(@builtin(global_invocation_id) id: vec3<u32>,
+fn analyze_pixels(@builtin(workgroup_id) group: vec3<u32>,
                                                  @builtin(local_invocation_index) local: u32) {
     for (var i = local; i < 1027u; i += 64u) {
         atomicStore(&bins[i], 0u);
     }
     workgroupBarrier();
     let size = vec2<u32>(config[0].xy);
-    if (all(id.xy < size)) {
-        let i = id.y * size.x + id.x;
+    let stride = max(size.x, u32(config[0].w));
+    // Amortize bin initialization and global atomics over a 32 x 32 tile.
+    for (var pixel = local; pixel < 1024u; pixel += 64u) {
+        let point = group.xy * 32u + vec2(pixel % 32u, pixel / 32u);
+        if (any(point >= size)) {
+            continue;
+        }
+        let i = point.y * stride + point.x;
         let value = pixels[i];
         let rgba = vec4(value & 255u, (value >> 8u) & 255u, (value >> 16u) & 255u, value >> 24u);
         var warning = value;

@@ -1027,3 +1027,125 @@ fn processing_filter_apply_preserves_selections_bounds_masks_and_history_pixels(
             .all(|(a, b)| a.abs_diff(*b) <= 1)
     );
 }
+
+fn read_raw_preview(gpu: &Processor, texture: &wgpu::Texture) -> RgbaImage {
+    let stride = (texture.width() * 4).div_ceil(256) * 256;
+    let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("RAW preview test readback"),
+        size: u64::from(stride) * u64::from(texture.height()),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu.encoder();
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride),
+                rows_per_image: None,
+            },
+        },
+        texture.size(),
+    );
+    gpu.queue.submit([encoder.finish()]);
+    let bytes = gpu.map(&staging).unwrap();
+    let pixels = bytes
+        .chunks_exact(stride as usize)
+        .flat_map(|row| row[..texture.width() as usize * 4].iter().copied())
+        .collect();
+    RgbaImage::from_raw(texture.width(), texture.height(), pixels).unwrap()
+}
+
+#[test]
+#[ignore = "requires native compute adapter"]
+fn processing_resident_raw_previews_match_output_and_keep_old_frames_immutable() {
+    use crate::raw::{DecodedRaw, DevelopSettings, RawMetadata};
+    use std::sync::atomic::AtomicBool;
+    let gpu = processor();
+    let raw = Arc::new(DecodedRaw {
+        camera: image::Rgb32FImage::from_fn(321, 257, |x, y| {
+            image::Rgb([
+                x as f32 / 280.0,
+                y as f32 / 300.0,
+                ((x * 7 + y * 3) % 101) as f32 / 100.0,
+            ])
+        }),
+        as_shot: [1.13, 1.0, 0.91],
+        camera_to_rgb: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        xyz_to_camera: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        metadata: RawMetadata {
+            width: 321,
+            height: 257,
+            ..Default::default()
+        },
+    });
+    let cancel = AtomicBool::new(false);
+    let mut renderer = RawPreviewRenderer::default();
+    let first = scope(Some(gpu.clone()), || {
+        renderer
+            .render(&raw, &DevelopSettings::default(), false, &cancel)
+            .unwrap()
+            .unwrap()
+    });
+    let first_pixels = read_raw_preview(&gpu, &first.texture);
+    compare(
+        &first_pixels,
+        &crate::raw::render(&raw, &DevelopSettings::default(), &cancel).unwrap(),
+        1,
+    );
+    assert!(first.warnings.is_none());
+    for exposure in [-0.7, 1.2, 0.0] {
+        let settings = DevelopSettings {
+            exposure,
+            rotation: 17.0,
+            crop: [0.031, 0.017, 0.969, 0.94],
+            clarity: 12.0,
+            texture: 8.0,
+            ..Default::default()
+        };
+        let preview = scope(Some(gpu.clone()), || {
+            renderer
+                .render(&raw, &settings, true, &cancel)
+                .unwrap()
+                .unwrap()
+        });
+        let pixels = read_raw_preview(&gpu, &preview.texture);
+        let materialized = scope(Some(gpu.clone()), || {
+            crate::raw::render(&raw, &settings, &cancel).unwrap()
+        });
+        compare(&pixels, &materialized, 0);
+        let analysis = scope(Some(gpu.clone()), || super::analyze(&pixels, true).unwrap());
+        assert_eq!(preview.analysis.channels, analysis.channels);
+        assert_eq!(preview.analysis.clipping, analysis.clipping);
+        assert_eq!(
+            read_raw_preview(&gpu, preview.warnings.as_ref().unwrap()),
+            analysis.warnings.unwrap()
+        );
+        assert!(pixels.pixels().filter(|p| p[3] == 0).all(|p| p.0 == [0; 4]));
+    }
+    // The worker reuses buffers, but it must never overwrite a displayed texture.
+    assert_eq!(read_raw_preview(&gpu, &first.texture), first_pixels);
+    let clean = scope(Some(gpu.clone()), || {
+        renderer
+            .render(&raw, &DevelopSettings::default(), false, &cancel)
+            .unwrap()
+            .unwrap()
+    });
+    assert_eq!(
+        clean.analysis.channels, first.analysis.channels,
+        "histogram accumulators must be cleared on reuse"
+    );
+    assert!(clean.warnings.is_none());
+    assert!(
+        renderer
+            .render(
+                &raw,
+                &DevelopSettings::default(),
+                false,
+                &AtomicBool::new(true)
+            )
+            .is_err()
+    );
+}

@@ -9,16 +9,19 @@ mod paint;
 mod processor;
 mod raster;
 mod raw;
+mod raw_preview;
 pub(crate) use paint::{
     FilterSelection, Paint, Stroke, adjust_mask, filter_selection, match_colors, paint,
     project_selection, shape, stroke,
 };
 pub(crate) use raw::{crop as raw_crop, develop};
+pub use raw_preview::{RawPreview, RawPreviewRenderer};
 #[cfg(test)]
 mod processing_tests;
 pub use motion_blur::GpuMotionBlur;
 pub(crate) use processor::cancelled;
 pub use processor::{Processor, cancellation, current, scope, spawn};
+pub(crate) use raster::resize_rgb_cancellable;
 pub(crate) use raster::{adjustment, filter, resize_rgba};
 pub use raster::{blur_gray, resize_gray, resize_rgb};
 

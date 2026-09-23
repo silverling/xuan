@@ -132,7 +132,7 @@ pub fn resize_gray(image: &GrayImage, width: u32, height: u32) -> GrayImage {
     })
 }
 
-pub fn resize_rgb(image: &Rgb32FImage, width: u32, height: u32) -> Rgb32FImage {
+fn resize_rgb_gpu(image: &Rgb32FImage, width: u32, height: u32) -> Option<Rgb32FImage> {
     let size = [image.width(), image.height()];
     attempt(
         count(size).max(u64::from(width) * u64::from(height)),
@@ -158,9 +158,36 @@ pub fn resize_rgb(image: &Rgb32FImage, width: u32, height: u32) -> Rgb32FImage {
             .unwrap())
         },
     )
-    .unwrap_or_else(|| {
+}
+
+pub fn resize_rgb(image: &Rgb32FImage, width: u32, height: u32) -> Rgb32FImage {
+    resize_rgb_gpu(image, width, height).unwrap_or_else(|| {
         image::imageops::resize(image, width, height, image::imageops::FilterType::Triangle)
     })
+}
+
+pub fn resize_rgb_cancellable(
+    image: &Rgb32FImage,
+    width: u32,
+    height: u32,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<Rgb32FImage> {
+    let check = || {
+        ensure!(
+            !cancel.load(std::sync::atomic::Ordering::Relaxed),
+            "RAW preview cancelled"
+        );
+        Ok(())
+    };
+    check()?;
+    let output = resize_rgb_gpu(image, width, height);
+    // Cancellation of GPU work must not start an expensive CPU fallback.
+    check()?;
+    let output = output.unwrap_or_else(|| {
+        image::imageops::resize(image, width, height, image::imageops::FilterType::Triangle)
+    });
+    check()?;
+    Ok(output)
 }
 
 impl Processor {

@@ -26,23 +26,31 @@ pub fn analyze(image: &RgbaImage, warnings: bool) -> Option<Analysis> {
                 if warnings { 1.0 } else { 0.0 },
                 0.0,
             ]],
-            size,
+            dispatch_size(size),
         )?;
         let result = gpu.read(encoder, &result, bytes)?;
-        let bins: Vec<u32> = result[..4112]
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|p| u32::from_le_bytes(*p))
-            .collect();
-        Ok(Analysis {
-            luminance: std::array::from_fn(|i| bins[i]),
-            channels: std::array::from_fn(|c| std::array::from_fn(|i| bins[256 + c * 256 + i])),
-            clipping: std::array::from_fn(|i| {
-                100.0 * bins[1025 + i] as f32 / bins[1024].max(1) as f32
-            }),
-            warnings: warnings
-                .then(|| RgbaImage::from_raw(size[0], size[1], result[4112..].to_vec()).unwrap()),
-        })
+        let mut analysis = from_bins(&result);
+        analysis.warnings = warnings
+            .then(|| RgbaImage::from_raw(size[0], size[1], result[4112..].to_vec()).unwrap());
+        Ok(analysis)
     })
+}
+
+pub(super) fn dispatch_size(size: [u32; 2]) -> [u32; 2] {
+    size.map(|side| side.div_ceil(32) * 8)
+}
+
+pub(super) fn from_bins(bytes: &[u8]) -> Analysis {
+    let bins: Vec<u32> = bytes[..4112]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| u32::from_le_bytes(*p))
+        .collect();
+    Analysis {
+        luminance: std::array::from_fn(|i| bins[i]),
+        channels: std::array::from_fn(|c| std::array::from_fn(|i| bins[256 + c * 256 + i])),
+        clipping: std::array::from_fn(|i| 100.0 * bins[1025 + i] as f32 / bins[1024].max(1) as f32),
+        warnings: None,
+    }
 }

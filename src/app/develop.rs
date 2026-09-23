@@ -1,7 +1,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver},
     },
@@ -9,10 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use egui::{
-    Color32, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, emath::GuiRounding,
-    pos2, vec2,
-};
+use egui::{Color32, Pos2, Rect, Sense, Stroke, Vec2, emath::GuiRounding, pos2, vec2};
 use image::RgbaImage;
 use uuid::Uuid;
 use xuan::{
@@ -20,7 +17,11 @@ use xuan::{
     raw::{self, DecodedRaw, DevelopSettings, OverlayKind, RawAsset, WhiteBalance},
 };
 
+use super::develop_preview::{PreparedPreview, PreviewImage, PreviewTexture, PreviewWorker};
 use super::{EditorApp, Session, theme, widgets};
+
+const PREVIEW_INTERVAL: Duration = Duration::from_millis(33);
+const PREVIEW_SETTLE: Duration = Duration::from_millis(150);
 
 #[derive(Clone, Debug)]
 pub(super) enum DevelopTarget {
@@ -41,13 +42,16 @@ enum WorkerResult {
         asset: RawAsset,
         full: Arc<DecodedRaw>,
         proxy: Arc<DecodedRaw>,
-        before: RgbaImage,
-        preview: RgbaImage,
+        before: Option<PreviewImage>,
+        preview: Box<PreparedPreview>,
     },
     Preview {
         revision: u64,
-        pixels: RgbaImage,
-        before: Option<RgbaImage>,
+        side: u32,
+        interactive: bool,
+        crop: [f32; 4],
+        preview: Box<PreparedPreview>,
+        before: Option<PreviewImage>,
     },
     Applied {
         settings: DevelopSettings,
@@ -89,17 +93,23 @@ pub(super) struct Develop {
     revision: u64,
     rendered_revision: Option<u64>,
     last_change: Instant,
-    texture: Option<TextureHandle>,
-    before: Option<TextureHandle>,
+    last_preview: Option<Instant>,
+    preview_job: Option<bool>,
+    worker: Arc<Mutex<PreviewWorker>>,
+    texture: Option<PreviewTexture>,
+    before: Option<PreviewTexture>,
+    before_side: u32,
+    rendered_side: u32,
+    #[cfg(test)]
     preview: Option<RgbaImage>,
     pub histogram: [[u32; 256]; 3],
     pub clipping: [f32; 2],
-    warning: Option<TextureHandle>,
+    warning: Option<PreviewTexture>,
     pub show_clipping: bool,
     pub compare: Compare,
     pub split: f32,
     pub full_preview: bool,
-    use_full_resolution: bool,
+    preview_side: u32,
     /// Physical screen pixels per full-resolution image pixel.
     pub zoom: f32,
     pub pan: Vec2,
@@ -139,8 +149,14 @@ impl Develop {
             revision: 0,
             rendered_revision: None,
             last_change: Instant::now(),
+            last_preview: None,
+            preview_job: None,
+            worker: Arc::default(),
             texture: None,
             before: None,
+            before_side: 0,
+            rendered_side: 0,
+            #[cfg(test)]
             preview: None,
             histogram: [[0; 256]; 3],
             clipping: [0.0; 2],
@@ -149,7 +165,7 @@ impl Develop {
             compare: Compare::Edited,
             split: 0.5,
             full_preview: false,
-            use_full_resolution: false,
+            preview_side: 0,
             zoom: 1.0,
             pan: Vec2::ZERO,
             canvas_drag: None,
@@ -172,6 +188,9 @@ impl Develop {
         self.texture.is_some()
             && self.receiver.is_none()
             && self.rendered_revision == Some(self.revision)
+            && self.rendered_side == self.preview_side
+            && (self.compare == Compare::Edited || self.before_side == self.preview_side)
+            && (!self.show_clipping || self.warning.is_some())
     }
 
     pub fn ready(&self) -> bool {
@@ -182,7 +201,6 @@ impl Develop {
         match command {
             "fit" => self.fit = true,
             "actual" => {
-                self.full_preview = true;
                 self.fit = false;
                 self.zoom = 1.0;
                 self.pan = Vec2::ZERO;
@@ -210,6 +228,11 @@ impl Develop {
     }
 
     pub fn changed(&mut self) {
+        // Let a short interactive render finish, but abandon an obsolete
+        // settled refinement before it holds up the next interactive frame.
+        if self.preview_job == Some(false) {
+            self.cancel.store(true, Ordering::Relaxed);
+        }
         self.revision += 1;
         self.last_change = Instant::now();
         self.error = None;
@@ -220,23 +243,51 @@ impl Develop {
         let (Some(full), Some(proxy)) = (&self.full, &self.proxy) else {
             return;
         };
-        let displayed = crop_rect(full, &self.settings).size() * self.zoom;
-        let proxy_size = crop_rect(proxy, &self.settings).size();
-        let needs_full = self.full_preview
-            || displayed.x > proxy_size.x + 0.5
-            || displayed.y > proxy_size.y + 0.5;
-        let limited = full.camera.width().max(full.camera.height()) as usize
-            > ctx.input(|i| i.max_texture_side);
-        let use_full_resolution =
-            needs_full && !limited && full.camera.dimensions() != proxy.camera.dimensions();
-        if self.use_full_resolution != use_full_resolution {
-            self.use_full_resolution = use_full_resolution;
-            self.changed();
+        let full_side = full.camera.width().max(full.camera.height());
+        let limit = (ctx.input(|i| i.max_texture_side) as u32).min(full_side);
+        let required = if self.full_preview {
+            full_side
+        } else {
+            (full_side as f32 * self.zoom.min(1.0)).ceil() as u32
+        };
+        let mut side = proxy.camera.width().max(proxy.camera.height()).min(limit);
+        while side < required.min(limit) {
+            side = (side * 3 / 2).max(side + 1).min(limit);
+        }
+        if self.preview_side != side {
+            self.preview_side = side;
+            // Zoom does not change the development settings or undo history.
+            // Cancel a previous refinement and request the new level directly.
+            if self.preview_job.is_some() {
+                self.cancel.store(true, Ordering::Relaxed);
+            }
             ctx.request_repaint();
         }
-        if needs_full && limited {
+        if required > limit {
             self.notice = Some("This image exceeds the GPU's full-resolution preview limit. Develop and TIFF export still use every source pixel.".into());
         }
+    }
+
+    fn preview_target(&self) -> (u32, bool) {
+        let interactive = self.last_change.elapsed() < PREVIEW_SETTLE;
+        let side = if interactive && !self.full_preview {
+            self.proxy.as_ref().map_or(self.preview_side, |raw| {
+                raw.camera
+                    .width()
+                    .max(raw.camera.height())
+                    .min(self.preview_side)
+            })
+        } else {
+            self.preview_side
+        };
+        (side, interactive)
+    }
+
+    fn needs_preview(&self, side: u32) -> bool {
+        self.rendered_revision != Some(self.revision)
+            || self.rendered_side != side
+            || (self.show_clipping && self.warning.is_none())
+            || (self.compare != Compare::Edited && self.before_side != side)
     }
 
     fn spawn(
@@ -246,6 +297,8 @@ impl Develop {
     ) {
         let (send, receive) = mpsc::channel();
         let context = ctx.clone();
+        self.cancel = Arc::new(AtomicBool::new(false));
+        self.preview_job = None;
         let cancel = self.cancel.clone();
         xuan::gpu::spawn(move || {
             let _cancel = xuan::gpu::cancellation(cancel.clone());
@@ -259,47 +312,27 @@ impl Develop {
         self.receiver = Some(receive);
     }
 
-    fn set_preview(&mut self, ctx: &egui::Context, pixels: RgbaImage) {
-        if let Some(analysis) = xuan::gpu::analyze(&pixels, true) {
-            self.histogram = analysis.channels;
-            self.clipping = analysis.clipping;
-            self.texture = Some(texture(ctx, "raw_develop", &pixels));
-            self.warning = Some(texture(
-                ctx,
-                "raw_clipping",
-                analysis.warnings.as_ref().unwrap(),
-            ));
-            self.preview = Some(pixels);
-            return;
+    fn set_preview(
+        &mut self,
+        ctx: &egui::Context,
+        state: Option<&eframe::egui_wgpu::RenderState>,
+        preview: PreparedPreview,
+    ) {
+        self.histogram = preview.histogram;
+        self.clipping = preview.clipping;
+        self.texture = Some(preview.image.register(ctx, state));
+        self.warning = preview.warnings.map(|image| image.register(ctx, state));
+        #[cfg(test)]
+        {
+            self.preview = preview.pixels;
         }
-        self.histogram = [[0; 256]; 3];
-        let mut counts = [0_u32; 2];
-        let mut visible = 0;
-        let mut warnings = pixels.clone();
-        for (p, warning) in pixels.pixels().zip(warnings.pixels_mut()) {
-            if p[3] == 0 {
-                continue;
-            }
-            visible += 1;
-            for c in 0..3 {
-                self.histogram[c][p[c] as usize] += 1;
-            }
-            if p.0[0..3].contains(&255) {
-                *warning = image::Rgba([255, 35, 65, 255]);
-                counts[1] += 1;
-            } else if p.0[0..3].iter().all(|v| *v <= 1) {
-                *warning = image::Rgba([40, 100, 255, 255]);
-                counts[0] += 1;
-            }
-        }
-        self.clipping = counts.map(|v| 100.0 * v as f32 / visible.max(1) as f32);
-        self.texture = Some(texture(ctx, "raw_develop", &pixels));
-        self.warning = Some(texture(ctx, "raw_clipping", &warnings));
-        self.preview = Some(pixels);
     }
 
     pub fn undo(&mut self, redo: bool) {
         self.navigated_history = true;
+        if self.preview_job.is_some() {
+            self.cancel.store(true, Ordering::Relaxed);
+        }
         self.finish_undo();
         let state = if redo {
             self.redo.pop()
@@ -329,15 +362,16 @@ impl Develop {
     }
 }
 
-fn texture(ctx: &egui::Context, name: &str, pixels: &RgbaImage) -> TextureHandle {
-    ctx.load_texture(
+#[cfg(test)]
+fn texture(ctx: &egui::Context, name: &str, pixels: &RgbaImage) -> PreviewTexture {
+    PreviewTexture::Cpu(ctx.load_texture(
         name,
         egui::ColorImage::from_rgba_unmultiplied(
             [pixels.width() as usize, pixels.height() as usize],
             pixels.as_raw(),
         ),
-        TextureOptions::LINEAR,
-    )
+        egui::TextureOptions::LINEAR,
+    ))
 }
 
 fn crop_rect(raw: &DecodedRaw, settings: &DevelopSettings) -> Rect {
@@ -357,6 +391,18 @@ impl EditorApp {
         if let Some(mut develop) = self.develop.take() {
             develop.finish_undo();
             develop.last_brush_point = None;
+            if develop.preview_job.is_some() {
+                develop.cancel.store(true, Ordering::Relaxed);
+            }
+            // Inactive tabs retain their displayed images and settings, without
+            // tying up full-size compute buffers. Release them off the UI thread.
+            let worker = develop.worker.clone();
+            xuan::gpu::spawn(move || {
+                worker
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .release_buffers()
+            });
             self.inactive_develop.push(develop);
         }
     }
@@ -446,9 +492,17 @@ impl EditorApp {
             asset.filename.clone(),
             asset.settings.clone(),
         );
+        let worker = develop.worker.clone();
+        let native = self.gpu_state.is_some();
         develop.spawn(&self.context, move |cancel| {
             let decoded = raw::decode(&asset.bytes)?;
-            loaded(asset, decoded, cancel)
+            loaded(
+                asset,
+                decoded,
+                &mut worker.lock().unwrap_or_else(|p| p.into_inner()),
+                native,
+                cancel,
+            )
         });
         self.develop = Some(develop);
         self.mask_target = false;
@@ -471,9 +525,17 @@ impl EditorApp {
                     .into(),
                 DevelopSettings::default(),
             );
+            let worker = develop.worker.clone();
+            let native = self.gpu_state.is_some();
             develop.spawn(ctx, move |cancel| {
                 let (asset, decoded) = raw::open(&path)?;
-                loaded(asset, decoded, cancel)
+                loaded(
+                    asset,
+                    decoded,
+                    &mut worker.lock().unwrap_or_else(|p| p.into_inner()),
+                    native,
+                    cancel,
+                )
             });
             self.develop = Some(develop);
         }
@@ -499,58 +561,88 @@ impl EditorApp {
             });
         if let Some(result) = result {
             develop.receiver = None;
-            match result {
-                Ok(WorkerResult::Loaded {
-                    asset,
-                    full,
-                    proxy,
-                    before,
-                    preview,
-                }) => {
-                    develop.settings = asset.settings.clone();
-                    develop.asset = Some(asset);
-                    develop.full = Some(full);
-                    develop.proxy = Some(proxy);
-                    develop.before = Some(texture(ctx, "raw_original", &before));
-                    develop.set_preview(ctx, preview);
-                    develop.rendered_revision = Some(develop.revision);
-                }
-                Ok(WorkerResult::Preview {
-                    revision,
-                    pixels,
-                    before,
-                }) => {
-                    if revision == develop.revision {
-                        if let Some(before) = before {
-                            develop.before = Some(texture(ctx, "raw_original", &before));
-                        }
-                        develop.set_preview(ctx, pixels);
-                        develop.rendered_revision = Some(revision);
-                    }
-                }
-                Ok(WorkerResult::Applied { settings, pixels }) => {
-                    let mut asset = develop.asset.take().unwrap();
-                    asset.settings = settings;
-                    if let Err(error) = self.apply_developed(&develop.target, asset.clone(), pixels)
-                    {
+            develop.preview_job = None;
+            let result = if develop.cancel.load(Ordering::Relaxed) {
+                None
+            } else {
+                Some(result)
+            };
+            if let Some(result) = result {
+                match result {
+                    Ok(WorkerResult::Loaded {
+                        asset,
+                        full,
+                        proxy,
+                        before,
+                        preview,
+                    }) => {
+                        develop.settings = asset.settings.clone();
                         develop.asset = Some(asset);
-                        develop.error = Some(format!("{error:#}"));
-                        develop.applying = false;
-                    } else {
-                        self.status =
-                            "RAW developed · Double-click the RAW layer to edit it again".into();
-                        ctx.request_repaint();
-                        return;
+                        develop.full = Some(full);
+                        let side = proxy.camera.width().max(proxy.camera.height());
+                        develop.proxy = Some(proxy);
+                        develop.preview_side = side;
+                        develop.rendered_side = side;
+                        develop.before_side = if before.is_some() { side } else { 0 };
+                        develop.before =
+                            before.map(|image| image.register(ctx, self.gpu_state.as_ref()));
+                        develop.set_preview(ctx, self.gpu_state.as_ref(), *preview);
+                        develop.rendered_revision = Some(develop.revision);
                     }
-                }
-                Ok(WorkerResult::Exported(path)) => {
-                    develop.exporting = None;
-                    develop.notice = Some(format!("Saved 16-bit TIFF · {}", path.display()));
-                }
-                Err(error) => {
-                    develop.error = Some(error);
-                    develop.applying = false;
-                    develop.exporting = None;
+                    Ok(WorkerResult::Preview {
+                        revision,
+                        side,
+                        interactive,
+                        crop,
+                        preview,
+                        before,
+                    }) => {
+                        // Show monotonically newer interactive snapshots during a
+                        // drag. Crops must match the current canvas geometry; final
+                        // refinements must match the exact latest revision.
+                        let current = revision == develop.revision;
+                        let progressing = interactive
+                            && develop.last_change.elapsed() < PREVIEW_SETTLE
+                            && develop
+                                .rendered_revision
+                                .is_none_or(|previous| revision > previous);
+                        if (current || progressing) && crop == develop.settings.crop {
+                            if let Some(before) = before {
+                                develop.before =
+                                    Some(before.register(ctx, self.gpu_state.as_ref()));
+                                develop.before_side = side;
+                            }
+                            develop.set_preview(ctx, self.gpu_state.as_ref(), *preview);
+                            develop.rendered_revision = Some(revision);
+                            develop.rendered_side = side;
+                        }
+                    }
+                    Ok(WorkerResult::Applied { settings, pixels }) => {
+                        let mut asset = develop.asset.take().unwrap();
+                        asset.settings = settings;
+                        if let Err(error) =
+                            self.apply_developed(&develop.target, asset.clone(), pixels)
+                        {
+                            develop.asset = Some(asset);
+                            develop.error = Some(format!("{error:#}"));
+                            develop.applying = false;
+                        } else {
+                            self.status =
+                                "RAW developed · Double-click the RAW layer to edit it again"
+                                    .into();
+                            ctx.request_repaint();
+                            return;
+                        }
+                    }
+                    Ok(WorkerResult::Exported(path)) => {
+                        develop.exporting = None;
+                        develop.notice = Some(format!("Saved 16-bit TIFF · {}", path.display()));
+                    }
+                    Err(error) => {
+                        develop.error = Some(error);
+                        develop.applying = false;
+                        develop.exporting = None;
+                    }
                 }
             }
         }
@@ -591,45 +683,46 @@ impl EditorApp {
                     let pixels = raw::render(&full, &settings, cancel)?;
                     Ok(WorkerResult::Applied { settings, pixels })
                 });
-            } else if develop.rendered_revision != Some(develop.revision)
-                && develop.last_change.elapsed() >= Duration::from_millis(100)
-            {
-                let input = if develop.use_full_resolution {
-                    full
-                } else {
-                    develop.proxy.clone().unwrap()
-                };
-                let settings = develop.settings.clone();
-                let revision = develop.revision;
-                let render_before = develop.before.as_ref().is_none_or(|before| {
-                    before.size()
-                        != [
-                            input.camera.width() as usize,
-                            input.camera.height() as usize,
-                        ]
-                });
-                develop.spawn(ctx, move |cancel| {
-                    let before = render_before
-                        .then(|| raw::render(&input, &DevelopSettings::default(), cancel))
-                        .transpose()?;
-                    let pixels = if settings == DevelopSettings::default()
-                        && let Some(before) = &before
-                    {
-                        before.clone()
-                    } else {
-                        raw::render(&input, &settings, cancel)?
-                    };
-                    Ok(WorkerResult::Preview {
-                        revision,
-                        pixels,
-                        before,
-                    })
-                });
+            } else {
+                let (side, interactive) = develop.preview_target();
+                if develop.needs_preview(side)
+                    && develop
+                        .last_preview
+                        .is_none_or(|started| started.elapsed() >= PREVIEW_INTERVAL)
+                {
+                    let proxy = develop.proxy.clone().unwrap();
+                    let settings = develop.settings.clone();
+                    let revision = develop.revision;
+                    let compare = develop.compare != Compare::Edited;
+                    let warnings = develop.show_clipping;
+                    let native = self.gpu_state.is_some();
+                    let worker = develop.worker.clone();
+                    develop.spawn(ctx, move |cancel| {
+                        let mut worker = worker.lock().unwrap_or_else(|p| p.into_inner());
+                        let input = worker.input(&full, &proxy, side, cancel)?;
+                        ensure!(!cancel.load(Ordering::Relaxed), "RAW preview cancelled");
+                        let before = compare
+                            .then(|| worker.original(&input, native, cancel))
+                            .transpose()?;
+                        let preview = worker.render(&input, &settings, warnings, native, cancel)?;
+                        Ok(WorkerResult::Preview {
+                            revision,
+                            side,
+                            interactive,
+                            crop: settings.crop,
+                            preview: Box::new(preview),
+                            before,
+                        })
+                    });
+                    develop.preview_job = Some(interactive);
+                    develop.last_preview = Some(Instant::now());
+                }
             }
         }
-        if develop.receiver.is_some() || develop.rendered_revision != Some(develop.revision) {
-            ctx.request_repaint_after(Duration::from_millis(50));
+        if develop.receiver.is_some() || develop.needs_preview(develop.preview_side) {
+            ctx.request_repaint_after(PREVIEW_INTERVAL);
         }
+
         self.develop = Some(develop);
     }
 
@@ -770,7 +863,7 @@ impl EditorApp {
                     "Developing full-resolution image…"
                 } else if d.full.is_none() && d.error.is_none() {
                     "Decoding RAW sensor data…"
-                } else if d.receiver.is_some() || d.rendered_revision != Some(d.revision) {
+                } else if d.receiver.is_some() || d.needs_preview(d.preview_side) {
                     "Updating preview…"
                 } else if d.picker {
                     "Click a neutral gray area to set white balance"
@@ -844,6 +937,9 @@ impl EditorApp {
         d.update_preview_resolution(ctx);
         if apply && d.settings.validate().is_ok() {
             d.finish_undo();
+            if d.preview_job.is_some() {
+                d.cancel.store(true, Ordering::Relaxed);
+            }
             d.applying = true;
             d.error = None;
             ctx.request_repaint();
@@ -862,6 +958,9 @@ impl EditorApp {
         {
             if path.extension().is_none() {
                 path.set_extension("tif");
+            }
+            if d.preview_job.is_some() {
+                d.cancel.store(true, Ordering::Relaxed);
             }
             d.exporting = Some(path);
             d.error = None;
@@ -915,28 +1014,39 @@ impl EditorApp {
     }
 }
 
-fn loaded(asset: RawAsset, decoded: DecodedRaw, cancel: &AtomicBool) -> Result<WorkerResult> {
+fn loaded(
+    asset: RawAsset,
+    decoded: DecodedRaw,
+    worker: &mut PreviewWorker,
+    native: bool,
+    cancel: &AtomicBool,
+) -> Result<WorkerResult> {
     ensure!(!cancel.load(Ordering::Relaxed), "Cancelled");
     let full = Arc::new(decoded);
-    let proxy = Arc::new(full.preview(1600));
-    let before = raw::render(&proxy, &DevelopSettings::default(), cancel)?;
-    let preview = if asset.settings == DevelopSettings::default() {
-        before.clone()
+    let proxy = Arc::new(full.preview_cancellable(1600, cancel)?);
+    let preview = worker.render(&proxy, &asset.settings, false, native, cancel)?;
+    let before = if asset.settings == DevelopSettings::default() {
+        let before = preview.image.clone();
+        worker.remember_original(
+            proxy.camera.width().max(proxy.camera.height()),
+            before.clone(),
+        );
+        Some(before)
     } else {
-        raw::render(&proxy, &asset.settings, cancel)?
+        None
     };
     Ok(WorkerResult::Loaded {
         asset,
         full,
         proxy,
         before,
-        preview,
+        preview: Box::new(preview),
     })
 }
 
-fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, interactive: bool) {
+fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: PreviewTexture, interactive: bool) {
     let (viewport, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
-    let before = d.before.as_ref().unwrap();
+    let before = d.before.as_ref().unwrap_or(&texture);
     let full = d.full.as_ref().unwrap();
     let source = crop_rect(full, &d.settings);
     // Keep zoom and pan independent of the texture while a sharper render arrives.
@@ -997,7 +1107,7 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, inter
         ),
     );
     let shown = if d.show_clipping {
-        d.warning.as_ref().unwrap()
+        d.warning.as_ref().unwrap_or(&texture)
     } else {
         &texture
     };
@@ -1269,7 +1379,14 @@ mod tests {
         d.asset = Some(asset);
         d.full = Some(raw);
         d.proxy = Some(proxy);
-        d.set_preview(ctx, pixels.clone());
+        d.preview_side = proxy_side;
+        d.rendered_side = proxy_side;
+        d.before_side = proxy_side;
+        d.set_preview(
+            ctx,
+            None,
+            PreparedPreview::cpu(pixels.clone(), false, &AtomicBool::new(false)).unwrap(),
+        );
         d.before = Some(texture(ctx, "before", &pixels));
         d.rendered_revision = Some(0);
         d
@@ -1474,13 +1591,13 @@ mod tests {
         let ctx = egui::Context::default();
         let mut d = ready_with_resolution(&ctx, [256, 192], 128);
         canvas_frame(&ctx, &mut d, vec![]);
-        assert!(!d.use_full_resolution);
+        assert!(d.preview_side == 128);
 
         ctx.set_pixels_per_point(2.0);
         canvas_frame(&ctx, &mut d, vec![]);
         canvas_frame(&ctx, &mut d, vec![]);
         assert!(
-            d.use_full_resolution,
+            d.preview_side > 128,
             "Fit must cover physical display pixels"
         );
         assert!(
@@ -1491,17 +1608,17 @@ mod tests {
         ctx.set_pixels_per_point(1.0);
         canvas_frame(&ctx, &mut d, vec![]);
         canvas_frame(&ctx, &mut d, vec![]);
-        assert!(!d.use_full_resolution);
+        assert!(d.preview_side == 128);
         d.view_command("zoom_in");
         canvas_frame(&ctx, &mut d, vec![]);
-        assert!(d.use_full_resolution, "Menu zoom must load full detail");
+        assert!(d.preview_side > 128, "Menu zoom must load full detail");
 
         d.view_command("fit");
         canvas_frame(&ctx, &mut d, vec![]);
-        assert!(!d.use_full_resolution);
+        assert!(d.preview_side == 128);
         d.full_preview = true;
         canvas_frame(&ctx, &mut d, vec![]);
-        assert!(d.use_full_resolution, "The override must also apply to Fit");
+        assert!(d.preview_side > 128, "The override must also apply to Fit");
         assert!(d.undo.is_empty());
     }
 
@@ -1526,12 +1643,13 @@ mod tests {
         for _ in 0..30 {
             canvas_frame(&ctx, &mut d, vec![]);
         }
-        assert!(d.use_full_resolution);
+        assert!(d.preview_side > 128);
         let rect = image_rect(&canvas_frame(&ctx, &mut d, vec![]), proxy_texture);
         assert!(((pointer - rect.min) / rect.size() - point).length() < 0.001);
         let (zoom, pan) = (d.zoom, d.pan);
 
-        // Exercise the real worker, including the full-resolution Original render.
+        // Exercise the real worker, including a matching-resolution Original.
+        d.compare = Compare::Split;
         d.last_change = Instant::now() - Duration::from_secs(1);
         let mut app = EditorApp::with_context(&ctx, vec![], false, None);
         app.develop = Some(d);
@@ -1543,14 +1661,16 @@ mod tests {
             app.poll_develop(&ctx);
         }
         let d = app.develop.as_mut().unwrap();
-        let expected = raw::render(
-            d.full.as_ref().unwrap(),
-            &d.settings,
-            &AtomicBool::new(false),
-        )
-        .unwrap();
+        let input = d.full.as_ref().unwrap().preview(d.preview_side);
+        let expected = raw::render(&input, &d.settings, &AtomicBool::new(false)).unwrap();
         assert_eq!(d.preview.as_ref().unwrap(), &expected);
-        assert_eq!(d.before.as_ref().unwrap().size(), [256, 192]);
+        assert_eq!(
+            d.before.as_ref().unwrap().size(),
+            [
+                input.camera.width() as usize,
+                input.camera.height() as usize
+            ]
+        );
         let full_texture = d.texture.as_ref().unwrap().id();
         let refined = image_rect(&canvas_frame(&ctx, d, vec![]), full_texture);
         assert_eq!(refined, rect);
@@ -1576,7 +1696,7 @@ mod tests {
             assert!((rect.size() * scale - vec2(128.0, 96.0)).length() < 0.001);
             let origin = rect.min.to_vec2() * scale;
             assert!((origin - origin.round()).length() < 0.001);
-            assert!(d.use_full_resolution);
+            assert!(d.preview_side > 128);
             d.compare = Compare::SideBySide;
             let original_texture = d.before.as_ref().unwrap().id();
             let output = canvas_frame(&ctx, &mut d, vec![]);
@@ -1607,7 +1727,7 @@ mod tests {
         ctx.input_mut(|i| i.max_texture_side = 128);
         d.update_preview_resolution(&ctx);
         d.update_preview_resolution(&ctx);
-        assert!(!d.use_full_resolution);
+        assert!(d.preview_side == 128);
         assert_eq!(d.revision, 0);
         assert!(!d.fit);
         assert_eq!(d.zoom, 1.0);
@@ -1692,7 +1812,7 @@ mod tests {
         assert_eq!(app.develop.as_ref().unwrap().settings.exposure, 1.25);
         click_text(&ctx, &mut app, "100%");
         assert_eq!(app.develop.as_ref().unwrap().zoom, 1.0);
-        assert!(app.develop.as_ref().unwrap().full_preview);
+        assert!(!app.develop.as_ref().unwrap().full_preview);
         click_text(&ctx, &mut app, "Fit");
         assert!(app.develop.as_ref().unwrap().fit);
 
@@ -2062,8 +2182,16 @@ mod tests {
         d.changed();
         tx.send(Ok(WorkerResult::Preview {
             revision: 0,
-            pixels: RgbaImage::new(1, 1),
-            before: Some(RgbaImage::new(1, 1)),
+            side: 1,
+            interactive: false,
+            crop: d.settings.crop,
+            preview: Box::new(
+                PreparedPreview::cpu(RgbaImage::new(1, 1), false, &AtomicBool::new(false)).unwrap(),
+            ),
+            before: Some(PreviewImage::Cpu(Arc::new(egui::ColorImage::filled(
+                [1, 1],
+                Color32::BLACK,
+            )))),
         }))
         .unwrap();
         app.develop = Some(d);
@@ -2268,5 +2396,124 @@ mod tests {
                 .exposure,
             0.5
         );
+    }
+    #[test]
+    fn intermediate_preview_levels_cover_display_pixels_without_forcing_full_size() {
+        let ctx = egui::Context::default();
+        let mut d = ready_with_resolution(&ctx, [960, 640], 160);
+        d.fit = false;
+        d.zoom = 0.35;
+        d.update_preview_resolution(&ctx);
+        assert_eq!(d.preview_side, 360);
+        assert_eq!(d.revision, 0, "view changes do not edit the RAW settings");
+        d.view_command("actual");
+        d.update_preview_resolution(&ctx);
+        assert_eq!(d.preview_side, 960);
+        assert!(
+            !d.full_preview,
+            "100% does not permanently force full-resolution Fit previews"
+        );
+        d.zoom = 0.1;
+        d.update_preview_resolution(&ctx);
+        assert_eq!(d.preview_side, 160);
+        d.full_preview = true;
+        d.update_preview_resolution(&ctx);
+        assert_eq!(d.preview_side, 960);
+    }
+
+    #[test]
+    fn preview_updates_start_during_edits_and_refine_after_they_settle() {
+        let ctx = egui::Context::default();
+        let mut app = EditorApp::with_context(&ctx, vec![], false, None);
+        let mut d = ready_with_resolution(&ctx, [256, 192], 128);
+        d.preview_side = 256;
+        d.settings.exposure = 0.5;
+        d.changed();
+        app.develop = Some(d);
+        app.poll_develop(&ctx);
+        assert_eq!(
+            app.develop.as_ref().unwrap().preview_job,
+            Some(true),
+            "start immediately instead of waiting for a pause"
+        );
+        let wait = |app: &mut EditorApp| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while app.develop.as_ref().unwrap().receiver.is_some() {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(2));
+                app.poll_develop(&ctx);
+                assert!(app.develop.as_ref().unwrap().error.is_none());
+            }
+        };
+        wait(&mut app);
+        let d = app.develop.as_mut().unwrap();
+        assert_eq!(d.rendered_revision, Some(d.revision));
+        assert_eq!(d.rendered_side, 128);
+        assert!(d.warning.is_none());
+        d.last_change = Instant::now() - PREVIEW_SETTLE;
+        d.last_preview = None;
+        app.poll_develop(&ctx);
+        wait(&mut app);
+        let d = app.develop.as_mut().unwrap();
+        assert_eq!(d.rendered_side, 256);
+        assert_eq!(
+            d.before_side, 128,
+            "Edited mode does not render an unused full-size Original"
+        );
+        d.compare = Compare::Split;
+        d.show_clipping = true;
+        d.last_preview = None;
+        app.poll_develop(&ctx);
+        wait(&mut app);
+        let d = app.develop.as_ref().unwrap();
+        assert_eq!(d.before_side, 256);
+        assert!(d.warning.is_some());
+        assert!(d.ready_for_screenshot());
+    }
+
+    #[test]
+    fn interactive_results_advance_without_accepting_cancelled_refinements() {
+        let ctx = egui::Context::default();
+        let mut app = EditorApp::with_context(&ctx, vec![], false, None);
+        let mut d = ready(&ctx);
+        d.changed();
+        d.changed();
+        d.last_preview = Some(Instant::now());
+        let (tx, rx) = mpsc::channel();
+        d.receiver = Some(rx);
+        let pixels = RgbaImage::from_pixel(64, 48, image::Rgba([90, 80, 70, 255]));
+        tx.send(Ok(WorkerResult::Preview {
+            revision: 1,
+            side: 64,
+            interactive: true,
+            crop: d.settings.crop,
+            preview: Box::new(
+                PreparedPreview::cpu(pixels.clone(), false, &AtomicBool::new(false)).unwrap(),
+            ),
+            before: None,
+        }))
+        .unwrap();
+        app.develop = Some(d);
+        app.poll_develop(&ctx);
+        let d = app.develop.as_mut().unwrap();
+        assert_eq!(
+            d.rendered_revision,
+            Some(1),
+            "continuous edits can show intermediate progress"
+        );
+        assert_eq!(d.preview.as_ref(), Some(&pixels));
+        d.preview_job = Some(false);
+        let (tx, rx) = mpsc::channel();
+        d.receiver = Some(rx);
+        d.changed();
+        assert!(
+            d.cancel.load(Ordering::Relaxed),
+            "edits cancel an obsolete full-detail refinement"
+        );
+        tx.send(Err("RAW preview cancelled".into())).unwrap();
+        app.poll_develop(&ctx);
+        let d = app.develop.as_ref().unwrap();
+        assert!(d.error.is_none());
+        assert_eq!(d.preview.as_ref(), Some(&pixels));
     }
 }

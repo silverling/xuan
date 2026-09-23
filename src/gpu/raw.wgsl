@@ -240,8 +240,13 @@ fn raw_encode(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     let source = id.xy + vec2<u32>(config[13].xy);
-    let p = load_float(source.y * u32(config[0].x) + source.x);
-    let i = id.y * size.x + id.x;
+    var p = load_float(source.y * u32(config[0].x) + source.x);
+    // Native preview textures use egui's premultiplied alpha convention.
+    if (config[14].z != 0.0) {
+        p = vec4(p.rgb * p.a, p.a);
+    }
+    let stride = max(size.x, u32(config[14].y));
+    let i = id.y * stride + id.x;
     if (config[14].x == 8.0) {
         result[i] = packed(p);
     } else {

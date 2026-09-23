@@ -21,6 +21,7 @@ use rawler::{
 use serde::{Deserialize, Serialize};
 
 use crate::document::validate_size;
+pub(crate) use process::white_balance;
 pub use process::{auto_exposure, render, render_16, sample_white_balance, source_point};
 pub use settings::{DevelopSettings, Overlay, OverlayKind, WhiteBalance};
 
@@ -77,20 +78,40 @@ pub struct DecodedRaw {
 }
 
 impl DecodedRaw {
-    pub fn preview(&self, max_side: u32) -> Self {
+    fn preview_size(&self, max_side: u32) -> [u32; 2] {
         let scale =
             (max_side as f32 / self.camera.width().max(self.camera.height()) as f32).min(1.0);
+        [self.camera.width(), self.camera.height()]
+            .map(|side| (side as f32 * scale).round().max(1.0) as u32)
+    }
+
+    fn with_camera(&self, camera: Rgb32FImage) -> Self {
         Self {
-            camera: crate::gpu::resize_rgb(
-                &self.camera,
-                (self.camera.width() as f32 * scale).round().max(1.0) as u32,
-                (self.camera.height() as f32 * scale).round().max(1.0) as u32,
-            ),
+            camera,
             as_shot: self.as_shot,
             camera_to_rgb: self.camera_to_rgb,
             xyz_to_camera: self.xyz_to_camera,
             metadata: self.metadata.clone(),
         }
+    }
+
+    pub fn preview(&self, max_side: u32) -> Self {
+        let [width, height] = self.preview_size(max_side);
+        self.with_camera(crate::gpu::resize_rgb(&self.camera, width, height))
+    }
+
+    pub fn preview_cancellable(
+        &self,
+        max_side: u32,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Self> {
+        let [width, height] = self.preview_size(max_side);
+        Ok(self.with_camera(crate::gpu::resize_rgb_cancellable(
+            &self.camera,
+            width,
+            height,
+            cancel,
+        )?))
     }
 }
 

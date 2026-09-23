@@ -84,6 +84,7 @@ pub(super) fn attempt<T>(
     let processor = current()?;
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| operation(&processor))) {
         Ok(Ok(value)) => Some(value),
+        Ok(Err(_)) if cancelled() => None,
         Ok(Err(error)) => {
             eprintln!("GPU processing unavailable, using CPU: {error:#}");
             None
@@ -140,7 +141,9 @@ impl Processor {
             label: Some("processing intermediate"),
             size: size.max(16),
             mapped_at_creation: false,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
         }))
     }
 

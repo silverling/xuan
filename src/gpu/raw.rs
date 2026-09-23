@@ -3,7 +3,7 @@ use crate::raw::{DecodedRaw, DevelopSettings, Overlay, OverlayKind};
 use anyhow::{Result, ensure};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const SHADER: &str = concat!(
+pub(super) const SHADER: &str = concat!(
     include_str!("buffers.wgsl"),
     include_str!("raster.wgsl"),
     include_str!("raw.wgsl")
@@ -23,6 +23,23 @@ pub(crate) fn develop(
     )
 }
 
+pub(super) struct RawBuffers {
+    pub source: wgpu::Buffer,
+    pub pixels: [wgpu::Buffer; 2],
+    detail: Option<[wgpu::Buffer; 2]>,
+}
+
+impl RawBuffers {
+    pub fn new(gpu: &Processor, raw: &DecodedRaw) -> Result<Self> {
+        let bytes = u64::from(raw.camera.width()) * u64::from(raw.camera.height()) * 16;
+        Ok(Self {
+            source: gpu.buffer(bytemuck::cast_slice(raw.camera.as_raw()))?,
+            pixels: [gpu.empty(bytes)?, gpu.empty(bytes)?],
+            detail: None,
+        })
+    }
+}
+
 impl Processor {
     pub(super) fn develop(
         &self,
@@ -32,19 +49,51 @@ impl Processor {
         depth: u32,
         cancel: &AtomicBool,
     ) -> Result<Vec<u8>> {
-        s.validate()?;
+        let mut work = RawBuffers::new(self, raw)?;
         let size = [raw.camera.width(), raw.camera.height()];
-        let count = u64::from(size[0]) * u64::from(size[1]);
-        let source = self.buffer(bytemuck::cast_slice(raw.camera.as_raw()))?;
-        let buffers = [self.empty(count * 16)?, self.empty(count * 16)?];
+        let (mut encoder, current) = self.raw_passes(raw, s, wb, &mut work, cancel)?;
+        let source = &work.source;
+        let buffers = &work.pixels;
         let mut config = settings(raw, s, wb, depth);
+        let [left, top, right, bottom] = crop(s, size);
+        let target = [right - left, bottom - top];
+        config[13] = [left as f32, top as f32, target[0] as f32, target[1] as f32];
+        let bytes = u64::from(target[0]) * u64::from(target[1]) * u64::from(depth / 2);
+        let output = self.empty(bytes)?;
+        ensure!(!cancel.load(Ordering::Relaxed), "RAW development cancelled");
+        self.dispatch(
+            &mut encoder,
+            "raw_encode",
+            SHADER,
+            [&buffers[current], source, &output],
+            &config,
+            target,
+        )?;
+        let result = self.read(encoder, &output, bytes)?;
+        ensure!(!cancel.load(Ordering::Relaxed), "RAW development cancelled");
+        Ok(result)
+    }
+
+    pub(super) fn raw_passes(
+        &self,
+        raw: &DecodedRaw,
+        s: &DevelopSettings,
+        wb: [f32; 3],
+        work: &mut RawBuffers,
+        cancel: &AtomicBool,
+    ) -> Result<(wgpu::CommandEncoder, usize)> {
+        s.validate()?;
         let mut encoder = self.encoder();
+        let size = [raw.camera.width(), raw.camera.height()];
+        let source = &work.source;
+        let buffers = &work.pixels;
+        let config = settings(raw, s, wb, 8);
         ensure!(!cancel.load(Ordering::Relaxed), "RAW development cancelled");
         self.dispatch(
             &mut encoder,
             "raw_camera",
             SHADER,
-            [&source, &source, &buffers[0]],
+            [source, source, &buffers[0]],
             &config,
             size,
         )?;
@@ -54,7 +103,7 @@ impl Processor {
                 &mut encoder,
                 "raw_denoise",
                 SHADER,
-                [&buffers[current], &source, &buffers[1 - current]],
+                [&buffers[current], source, &buffers[1 - current]],
                 &config,
                 size,
             )?;
@@ -67,7 +116,7 @@ impl Processor {
                 &mut encoder,
                 "raw_overlay",
                 SHADER,
-                [&buffers[current], &source, &buffers[1 - current]],
+                [&buffers[current], source, &buffers[1 - current]],
                 &overlay,
                 size,
             )?;
@@ -77,15 +126,18 @@ impl Processor {
             &mut encoder,
             "raw_tone",
             SHADER,
-            [&buffers[current], &source, &buffers[1 - current]],
+            [&buffers[current], source, &buffers[1 - current]],
             &config,
             size,
         )?;
         current = 1 - current;
         let scale = size[0] as f32 / raw.metadata.width as f32;
         if s.clarity != 0.0 || s.texture != 0.0 || s.sharpen != 0.0 {
-            let scratch = self.empty(count * 16)?;
-            let blurred = self.empty(count * 16)?;
+            if work.detail.is_none() {
+                let bytes = u64::from(size[0]) * u64::from(size[1]) * 16;
+                work.detail = Some([self.empty(bytes)?, self.empty(bytes)?]);
+            }
+            let [scratch, blurred] = work.detail.as_ref().unwrap();
             for (amount, radius, threshold) in [
                 (s.clarity / 100.0, 24.0 * scale, 0.0),
                 (s.texture / 100.0, 3.0 * scale, 0.0),
@@ -102,8 +154,8 @@ impl Processor {
                 self.blur_passes(
                     &mut encoder,
                     &buffers[current],
-                    &scratch,
-                    &blurred,
+                    scratch,
+                    blurred,
                     size,
                     radius.max(0.3),
                 )?;
@@ -111,30 +163,14 @@ impl Processor {
                     &mut encoder,
                     "raw_detail",
                     SHADER,
-                    [&buffers[current], &blurred, &buffers[1 - current]],
+                    [&buffers[current], blurred, &buffers[1 - current]],
                     &[config[0], [amount, threshold, 0.0, 0.0]],
                     size,
                 )?;
                 current = 1 - current;
             }
         }
-        let [left, top, right, bottom] = crop(s, size);
-        let target = [right - left, bottom - top];
-        config[13] = [left as f32, top as f32, target[0] as f32, target[1] as f32];
-        let bytes = u64::from(target[0]) * u64::from(target[1]) * u64::from(depth / 2);
-        let output = self.empty(bytes)?;
-        ensure!(!cancel.load(Ordering::Relaxed), "RAW development cancelled");
-        self.dispatch(
-            &mut encoder,
-            "raw_encode",
-            SHADER,
-            [&buffers[current], &source, &output],
-            &config,
-            target,
-        )?;
-        let result = self.read(encoder, &output, bytes)?;
-        ensure!(!cancel.load(Ordering::Relaxed), "RAW development cancelled");
-        Ok(result)
+        Ok((encoder, current))
     }
 }
 
@@ -147,7 +183,12 @@ pub(crate) fn crop(s: &DevelopSettings, size: [u32; 2]) -> [u32; 4] {
     ]
 }
 
-fn settings(raw: &DecodedRaw, s: &DevelopSettings, wb: [f32; 3], depth: u32) -> Vec<[f32; 4]> {
+pub(super) fn settings(
+    raw: &DecodedRaw,
+    s: &DevelopSettings,
+    wb: [f32; 3],
+    depth: u32,
+) -> Vec<[f32; 4]> {
     let (sin, cos) = s.rotation.to_radians().sin_cos();
     let mut p = vec![[0.0; 4]; 32];
     p[0] = [

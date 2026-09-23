@@ -201,15 +201,20 @@ fn accelerated(
 ) -> Result<Option<Vec<u8>>> {
     settings.validate()?;
     cancelled(cancel)?;
+    let wb = white_balance(raw, settings);
+    let result = crate::gpu::develop(raw, settings, wb, depth, cancel);
+    cancelled(cancel)?;
+    Ok(result)
+}
+
+pub(crate) fn white_balance(raw: &DecodedRaw, settings: &DevelopSettings) -> [f32; 3] {
     let mut wb = match settings.white_balance {
         WhiteBalance::AsShot => raw.as_shot,
         WhiteBalance::Temperature => temperature_wb(raw, settings.temperature),
         WhiteBalance::Custom => settings.custom_wb,
     };
     wb[1] *= 2.0_f32.powf(-settings.tint / 150.0);
-    let result = crate::gpu::develop(raw, settings, wb, depth, cancel);
-    cancelled(cancel)?;
-    Ok(result)
+    wb
 }
 
 fn render_at_depth<T: Primitive + Send + Sync>(

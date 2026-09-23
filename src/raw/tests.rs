@@ -49,6 +49,13 @@ fn validates_settings_and_cancellation() {
     s.crop = [0.5, 0.0, 0.4, 1.0];
     assert!(s.validate().is_err());
     assert!(render(&raw, &DevelopSettings::default(), &AtomicBool::new(true)).is_err());
+    assert!(raw.preview_cancellable(32, &AtomicBool::new(true)).is_err());
+    assert_eq!(
+        raw.preview_cancellable(32, &AtomicBool::new(false))
+            .unwrap()
+            .camera,
+        raw.preview(32).camera
+    );
     assert!(decode(b"broken camera file").is_err());
     assert!(is_raw(Path::new("PHOTO.NEF")));
     assert!(!is_raw(Path::new("photo.tiff")));

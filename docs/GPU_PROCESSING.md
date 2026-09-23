@@ -17,6 +17,7 @@ continue to work.
 | Image resampling | GPU separable premultiplied Lanczos3; Triangle resampling for masks, selections, and floating-point RAW proxies |
 | Mask processing | GPU Gaussian feathering, transformed selection projection, alpha/mask selections, clipping bake when copying layers, and background-removal matte smoothing/masking |
 | RAW development | GPU geometry, lens correction, chromatic aberration, white balance, camera matrix, exposure, vignette, denoise, local overlays, tone mapping, curves, HSL, monochrome, split toning, clarity, texture, and sharpening |
+| RAW previews | Resident camera inputs and reusable float/packed buffers; native display textures, tiled histogram reduction, and a 4,112-byte histogram readback; optional GPU clipping textures |
 | RAW output | GPU crop and quantization to 8-bit or true 16-bit RGBA; floating-point intermediates stay on the GPU until final readback |
 | Painting | GPU large fills, erasure, linear/radial gradients, curved shapes, and large paint/erase/clone/smudge/blur/heal strokes; stroke readback covers only the affected rectangle |
 | Selection color matching | GPU noncontiguous Magic Wand; contiguous connectivity traversal remains CPU |
@@ -32,8 +33,7 @@ edits generally start at 65,536 pixels. Brush thresholds use the affected rectan
 not the entire document. Rectangles and polygon selections already fill contiguous
 CPU spans. Simple memory copies and small reductions generally cost less than a GPU
 round trip. The integer luminance histogram also stays on CPU: at 1600×1200 it
-measured 2.6 ms against 6.0 ms for a GPU round trip. RAW preview still benefits
-from computing its three channel histograms and warning pixels together on GPU.
+measured 2.6 ms against 6.0 ms for a GPU round trip. RAW previews reduce their three channel histograms directly from resident output buffers. Each workgroup processes a 32×32 tile; warning pixels are generated only when requested. The UI registers completed native textures without full-image readback, analysis, or color conversion. CPU fallback prepares display pixels and analysis in the worker.
 
 The existing inpainting and flood-fill implementations consume results from earlier
 frontier visits. Moving their inner loops to GPU would require repeated dispatches
@@ -63,6 +63,15 @@ long effect stacks can increase recomposition time.
   results.
 - RAW passes retain floating-point intermediates through final 8/16-bit encoding.
   Brush overlays bin dab centers into tiles so pixels visit only overlapping dabs.
+- Each RAW preview worker caches at most two camera inputs and their reusable
+  processing buffers. Outputs are immutable textures, so a cancelled or later
+  render cannot change an image already displayed. Switching tabs releases compute
+  buffers off the UI thread. Exports retain the full-resolution materialized path.
+- Interactive RAW requests start at most every 33 ms, without waiting for a drag
+  to end. Unless full resolution is forced, edits use the small proxy before
+  refining to the display's resolution after 150 ms of inactivity. Preview levels
+  grow by 1.5× from the proxy, capped at source and texture limits. Original images
+  are rendered lazily for comparisons, and cached independently of adjustments.
 - GPU and CPU use the same adjustment math. Premultiplication, Gaussian kernels,
   edge handling, Lanczos weights, selection coverage, bounds expansion, mask
   placement, and alpha preservation are checked against the CPU implementation.
@@ -104,3 +113,36 @@ upload and final CPU readback; composition reuses its cached source texture.
 
 These are measurements for one workload and device, not a promise of real-time
 performance for every image size, radius, layer count, or GPU.
+
+
+## Resident RAW preview measurements
+
+Release builds on an RTX 3090 (Vulkan, NVIDIA 610.57.04) and i9-10940X, using
+Canon EOS M50 Mark II `IMG_5189.CR3` (4000×6000) and Nikon Z6 III `DSC_0144.NEF`
+(4032×6048). New timings are medians of five warm runs with changing exposure.
+Worker times include all development passes, histogram reduction, GPU completion,
+and histogram readback. UI times cover native texture registration; neither
+includes window presentation. Initial shader compilation and source upload are
+excluded from warm runs.
+
+| Stage | Canon CR3 | Nikon NEF |
+| --- | ---: | ---: |
+| Previous full-resolution render, including image transfers | 304 ms | 304 ms |
+| Previous additional UI analysis and texture preparation | 261 ms | 255 ms |
+| Resident full-resolution preview + histogram | 23.8 ms | 23.8 ms |
+| Resident full-resolution preview + histogram + clipping texture | 27.9 ms | 28.9 ms |
+| Native UI registration, without clipping | 0.041 ms | 0.039 ms |
+| Resident 1600-pixel preview + histogram | 11.0 ms | 10.9 ms |
+| Resident 3200-pixel preview + histogram | 13.3 ms | 13.7 ms |
+
+The previous UI path always prepared clipping pixels. The warm preview improvements
+do not eliminate initial decoding/demosaicing (about 1.0–1.1 seconds for these
+samples), the first upload/allocation for a resolution, or full-resolution
+Develop/TIFF materialization. Interactive previews use the small proxy and a
+33 ms request interval; final detail follows 150 ms without edits. These timings
+are stage measurements, not an end-to-end input-to-display latency guarantee.
+
+Reproduce with `benchmark_raw_develop_preview` as documented in
+[Development](DEVELOPMENT.md#raw-preview-performance). GPU regressions compare
+resident textures against materialized output, histogram/clipping results, buffer
+reuse, transparent pixels, row padding, and the immutability of previous frames.
