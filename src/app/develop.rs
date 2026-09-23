@@ -9,7 +9,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use egui::{Color32, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2, vec2};
+use egui::{
+    Color32, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, emath::GuiRounding,
+    pos2, vec2,
+};
 use image::RgbaImage;
 use uuid::Uuid;
 use xuan::{
@@ -44,6 +47,7 @@ enum WorkerResult {
     Preview {
         revision: u64,
         pixels: RgbaImage,
+        before: Option<RgbaImage>,
     },
     Applied {
         settings: DevelopSettings,
@@ -89,6 +93,8 @@ pub(super) struct Develop {
     pub compare: Compare,
     pub split: f32,
     pub full_preview: bool,
+    use_full_resolution: bool,
+    /// Physical screen pixels per full-resolution image pixel.
     pub zoom: f32,
     pub pan: Vec2,
     pub fit: bool,
@@ -136,6 +142,7 @@ impl Develop {
             compare: Compare::Edited,
             split: 0.5,
             full_preview: false,
+            use_full_resolution: false,
             zoom: 1.0,
             pan: Vec2::ZERO,
             fit: true,
@@ -167,10 +174,7 @@ impl Develop {
         match command {
             "fit" => self.fit = true,
             "actual" => {
-                if !self.full_preview {
-                    self.full_preview = true;
-                    self.changed();
-                }
+                self.full_preview = true;
                 self.fit = false;
                 self.zoom = 1.0;
                 self.pan = Vec2::ZERO;
@@ -198,6 +202,29 @@ impl Develop {
         self.last_change = Instant::now();
         self.error = None;
         self.notice = None;
+    }
+
+    fn update_preview_resolution(&mut self, ctx: &egui::Context) {
+        let (Some(full), Some(proxy)) = (&self.full, &self.proxy) else {
+            return;
+        };
+        let displayed = crop_rect(full, &self.settings).size() * self.zoom;
+        let proxy_size = crop_rect(proxy, &self.settings).size();
+        let needs_full = self.full_preview
+            || displayed.x > proxy_size.x + 0.5
+            || displayed.y > proxy_size.y + 0.5;
+        let limited = full.camera.width().max(full.camera.height()) as usize
+            > ctx.input(|i| i.max_texture_side);
+        let use_full_resolution =
+            needs_full && !limited && full.camera.dimensions() != proxy.camera.dimensions();
+        if self.use_full_resolution != use_full_resolution {
+            self.use_full_resolution = use_full_resolution;
+            self.changed();
+            ctx.request_repaint();
+        }
+        if needs_full && limited {
+            self.notice = Some("This image exceeds the GPU's full-resolution preview limit. Develop and TIFF export still use every source pixel.".into());
+        }
     }
 
     fn spawn(
@@ -298,6 +325,18 @@ fn texture(ctx: &egui::Context, name: &str, pixels: &RgbaImage) -> TextureHandle
             pixels.as_raw(),
         ),
         TextureOptions::LINEAR,
+    )
+}
+
+fn crop_rect(raw: &DecodedRaw, settings: &DevelopSettings) -> Rect {
+    let size = vec2(raw.camera.width() as f32, raw.camera.height() as f32);
+    let [left, top, right, bottom] = settings.crop;
+    Rect::from_min_max(
+        pos2((left * size.x).floor(), (top * size.y).floor()),
+        pos2(
+            (right * size.x).ceil().min(size.x),
+            (bottom * size.y).ceil().min(size.y),
+        ),
     )
 }
 
@@ -464,8 +503,15 @@ impl EditorApp {
                     develop.set_preview(ctx, preview);
                     develop.rendered_revision = Some(develop.revision);
                 }
-                Ok(WorkerResult::Preview { revision, pixels }) => {
+                Ok(WorkerResult::Preview {
+                    revision,
+                    pixels,
+                    before,
+                }) => {
                     if revision == develop.revision {
+                        if let Some(before) = before {
+                            develop.before = Some(texture(ctx, "raw_original", &before));
+                        }
                         develop.set_preview(ctx, pixels);
                         develop.rendered_revision = Some(revision);
                     }
@@ -536,17 +582,35 @@ impl EditorApp {
             } else if develop.rendered_revision != Some(develop.revision)
                 && develop.last_change.elapsed() >= Duration::from_millis(100)
             {
-                let input = if develop.full_preview {
+                let input = if develop.use_full_resolution {
                     full
                 } else {
                     develop.proxy.clone().unwrap()
                 };
                 let settings = develop.settings.clone();
                 let revision = develop.revision;
+                let render_before = develop.before.as_ref().is_none_or(|before| {
+                    before.size()
+                        != [
+                            input.camera.width() as usize,
+                            input.camera.height() as usize,
+                        ]
+                });
                 develop.spawn(ctx, move |cancel| {
+                    let before = render_before
+                        .then(|| raw::render(&input, &DevelopSettings::default(), cancel))
+                        .transpose()?;
+                    let pixels = if settings == DevelopSettings::default()
+                        && let Some(before) = &before
+                    {
+                        before.clone()
+                    } else {
+                        raw::render(&input, &settings, cancel)?
+                    };
                     Ok(WorkerResult::Preview {
                         revision,
-                        pixels: raw::render(&input, &settings, cancel)?,
+                        pixels,
+                        before,
                     })
                 });
             }
@@ -641,7 +705,6 @@ impl EditorApp {
         };
         d.navigated_history = false;
         let previous = d.settings.clone();
-        let full_preview = d.full_preview;
         let mut apply = false;
         let mut export = false;
         let mut cancel = false;
@@ -695,7 +758,7 @@ impl EditorApp {
                     "Developing full-resolution image…"
                 } else if d.full.is_none() && d.error.is_none() {
                     "Decoding RAW sensor data…"
-                } else if d.receiver.is_some() {
+                } else if d.receiver.is_some() || d.rendered_revision != Some(d.revision) {
                     "Updating preview…"
                 } else if d.picker {
                     "Click a neutral gray area to set white balance"
@@ -712,7 +775,12 @@ impl EditorApp {
                             "{} × {} · {}",
                             asset.metadata.width,
                             asset.metadata.height,
-                            if d.full_preview {
+                            if d.full
+                                .as_ref()
+                                .zip(d.texture.as_ref())
+                                .is_some_and(|(full, texture)| texture.size_vec2()
+                                    == crop_rect(full, &d.settings).size())
+                            {
                                 "Full resolution"
                             } else {
                                 "Preview"
@@ -761,21 +829,7 @@ impl EditorApp {
         if !ctx.input(|i| i.pointer.any_down()) {
             d.finish_undo();
         }
-        let preview_limited = d.full_preview
-            && d.full.as_ref().is_some_and(|raw| {
-                raw.camera.width().max(raw.camera.height()) as usize
-                    > ctx.input(|i| i.max_texture_side)
-            });
-        if preview_limited {
-            d.full_preview = false;
-            d.fit = true;
-        }
-        if full_preview != d.full_preview {
-            d.changed();
-        }
-        if preview_limited {
-            d.notice = Some("This image exceeds the GPU's full-resolution preview limit. Develop and TIFF export still use every source pixel.".into());
-        }
+        d.update_preview_resolution(ctx);
         if apply && d.settings.validate().is_ok() {
             d.finish_undo();
             d.applying = true;
@@ -871,7 +925,10 @@ fn loaded(asset: RawAsset, decoded: DecodedRaw, cancel: &AtomicBool) -> Result<W
 fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, interactive: bool) {
     let (viewport, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     let before = d.before.as_ref().unwrap();
-    let image_size = texture.size_vec2();
+    let full = d.full.as_ref().unwrap();
+    let source = crop_rect(full, &d.settings);
+    // Keep zoom and pan independent of the texture while a sharper render arrives.
+    let image_size = source.size() / ui.pixels_per_point();
     let side_by_side = d.compare == Compare::SideBySide;
     let available = vec2(
         viewport.width() / if side_by_side { 2.0 } else { 1.0 },
@@ -900,7 +957,11 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, inter
     {
         d.fit = false;
     }
-    let rect = Rect::from_center_size(center + d.pan, image_size * d.zoom);
+    let mut rect = Rect::from_center_size(center + d.pan, image_size * d.zoom);
+    if d.zoom == 1.0 {
+        // At 100%, align texels with physical pixels to avoid interpolation blur.
+        rect = rect.translate(rect.min.round_to_pixels(ui.pixels_per_point()) - rect.min);
+    }
     let painter = ui.painter().with_clip_rect(viewport);
     let edited_viewport = if side_by_side {
         Rect::from_min_max(pos2(viewport.center().x, viewport.top()), viewport.max)
@@ -912,8 +973,14 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, inter
         .rect_filled(rect, 0.0, Color32::from_gray(50));
     let uv = Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0));
     let original_uv = Rect::from_min_max(
-        pos2(d.settings.crop[0], d.settings.crop[1]),
-        pos2(d.settings.crop[2], d.settings.crop[3]),
+        pos2(
+            source.left() / full.camera.width() as f32,
+            source.top() / full.camera.height() as f32,
+        ),
+        pos2(
+            source.right() / full.camera.width() as f32,
+            source.bottom() / full.camera.height() as f32,
+        ),
     );
     let shown = if d.show_clipping {
         d.warning.as_ref().unwrap()
@@ -928,7 +995,12 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, inter
             painter.image(shown.id(), rect, uv, Color32::WHITE);
         }
         Compare::SideBySide => {
-            let original_rect = rect.translate(vec2(-available.x, 0.0));
+            let mut original_rect = rect.translate(vec2(-available.x, 0.0));
+            if d.zoom == 1.0 {
+                original_rect = original_rect.translate(
+                    original_rect.min.round_to_pixels(ui.pixels_per_point()) - original_rect.min,
+                );
+            }
             let original_viewport =
                 Rect::from_min_max(viewport.min, pos2(viewport.center().x, viewport.bottom()));
             painter.with_clip_rect(original_viewport).image(
@@ -1108,16 +1180,28 @@ mod tests {
     }
 
     fn ready(ctx: &egui::Context) -> Develop {
-        let (asset, raw) = fixture();
+        ready_with_resolution(ctx, [64, 48], 64)
+    }
+
+    fn ready_with_resolution(ctx: &egui::Context, size: [u32; 2], proxy_side: u32) -> Develop {
+        let (mut asset, mut raw) = fixture();
+        let full = Arc::get_mut(&mut raw).unwrap();
+        full.camera = image::Rgb32FImage::from_fn(size[0], size[1], |x, y| {
+            image::Rgb([if (x + y) % 2 == 0 { 0.1 } else { 0.8 }; 3])
+        });
+        full.metadata.width = size[0];
+        full.metadata.height = size[1];
+        asset.metadata = full.metadata.clone();
+        let proxy = Arc::new(raw.preview(proxy_side));
         let mut d = Develop::loading(
             DevelopTarget::New,
             asset.filename.clone(),
             asset.settings.clone(),
         );
-        let pixels = raw::render(&raw, &asset.settings, &AtomicBool::new(false)).unwrap();
+        let pixels = raw::render(&proxy, &asset.settings, &AtomicBool::new(false)).unwrap();
         d.asset = Some(asset);
-        d.full = Some(raw.clone());
-        d.proxy = Some(raw);
+        d.full = Some(raw);
+        d.proxy = Some(proxy);
         d.set_preview(ctx, pixels.clone());
         d.before = Some(texture(ctx, "before", &pixels));
         d.rendered_revision = Some(0);
@@ -1148,6 +1232,172 @@ mod tests {
                 _ => None,
             })
             .expect("Develop preview is visible")
+    }
+
+    fn canvas_frame(
+        ctx: &egui::Context,
+        d: &mut Develop,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(160.0, 144.0))),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    draw_canvas(ui, d, d.texture.clone().unwrap(), true);
+                });
+                d.update_preview_resolution(ctx);
+            },
+        )
+    }
+
+    #[test]
+    fn preview_resolution_tracks_zoom_and_display_density() {
+        let ctx = egui::Context::default();
+        let mut d = ready_with_resolution(&ctx, [256, 192], 128);
+        canvas_frame(&ctx, &mut d, vec![]);
+        assert!(!d.use_full_resolution);
+
+        ctx.set_pixels_per_point(2.0);
+        canvas_frame(&ctx, &mut d, vec![]);
+        canvas_frame(&ctx, &mut d, vec![]);
+        assert!(
+            d.use_full_resolution,
+            "Fit must cover physical display pixels"
+        );
+        assert!(
+            !d.full_preview,
+            "Automatic detail must not enable the override"
+        );
+
+        ctx.set_pixels_per_point(1.0);
+        canvas_frame(&ctx, &mut d, vec![]);
+        canvas_frame(&ctx, &mut d, vec![]);
+        assert!(!d.use_full_resolution);
+        d.view_command("zoom_in");
+        canvas_frame(&ctx, &mut d, vec![]);
+        assert!(d.use_full_resolution, "Menu zoom must load full detail");
+
+        d.view_command("fit");
+        canvas_frame(&ctx, &mut d, vec![]);
+        assert!(!d.use_full_resolution);
+        d.full_preview = true;
+        canvas_frame(&ctx, &mut d, vec![]);
+        assert!(d.use_full_resolution, "The override must also apply to Fit");
+        assert!(d.undo.is_empty());
+    }
+
+    #[test]
+    fn wheel_zoom_refines_both_comparisons_without_moving_the_image() {
+        let ctx = egui::Context::default();
+        let mut d = ready_with_resolution(&ctx, [256, 192], 128);
+        let proxy_texture = d.texture.as_ref().unwrap().id();
+        let rect = image_rect(&canvas_frame(&ctx, &mut d, vec![]), proxy_texture);
+        let pointer = rect.lerp_inside(vec2(0.6, 0.4));
+        let point = (pointer - rect.min) / rect.size();
+        canvas_frame(&ctx, &mut d, vec![egui::Event::PointerMoved(pointer)]);
+        canvas_frame(
+            &ctx,
+            &mut d,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, 200.0),
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        for _ in 0..30 {
+            canvas_frame(&ctx, &mut d, vec![]);
+        }
+        assert!(d.use_full_resolution);
+        let rect = image_rect(&canvas_frame(&ctx, &mut d, vec![]), proxy_texture);
+        assert!(((pointer - rect.min) / rect.size() - point).length() < 0.001);
+        let (zoom, pan) = (d.zoom, d.pan);
+
+        // Exercise the real worker, including the full-resolution Original render.
+        d.last_change = Instant::now() - Duration::from_secs(1);
+        let mut app = EditorApp::with_context(&ctx, vec![], false, None);
+        app.develop = Some(d);
+        app.poll_develop(&ctx);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !app.develop.as_ref().unwrap().ready_for_screenshot() {
+            assert!(Instant::now() < deadline, "Preview worker did not finish");
+            std::thread::sleep(Duration::from_millis(5));
+            app.poll_develop(&ctx);
+        }
+        let d = app.develop.as_mut().unwrap();
+        let expected = raw::render(
+            d.full.as_ref().unwrap(),
+            &d.settings,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(d.preview.as_ref().unwrap(), &expected);
+        assert_eq!(d.before.as_ref().unwrap().size(), [256, 192]);
+        let full_texture = d.texture.as_ref().unwrap().id();
+        let refined = image_rect(&canvas_frame(&ctx, d, vec![]), full_texture);
+        assert_eq!(refined, rect);
+        assert_eq!((d.zoom, d.pan), (zoom, pan));
+        d.compare = Compare::Original;
+        let before_texture = d.before.as_ref().unwrap().id();
+        assert_eq!(
+            image_rect(&canvas_frame(&ctx, d, vec![]), before_texture),
+            rect
+        );
+    }
+
+    #[test]
+    fn actual_pixels_uses_cropped_source_size_at_each_display_scale() {
+        for scale in [1.0, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let mut d = ready_with_resolution(&ctx, [256, 192], 128);
+            d.settings.crop = [0.251, 0.251, 0.749, 0.749];
+            d.view_command("actual");
+            let texture = d.texture.as_ref().unwrap().id();
+            let rect = image_rect(&canvas_frame(&ctx, &mut d, vec![]), texture);
+            assert!((rect.size() * scale - vec2(128.0, 96.0)).length() < 0.001);
+            let origin = rect.min.to_vec2() * scale;
+            assert!((origin - origin.round()).length() < 0.001);
+            assert!(d.use_full_resolution);
+            d.compare = Compare::SideBySide;
+            let original_texture = d.before.as_ref().unwrap().id();
+            let output = canvas_frame(&ctx, &mut d, vec![]);
+            let original = image_rect(&output, original_texture);
+            let origin = original.min.to_vec2() * scale;
+            assert!((origin - origin.round()).length() < 0.001);
+            let mesh = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Mesh(mesh) if mesh.texture_id == original_texture => Some(mesh),
+                    _ => None,
+                })
+                .unwrap();
+            for vertex in &mesh.vertices {
+                assert!([0.25, 0.75].contains(&vertex.uv.x));
+                assert!([0.25, 0.75].contains(&vertex.uv.y));
+            }
+        }
+    }
+
+    #[test]
+    fn limited_preview_preserves_zoom_and_pan_without_repeated_work() {
+        let ctx = egui::Context::default();
+        let mut d = ready_with_resolution(&ctx, [256, 192], 128);
+        d.view_command("actual");
+        d.pan = vec2(13.0, -7.0);
+        ctx.input_mut(|i| i.max_texture_side = 128);
+        d.update_preview_resolution(&ctx);
+        d.update_preview_resolution(&ctx);
+        assert!(!d.use_full_resolution);
+        assert_eq!(d.revision, 0);
+        assert!(!d.fit);
+        assert_eq!(d.zoom, 1.0);
+        assert_eq!(d.pan, vec2(13.0, -7.0));
+        assert!(d.notice.as_ref().unwrap().contains("preview limit"));
     }
 
     fn click(ctx: &egui::Context, app: &mut EditorApp, pos: Pos2) {
@@ -1512,17 +1762,23 @@ mod tests {
         let mut app = EditorApp::with_context(&ctx, vec![], false, None);
         let mut d = ready(&ctx);
         let before = d.preview.clone();
+        let original = d.before.as_ref().unwrap().id();
         let (tx, rx) = mpsc::channel();
         d.receiver = Some(rx);
         d.changed();
         tx.send(Ok(WorkerResult::Preview {
             revision: 0,
             pixels: RgbaImage::new(1, 1),
+            before: Some(RgbaImage::new(1, 1)),
         }))
         .unwrap();
         app.develop = Some(d);
         app.poll_develop(&ctx);
         assert_eq!(app.develop.as_ref().unwrap().preview, before);
+        assert_eq!(
+            app.develop.as_ref().unwrap().before.as_ref().unwrap().id(),
+            original
+        );
         let mut d = app.develop.take().unwrap();
         let cancel = d.cancel.clone();
         let (tx, rx) = mpsc::channel();

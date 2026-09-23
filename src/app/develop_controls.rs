@@ -320,8 +320,12 @@ fn detail(ui: &mut egui::Ui, d: &mut Develop) {
         "",
     );
     ui.add_space(12.0);
-    widgets::checkbox(ui, &mut d.full_preview, "Full-resolution preview");
-    ui.label(egui::RichText::new("Use 100% to judge sharpening and noise reduction. Full-resolution previews take longer to update.").color(theme::MUTED));
+    widgets::checkbox(
+        ui,
+        &mut d.full_preview,
+        "Always use full-resolution preview",
+    );
+    ui.label(egui::RichText::new("Zooming in loads full detail automatically. Use 100% to judge sharpening and noise reduction. Always using full resolution also applies it to Fit view and takes longer to update.").color(theme::MUTED));
 }
 
 fn lens(ui: &mut egui::Ui, d: &mut Develop) {
