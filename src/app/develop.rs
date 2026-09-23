@@ -1863,11 +1863,60 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Set XUAN_TEST_NEF to a local camera file"]
-    fn sample_nef_opens_develop_commits_and_reopens() {
+    fn raw_file_imports_enter_develop_and_preserve_the_layer_destination() {
+        use super::super::clipboard::ClipboardContent;
+
+        let ctx = egui::Context::default();
+        let dir = tempfile::tempdir().unwrap();
+        for filename in [
+            "photo.NEF",
+            "photo.nrw",
+            "photo.cr2",
+            "photo.CR3",
+            "photo.CrW",
+        ] {
+            // Invalid bytes still enter Develop; decoding errors belong to its worker.
+            let path = dir.path().join(filename);
+            std::fs::write(&path, b"broken camera file").unwrap();
+            for import in ["open", "layer", "paste"] {
+                let mut app = EditorApp::with_context(&ctx, vec![], false, None);
+                app.dimensions = [64, 48];
+                app.new_document();
+                let document = app.session().unwrap().document.id;
+                let layer_count = app.session().unwrap().document.layers.len();
+                if import == "paste" {
+                    app.paste_content(ClipboardContent::Files(vec![path.clone()]));
+                } else {
+                    app.open_path(&path, import == "layer");
+                }
+                assert!(app.error.is_none(), "{filename}: {:?}", app.error);
+                let develop = app.develop.as_ref().expect("RAW import opens Develop");
+                assert_eq!(develop.title, filename);
+                match develop.target {
+                    DevelopTarget::New => assert_eq!(import, "open"),
+                    DevelopTarget::Insert(id) => {
+                        assert_ne!(import, "open");
+                        assert_eq!(id, document);
+                    }
+                    DevelopTarget::Existing { .. } => panic!("Expected a new RAW session"),
+                }
+                assert_eq!(app.sessions.len(), 1);
+                assert_eq!(app.session().unwrap().document.layers.len(), layer_count);
+                app.cancel_develop();
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "Set XUAN_TEST_RAW to a local camera file"]
+    fn sample_raw_opens_develop_commits_and_reopens() {
         let ctx = egui::Context::default();
         let mut app = EditorApp::with_context(&ctx, vec![], false, None);
-        let path = PathBuf::from(std::env::var_os("XUAN_TEST_NEF").expect("Set XUAN_TEST_NEF"));
+        let path = PathBuf::from(
+            std::env::var_os("XUAN_TEST_RAW")
+                .or_else(|| std::env::var_os("XUAN_TEST_NEF"))
+                .expect("Set XUAN_TEST_RAW"),
+        );
         app.open_path(&path, false);
         assert!(app.sessions.is_empty());
         assert!(app.develop.is_some());

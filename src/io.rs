@@ -137,6 +137,7 @@ pub fn save(document: &Document, path: &Path) -> Result<()> {
         archive.write_all(&json)?;
         for layer in &document.layers {
             if let Some(raw) = &layer.raw {
+                // The legacy archive suffix is shared by all RAW formats.
                 archive.start_file(format!("raw/{}.nef", layer.id), options)?;
                 archive.write_all(&raw.bytes)?;
             }

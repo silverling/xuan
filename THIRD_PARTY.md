@@ -2,7 +2,7 @@
 
 Xuan's own source code is MIT licensed. Dependency licenses remain applicable to their respective code.
 
-- **Rawler 0.7.2** provides Nikon RAW decoding, camera calibration data, and PPG demosaicing. Copyright Daniel Vogelbacher, Pedro Côrte-Real, and the Rawler contributors. Licensed under the GNU LGPL 2.1; see [the license](licenses/rawler-LGPL-2.1.txt) and [upstream source](https://crates.io/crates/rawler/0.7.2).
+- **Rawler 0.7.2** provides Nikon and Canon RAW decoding, camera calibration data, and PPG demosaicing. Copyright Daniel Vogelbacher, Pedro Côrte-Real, and the Rawler contributors. Licensed under the GNU LGPL 2.1; see [the license](licenses/rawler-LGPL-2.1.txt) and [upstream source](https://crates.io/crates/rawler/0.7.2).
 - **heic-rs 0.1.1** provides HEIC/HEIF decoding in Rust. The decoder and synthetic regression fixtures are used under the [MIT license](licenses/heic-rs-MIT.txt); see [upstream source](https://crates.io/crates/heic-rs/0.1.1) and [fixture provenance](src/io/fixtures/README.md).
 - **Inter Variable**: [SIL Open Font License](assets/fonts/Inter-LICENSE.txt).
 - **egui-winit**: [MIT](vendor/egui-winit/LICENSE-MIT) / [Apache 2.0](vendor/egui-winit/LICENSE-APACHE), with local patches retained in the accompanying source archive.

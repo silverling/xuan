@@ -1,6 +1,6 @@
-# Nikon RAW Develop
+# RAW Develop
 
-Open a `.nef` or `.nrw` through File → Open, Import Image as Layer, the command line, a file-manager paste, or drag-and-drop. The image first opens in Develop. Files selected together are queued, so each RAW receives its own Develop session. Import-as-layer remembers its destination project.
+Open a Nikon `.nef`/`.nrw` or Canon `.cr2`/`.cr3`/`.crw` through File → Open, Import Image as Layer, the command line, a file-manager paste, or drag-and-drop. The image first opens in Develop. Files selected together are queued, so each RAW receives its own Develop session. Import-as-layer remembers its destination project.
 
 Use **Develop** to create a photo layer, or **Cancel** to leave the destination document unchanged. Double-click the RAW layer row or the image with Move selected to return to Develop. Layer → Develop RAW and the layer context menu also reopen it. A committed redevelopment is one document undo step; changes inside Develop have their own Undo/Redo. Cancelling redevelopment retains the last committed pixels and settings.
 
@@ -31,6 +31,6 @@ Decoding, previews, full-resolution development, and TIFF encoding run in backgr
 
 ## Current limits
 
-This implements the Develop → embedded RAW layer → Develop workflow and the controls listed above. It is not full Affinity feature parity. Camera support follows Rawler 0.7.2's NEF/NRW decoder and requires an RGB Bayer sensor. Unsupported/damaged files produce an error. The camera's embedded JPEG is not used as the development source.
+This implements the Develop → embedded RAW layer → Develop workflow and the controls listed above. It is not full Affinity feature parity. Camera support follows Rawler 0.7.2's Nikon NEF/NRW and Canon CR2/CR3/CRW decoders and requires an RGB Bayer sensor. Canon CR3 RAW and C-RAW use the same Develop workflow. Reduced-resolution Canon sRAW/mRAW and older non-RGB sensor layouts are not supported. Unsupported/damaged files produce an error. The camera's embedded JPEG is not used as the development source.
 
 Lens correction is manual; there is no automatic lens-profile database. Noise reduction is a conventional local filter, not a learned denoiser. Defringing suppresses purple excess and can affect purple objects. There is no reconstruction of saturated sensor channels, dual-illuminant profile interpolation, custom camera/ICC output profiles, wide-gamut/HDR compositor, RAW spot-healing tool, automatic subject masks, or batch preset development. Use the photo editor's healing tools after developing/rasterizing. RAW metadata remains in the project; the TIFF export currently includes the output color profile but does not copy shooting EXIF.

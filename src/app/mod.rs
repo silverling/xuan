@@ -758,14 +758,18 @@ impl EditorApp {
     }
 
     fn open_dialog(&mut self, as_layer: bool) {
+        let extensions = [
+            "xuan", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "heic", "heif",
+            "hif",
+        ];
+        // Portal file filters may be case-sensitive; cameras commonly use uppercase.
+        let extensions: Vec<_> = extensions
+            .iter()
+            .chain(xuan::raw::EXTENSIONS)
+            .flat_map(|extension| [extension.to_string(), extension.to_ascii_uppercase()])
+            .collect();
         if let Some(paths) = rfd::FileDialog::new()
-            .add_filter(
-                "Images and Xuan projects",
-                &[
-                    "xuan", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "heic",
-                    "heif", "hif", "nef", "nrw",
-                ],
-            )
+            .add_filter("Images and Xuan projects", &extensions)
             .pick_files()
         {
             for path in paths {

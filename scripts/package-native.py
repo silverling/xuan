@@ -131,7 +131,7 @@ def build_deb(payload, output, version, architecture, glibc):
         f"Installed-Size: {(installed_size + 1023) // 1024}\nDepends: {dependencies}\n"
         "Recommends: xdg-desktop-portal\n"
         "Description: Native Linux image editor\n"
-        " Layered compositions, photo retouching, and Nikon RAW development.\n"
+        " Layered compositions, photo retouching, and camera RAW development.\n"
     )
     for name in ("postinst", "postrm"):
         shutil.copy2(ROOT / "packaging/refresh-desktop.sh", control / name)
@@ -154,7 +154,7 @@ def build_rpm(payload, output, version, architecture, temporary):
         "URL: https://github.com/silverling/xuan\n"
         f"{requires}\nRecommends: xdg-desktop-portal\n"
         "\n%description\n"
-        "Layered compositions, photo retouching, and Nikon RAW development.\n"
+        "Layered compositions, photo retouching, and camera RAW development.\n"
         '\n%install\nmkdir -p "%{buildroot}"\n'
         'cp -a "%{xuan_payload}/usr" "%{buildroot}/"\n'
         f"\n%post\n{refresh}\n%postun\n{refresh}"

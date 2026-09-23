@@ -78,9 +78,11 @@ fn crop_and_local_adjustment_are_nondestructive() {
 }
 
 #[test]
-#[ignore = "Set XUAN_TEST_NEF to a local camera file"]
-fn sample_nef_develop_roundtrip() {
-    let path = std::env::var_os("XUAN_TEST_NEF").expect("Set XUAN_TEST_NEF");
+#[ignore = "Set XUAN_TEST_RAW to a local camera file"]
+fn sample_raw_develop_roundtrip() {
+    let path = std::env::var_os("XUAN_TEST_RAW")
+        .or_else(|| std::env::var_os("XUAN_TEST_NEF"))
+        .expect("Set XUAN_TEST_RAW");
     let (asset, raw) = open(Path::new(&path)).unwrap();
     println!(
         "Camera metadata: {:?}; white balance: {:?}",
@@ -105,6 +107,7 @@ fn sample_nef_develop_roundtrip() {
     crate::io::save(&document, &project).unwrap();
     let loaded = crate::io::load(&project).unwrap();
     let restored = loaded.layers[0].raw.as_ref().unwrap();
+    assert_eq!(restored.filename, asset.filename);
     assert_eq!(restored.bytes, asset.bytes);
     assert_eq!(restored.settings, asset.settings);
     assert_eq!(loaded.layers[0].pixels, document.layers[0].pixels);
@@ -148,7 +151,7 @@ fn sixteen_bit_output_preserves_more_than_eight_bit_steps() {
 fn raw_project_assets_settings_and_history_survive_roundtrip() {
     let raw = synthetic();
     let mut asset = RawAsset {
-        filename: "test.NEF".into(),
+        filename: "test.CR3".into(),
         metadata: raw.metadata.clone(),
         settings: DevelopSettings {
             exposure: -0.5,
@@ -192,6 +195,7 @@ fn raw_project_assets_settings_and_history_survive_roundtrip() {
     crate::io::save(&doc, &path).unwrap();
     let restored = crate::io::load(&path).unwrap();
     let restored_raw = restored.layers[0].raw.as_ref().unwrap();
+    assert_eq!(restored_raw.filename, asset.filename);
     assert_eq!(restored_raw.bytes, asset.bytes);
     assert_eq!(restored_raw.settings, asset.settings);
     assert!(crate::paint::ensure_pixels(&mut doc.layers[0]).is_err());

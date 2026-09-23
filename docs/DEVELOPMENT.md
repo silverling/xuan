@@ -17,7 +17,7 @@ sudo apt install build-essential pkg-config libxkbcommon-dev libwayland-dev \
     libvulkan1 mesa-vulkan-drivers xdg-desktop-portal
 ```
 
-HEIC/HEIF import uses the bundled pure Rust `heic-rs` decoder on Linux and Windows. No `libheif` installation or `heif-convert` executable is required. Nikon NEF/NRW import uses the bundled Rawler library and also needs no external converter. HEIC regression fixtures are included in `src/io/fixtures`; `cargo test --locked heif` covers decoding, orientation, limits, and project persistence, and `cargo test --locked heic_opens` covers document/layer import.
+HEIC/HEIF import uses the bundled pure Rust `heic-rs` decoder on Linux and Windows. No `libheif` installation or `heif-convert` executable is required. Nikon NEF/NRW and Canon CR2/CR3/CRW import use the bundled Rawler library and also need no external converter. HEIC regression fixtures are included in `src/io/fixtures`; `cargo test --locked heif` covers decoding, orientation, limits, and project persistence, and `cargo test --locked heic_opens` covers document/layer import.
 
 ### Windows
 
@@ -145,14 +145,14 @@ scales. Automated tests do not certify individual Wacom or Parblo models.
 
 ## RAW sample checks
 
-The regular test suite uses synthetic camera-linear data and small embedded-asset fixtures. Camera files are not committed to the repository. Optional tests use a local NEF:
+The regular test suite uses synthetic camera-linear data and small embedded-asset fixtures. Camera files are not committed to the repository. Optional tests use a local Nikon or Canon RAW file:
 
 ```sh
-XUAN_TEST_NEF=/path/to/photo.NEF cargo test --locked sample_nef -- --ignored --nocapture
-cargo run --locked -- /path/to/photo.NEF --screenshot /tmp/develop.png
+XUAN_TEST_RAW=/path/to/photo.CR3 cargo test --locked sample_raw -- --ignored --nocapture
+cargo run --locked -- /path/to/photo.CR3 --screenshot /tmp/develop.png
 ```
 
-`XUAN_TEST_RAW_PREVIEW=/tmp/preview.png` optionally writes the engine test's default preview. The provided Nikon Z6 III sample was verified at 4032 × 6048 after orientation, including full-resolution rendering, project save/load, reopening Develop and cancellation.
+`XUAN_TEST_RAW_PREVIEW=/tmp/preview.png` optionally writes the engine test's default preview. The sample checks cover full-resolution rendering, project save/load, reopening Develop and cancellation. Verified samples include Nikon Z6 III NEF (4032 × 6048 after orientation) and Canon EOS M50 Mark II CR3 (4000 × 6000 after orientation). `XUAN_TEST_NEF` remains accepted as a fallback for existing local test commands.
 
 ## Screenshots
 

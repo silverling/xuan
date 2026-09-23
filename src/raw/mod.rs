@@ -25,6 +25,7 @@ pub use process::{auto_exposure, render, render_16, sample_white_balance, source
 pub use settings::{DevelopSettings, Overlay, OverlayKind, WhiteBalance};
 
 pub const MAX_RAW_BYTES: u64 = 512 * 1024 * 1024;
+pub const EXTENSIONS: &[&str] = &["nef", "nrw", "cr2", "cr3", "crw"];
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RawMetadata {
@@ -94,9 +95,11 @@ impl DecodedRaw {
 }
 
 pub fn is_raw(path: &Path) -> bool {
-    path.extension()
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| s.eq_ignore_ascii_case("nef") || s.eq_ignore_ascii_case("nrw"))
+    path.extension().and_then(|s| s.to_str()).is_some_and(|s| {
+        EXTENSIONS
+            .iter()
+            .any(|extension| s.eq_ignore_ascii_case(extension))
+    })
 }
 
 pub fn open(path: &Path) -> Result<(RawAsset, DecodedRaw)> {
@@ -139,7 +142,7 @@ fn decode_inner(bytes: &[u8]) -> Result<DecodedRaw> {
     ensure!(
         matches!(&header.photometric, RawPhotometricInterpretation::Cfa(c)
         if c.cfa.is_rgb() && c.cfa.width == 2 && c.cfa.height == 2),
-        "This RAW sensor layout is not supported; an RGB Bayer NEF is required"
+        "This RAW sensor layout is not supported; an RGB Bayer RAW file is required (Canon sRAW/mRAW is not supported)"
     );
     let decoder = rawler::get_decoder(&source)?;
     let params = RawDecodeParams::default();
