@@ -636,21 +636,14 @@ impl EditorApp {
                 Stroke::new(1.5_f32, Color32::LIGHT_RED),
             );
         }
-        if !mask && layer.pixels.is_none() {
+        if !mask && layer.pixels.is_none() && (layer.adjustment.is_some() || layer.filter.is_some())
+        {
             let center = response.rect.center();
-            if layer.adjustment.is_some() || layer.filter.is_some() {
-                ui.painter().circle_filled(center, 7.0, theme::MUTED);
-                ui.painter().rect_filled(
-                    egui::Rect::from_min_max(center - vec2(0.0, 7.0), center + vec2(7.0, 7.0)),
-                    0.0,
-                    Color32::from_gray(48),
-                );
-            }
-            ui.painter().rect_stroke(
-                response.rect,
-                2.0,
-                Stroke::new(1.0_f32, Color32::from_gray(85)),
-                StrokeKind::Inside,
+            ui.painter().circle_filled(center, 7.0, theme::MUTED);
+            ui.painter().rect_filled(
+                egui::Rect::from_min_max(center - vec2(0.0, 7.0), center + vec2(7.0, 7.0)),
+                0.0,
+                Color32::from_gray(48),
             );
         }
     }
