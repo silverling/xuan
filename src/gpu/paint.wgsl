@@ -153,6 +153,16 @@ fn stroke_pixels(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let mode = config[7].w;
     var color = config[8];
+    if (config[14].x != 0.0) {
+        let offset = bitcast<u32>(config[14].y) + i * 2u;
+        let previous = bitcast<f32>(auxiliary[offset + 1u]);
+        result[size.x * size.y + i] = bitcast<u32>(max(previous, amount));
+        if (amount > previous) {
+            p = unpack4x8unorm(auxiliary[offset]);
+        } else {
+            amount = 0.0;
+        }
+    }
     if (amount > 0.0) {
         if (mask) {
             let value = select(dot(color.rgb, vec3(0.3, 0.59, 0.11)), 0.0, mode == 1.0);

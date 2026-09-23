@@ -21,6 +21,75 @@ fn screen(app: &EditorApp, x: f32, y: f32) -> Pos2 {
 }
 
 #[test]
+fn low_opacity_fast_mouse_and_pen_strokes_stay_even_and_undo() {
+    for smoothing in [0.0, 1.0] {
+        for pen in [false, true] {
+            let (context, mut app) = smoothing_app(smoothing);
+            app.brush.diameter = 53.0;
+            app.brush.hardness = 0.83;
+            app.brush.opacity = 0.3;
+            app.pressure_size = false;
+            app.pressure_opacity = true;
+            let draw = |app: &mut EditorApp| {
+                for (x, phase) in [
+                    (30.0, Phase::Down),
+                    (48.0, Phase::Move),
+                    (110.0, Phase::Move),
+                    (130.0, Phase::Up),
+                ] {
+                    let position = screen(app, x, 64.0);
+                    if pen {
+                        app.pen_samples = vec![Sample {
+                            position,
+                            pressure: Some(if phase == Phase::Up { 0.0 } else { 1.0 }),
+                            tilt: None,
+                            eraser: false,
+                            phase,
+                        }];
+                        frame(&context, app);
+                    } else {
+                        pointer_frame(
+                            &context,
+                            app,
+                            position,
+                            match phase {
+                                Phase::Down => Some(true),
+                                Phase::Up => Some(false),
+                                _ => None,
+                            },
+                            egui::Modifiers::NONE,
+                        );
+                    }
+                    // Idle frames must not add more paint at a stationary pointer.
+                    frame(&context, app);
+                }
+                assert!(app.error.is_none(), "{:?}", app.error);
+                assert!(app.gesture.is_none());
+            };
+            draw(&mut app);
+            let first = render::render(&app.session().unwrap().document);
+            for x in 30..=130 {
+                assert_eq!(
+                    first.get_pixel(x, 64)[3],
+                    77,
+                    "x={x}, pen={pen}, smoothing={smoothing}"
+                );
+            }
+            draw(&mut app);
+            let second = render::render(&app.session().unwrap().document);
+            for x in 30..=130 {
+                assert_eq!(second.get_pixel(x, 64)[3], 130);
+            }
+            assert_eq!(app.session().unwrap().history.names().count(), 2);
+            app.command("undo");
+            assert_eq!(render::render(&app.session().unwrap().document), first);
+            app.command("redo");
+            assert_eq!(render::render(&app.session().unwrap().document), second);
+        }
+    }
+}
+
+#[test]
 fn smoothed_mouse_stroke_reduces_wobble_finishes_at_release_and_undoes() {
     for strength in [0.0, 1.0] {
         let (context, mut app) = smoothing_app(strength);

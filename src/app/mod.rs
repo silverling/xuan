@@ -320,6 +320,7 @@ struct Gesture {
     tool: Tool,
     brush: Brush,
     brushes: Vec<Brush>,
+    stroke: paint::Stroke,
     smoothing: Option<stroke_smoothing::StrokeSmoother>,
     start: Point,
     last: Point,

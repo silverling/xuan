@@ -171,7 +171,12 @@ pub(crate) struct Stroke<'a> {
     pub options: crate::paint::StrokeOptions<'a>,
 }
 
-pub(crate) fn stroke(layer: &mut Layer, selection: Option<&GrayImage>, stroke: Stroke<'_>) -> bool {
+pub(crate) fn stroke(
+    layer: &mut Layer,
+    selection: Option<&GrayImage>,
+    stroke: Stroke<'_>,
+    mut coverage: Option<&mut crate::paint::Stroke>,
+) -> bool {
     use crate::paint::PaintMode;
     let [left, top, right, bottom] = stroke.bounds;
     if right <= left || bottom <= top {
@@ -252,18 +257,45 @@ pub(crate) fn stroke(layer: &mut Layer, selection: Option<&GrayImage>, stroke: S
             auxiliary.extend_from_slice(source.as_raw());
         }
         config.push([stroke.brush.tilt[0], stroke.brush.tilt[1], 0.0, 0.0]);
-        gpu.simple(
+        config.push([
+            if coverage.is_some() { 1.0 } else { 0.0 },
+            f32::from_bits((auxiliary.len() / 4) as u32),
+            0.0,
+            0.0,
+        ]);
+        if let Some(coverage) = &coverage {
+            for y in top..bottom {
+                auxiliary.extend_from_slice(bytemuck::cast_slice(coverage.row(left, right, y)));
+            }
+        }
+        let input = gpu.buffer(&padded(&bytes))?;
+        let auxiliary = gpu.buffer(&auxiliary)?;
+        let byte_count =
+            u64::from(size[0]) * u64::from(size[1]) * if coverage.is_some() { 8 } else { 4 };
+        let result = gpu.empty(byte_count)?;
+        let mut encoder = gpu.encoder();
+        gpu.dispatch(
+            &mut encoder,
             "stroke_pixels",
             SHADER,
-            &padded(&bytes),
-            &auxiliary,
+            [&input, &auxiliary, &result],
             &config,
             size,
-        )
+        )?;
+        gpu.read(encoder, &result, byte_count)
     });
-    let Some(bytes) = result else {
+    let Some(mut bytes) = result else {
         return false;
     };
+    if let Some(coverage) = &mut coverage {
+        let color_bytes = size[0] as usize * size[1] as usize * 4;
+        for (index, amount) in bytes[color_bytes..].as_chunks::<4>().0.iter().enumerate() {
+            let x = left + index as u32 % size[0];
+            let y = top + index as u32 / size[0];
+            coverage.pixel_mut(x, y).amount = f32::from_ne_bytes(*amount);
+        }
+        bytes.truncate(color_bytes);
+    }
     if mask {
         let pixels = std::sync::Arc::make_mut(&mut layer.mask.as_mut().unwrap().pixels);
         image::imageops::replace(pixels, &gray(size, bytes), left.into(), top.into());

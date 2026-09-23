@@ -13,6 +13,13 @@ use crate::{
 #[path = "paint/tablet_tests.rs"]
 mod tablet_tests;
 
+#[cfg(test)]
+#[path = "paint/stroke_tests.rs"]
+mod stroke_tests;
+
+mod stroke;
+pub use stroke::Stroke;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaintMode {
     Paint,
@@ -102,7 +109,12 @@ pub fn prepare_mask(layer: &mut Layer) -> Result<()> {
     Ok(())
 }
 
-fn expand_stroke_bounds(layer: &mut Layer, from: Point, to: Point, radius: f32) -> Result<()> {
+fn expand_stroke_bounds(
+    layer: &mut Layer,
+    from: Point,
+    to: Point,
+    radius: f32,
+) -> Result<[u32; 2]> {
     let image = layer.pixels.as_ref().unwrap();
     let (width, height) = image.dimensions();
     let min = Point::new(from.x.min(to.x) - radius, from.y.min(to.y) - radius);
@@ -118,7 +130,7 @@ fn expand_stroke_bounds(layer: &mut Layer, from: Point, to: Point, radius: f32) 
     let bottom =
         (corners.iter().map(|p| p.y).fold(1.0, f32::max) * height as f32 - 0.0001).ceil() as i32;
     if left == 0 && top == 0 && right == width as i32 && bottom == height as i32 {
-        return Ok(());
+        return Ok([0; 2]);
     }
     let expanded_width = (i64::from(right) - i64::from(left)) as u32;
     let expanded_height = (i64::from(bottom) - i64::from(top)) as u32;
@@ -140,7 +152,7 @@ fn expand_stroke_bounds(layer: &mut Layer, from: Point, to: Point, radius: f32) 
     }
     layer.pixels = Some(Arc::new(expanded));
     layer.transform = transform;
-    Ok(())
+    Ok([(-left) as u32, (-top) as u32])
 }
 
 /// A segment covers the complete swept brush, preventing gaps at fast pointer speeds.
@@ -171,6 +183,18 @@ pub fn stroke_varying(
     brush: &Brush,
     options: StrokeOptions<'_>,
 ) -> Result<()> {
+    stroke_segment(document, from, to, from_brush, brush, options, None)
+}
+
+fn stroke_segment(
+    document: &mut Document,
+    from: Point,
+    to: Point,
+    from_brush: &Brush,
+    brush: &Brush,
+    options: StrokeOptions<'_>,
+    mut stroke: Option<&mut Stroke>,
+) -> Result<()> {
     let max_radius = (from_brush.diameter.max(brush.diameter) * 0.5).max(0.5);
     let StrokeOptions {
         mode,
@@ -187,7 +211,10 @@ pub fn stroke_varying(
     } else {
         ensure_pixels(layer)?;
         if matches!(mode, PaintMode::Paint | PaintMode::Clone) {
-            expand_stroke_bounds(layer, from, to, max_radius)?;
+            let offset = expand_stroke_bounds(layer, from, to, max_radius)?;
+            if let Some(stroke) = &mut stroke {
+                stroke.shift(offset);
+            }
         }
     }
     let transform = if mask_target {
@@ -221,6 +248,12 @@ pub fn stroke_varying(
     let bottom = (local.iter().map(|p| p.y).fold(f32::MIN, f32::max) * height as f32)
         .ceil()
         .min(height as f32) as u32;
+    if right <= left || bottom <= top {
+        return Ok(());
+    }
+    if let Some(stroke) = &mut stroke {
+        stroke.prepare(layer, mask_target, [left, top, right, bottom]);
+    }
     if crate::gpu::stroke(
         layer,
         selection.as_deref(),
@@ -236,6 +269,7 @@ pub fn stroke_varying(
                 clone_offset,
             },
         },
+        stroke.as_deref_mut(),
     ) {
         return Ok(());
     }
@@ -275,6 +309,16 @@ pub fn stroke_varying(
             if amount <= 0.0 {
                 continue;
             }
+            let original = if let Some(stroke) = &mut stroke {
+                let sample = stroke.pixel_mut(x, y);
+                if amount <= sample.amount {
+                    continue;
+                }
+                sample.amount = amount;
+                Some(sample.original)
+            } else {
+                None
+            };
             if mask_target {
                 let pixels = Arc::make_mut(&mut layer.mask.as_mut().unwrap().pixels);
                 let pixel = pixels.get_pixel_mut(x, y);
@@ -285,12 +329,13 @@ pub fn stroke_varying(
                         + f32::from(brush.color[1]) * 0.59
                         + f32::from(brush.color[2]) * 0.11
                 };
-                pixel[0] = (f32::from(pixel[0]) * (1.0 - amount) + target * amount).round() as u8;
+                let old = original.map_or(pixel[0], |p| p[0]);
+                pixel[0] = (f32::from(old) * (1.0 - amount) + target * amount).round() as u8;
                 continue;
             }
             let pixels = Arc::make_mut(layer.pixels.as_mut().unwrap());
             let pixel = pixels.get_pixel_mut(x, y);
-            let old = pixel.0.map(|v| v as f32 / 255.0);
+            let old = original.unwrap_or(pixel.0).map(|v| v as f32 / 255.0);
             let mut color = brush.color.map(|v| v as f32 / 255.0);
             match mode {
                 PaintMode::Erase => {

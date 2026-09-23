@@ -599,6 +599,90 @@ fn processing_brushes_coverage_and_analysis_match_cpu() {
 }
 
 #[test]
+#[ignore = "requires native compute adapter"]
+fn processing_low_opacity_stroke_coverage_matches_cpu() {
+    use crate::paint::{Brush, PaintMode, Stroke, StrokeOptions};
+    let gpu = processor();
+    let mut base = Document::new(480, 400).unwrap();
+    base.insert(Layer::image("Pixels", fixture(480, 400)));
+    base.selection = Some(Arc::new(image::GrayImage::from_fn(480, 400, |x, y| {
+        image::Luma([(x * 19 + y * 11) as u8])
+    })));
+    let brush = Brush {
+        diameter: 300.0,
+        hardness: 0.83,
+        opacity: 0.3,
+        color: [31, 57, 93, 173],
+        ..Default::default()
+    };
+    for mask in [false, true] {
+        for mode in [PaintMode::Paint, PaintMode::Erase] {
+            let apply = |device: Option<Arc<Processor>>| {
+                let mut document = base.clone();
+                let mut stroke = Stroke::default();
+                let mut previous = Point::new(100.0, 160.0);
+                let mut previous_brush = brush.clone();
+                for (index, (point, opacity)) in [
+                    (previous, 0.3),
+                    (Point::new(300.0, 210.0), 0.3),
+                    (Point::new(420.0, 250.0), 0.6),
+                    (Point::new(420.0, 250.0), 0.1),
+                    (Point::new(90.0, 140.0), 0.3),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let current = Brush {
+                        opacity,
+                        tilt: [index as f32 * 10.0, 15.0],
+                        ..brush.clone()
+                    };
+                    // The same accumulator also survives a segment's CPU fallback.
+                    scope(if index == 2 { None } else { device.clone() }, || {
+                        stroke
+                            .segment(
+                                &mut document,
+                                previous,
+                                point,
+                                &previous_brush,
+                                &current,
+                                StrokeOptions {
+                                    mode,
+                                    mask_target: mask,
+                                    source: None,
+                                    clone_offset: Point::default(),
+                                },
+                            )
+                            .unwrap();
+                    });
+                    previous = point;
+                    previous_brush = current;
+                }
+                document
+            };
+            let expected = apply(None);
+            let actual = apply(Some(gpu.clone()));
+            if mask {
+                let a = &actual.active().unwrap().mask.as_ref().unwrap().pixels;
+                let b = &expected.active().unwrap().mask.as_ref().unwrap().pixels;
+                assert!(
+                    a.as_raw()
+                        .iter()
+                        .zip(b.as_raw())
+                        .all(|(a, b)| a.abs_diff(*b) <= 1)
+                );
+            } else {
+                compare(
+                    actual.active().unwrap().pixels.as_ref().unwrap(),
+                    expected.active().unwrap().pixels.as_ref().unwrap(),
+                    1,
+                );
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "native GPU timing; run explicitly with --nocapture"]
 fn benchmark_processing_backends() {
     use std::time::Instant;

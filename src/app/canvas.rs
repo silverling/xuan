@@ -952,6 +952,7 @@ impl EditorApp {
                 tool,
                 brush: brush.clone(),
                 brushes: vec![brush],
+                stroke: paint::Stroke::default(),
                 smoothing: None,
                 start: point,
                 last: point,
@@ -1085,6 +1086,7 @@ impl EditorApp {
             tool,
             brush: brush.clone(),
             brushes: vec![brush],
+            stroke: paint::Stroke::default(),
             smoothing: (tool.is_brush() && self.brush_smoothing > 0.0 && !modifiers.shift).then(
                 || {
                     super::stroke_smoothing::StrokeSmoother::new(
@@ -1173,7 +1175,7 @@ impl EditorApp {
                     } else {
                         gesture.clone_offset
                     };
-                    paint::stroke_varying(
+                    gesture.stroke.segment(
                         &mut session.document,
                         gesture.last,
                         point,
