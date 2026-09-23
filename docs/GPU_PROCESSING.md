@@ -12,7 +12,7 @@ continue to work.
 | --- | --- |
 | All four raster filters | GPU Gaussian Blur, Motion Blur, Add Noise, and Lens Correction; selection blending and Gaussian mask targets also use compute |
 | Every adjustment variant | GPU Hue/Saturation, hue ranges/colorize, Levels/channel levels, Curves/channel curves, Exposure, Gradient Map, Film Grain, Grain, and Invert; destructive pixels, masks, and adjustment layers |
-| Canvas composition | GPU blending, adjustments, masks, inherited coverage, and clipping; cached source textures and mipmaps |
+| Canvas composition | GPU blending, adjustments, standalone filters, masks, inherited coverage, and clipping; cached source textures and mipmaps |
 | Export, merge, copy merged, isolated retouch rasters | Full requested resolution on GPU, with straight-alpha readback; independent of the canvas preview cap |
 | Image resampling | GPU separable premultiplied Lanczos3; Triangle resampling for masks, selections, and floating-point RAW proxies |
 | Mask processing | GPU Gaussian feathering, transformed selection projection, alpha/mask selections, clipping bake when copying layers, and background-removal matte smoothing/masking |
@@ -44,12 +44,15 @@ independent image-wide preparation and postprocessing use compute.
 
 Attached image effects are materialized in source coordinates before composition,
 using the existing GPU filter and adjustment routines when available. Mask
-coverage and effect opacity are combined in premultiplied color on the CPU. A
-standalone filter materializes its accumulated backdrop with the CPU compositor,
-runs the raster filter, and returns the result through the regular display path.
-The source image and saved effect settings remain unchanged. This path prioritizes
-the same bottom-to-top result in preview, export, merging, and clipboard copies;
-long effect stacks can increase recomposition time.
+coverage and effect opacity are combined in premultiplied color on the CPU.
+Standalone filters run directly on the accumulated GPU composite texture. Gaussian
+Blur uses two separable passes and a reusable float texture; Motion Blur, Add Noise,
+and Lens Correction use one pass. Texture intermediates avoid the storage-buffer
+size limit, and slider changes reuse source uploads without full-image readback.
+The filtered result blends in premultiplied color using effect opacity and masks,
+including inherited group coverage. Preview and export use the same bottom-to-top
+GPU path at their respective resolutions. Source images and saved effect settings
+remain unchanged. Attached effects still incur materialization costs.
 
 - Full-resolution processing uses original image dimensions. Preview downsampling
   never sets the Apply/export resolution.
@@ -113,6 +116,27 @@ upload and final CPU readback; composition reuses its cached source texture.
 
 These are measurements for one workload and device, not a promise of real-time
 performance for every image size, radius, layer count, or GPU.
+
+## Standalone filter-layer measurements
+
+Release builds on an RTX 3090 (Vulkan, NVIDIA 610.57.04), using the native app's
+GPU limits and 4096-pixel preview cap. Both samples contain 24 megapixels. Values
+are median milliseconds across 12 changing settings after three warm-up frames,
+including UI updates, tessellation, and GPU completion. RAW development, first
+uploads, shader compilation, and window presentation are excluded.
+
+| Filter | JPEG before | JPEG after | Developed CR3 before | Developed CR3 after |
+| --- | ---: | ---: | ---: | ---: |
+| Gaussian Blur, radius 4–15 | 340.29 | 7.41 | 352.39 | 7.76 |
+| Motion Blur, distance 15, angle 30–41° | 332.54 | 4.10 | 329.90 | 4.30 |
+| Add Noise, amount 10–21 | 305.37 | 2.25 | 305.40 | 2.61 |
+| Lens Correction, distortion 10–21, vignette 15 | 305.69 | 2.40 | 307.86 | 2.47 |
+
+The files were `IMG_5189.jpg` and `IMG_5189.CR3`. Reproduce with
+`benchmark_large_image_filter_layers` as documented in
+[Development](DEVELOPMENT.md#benchmarks). GPU regressions cover all four filters,
+scaled previews, translucent pixels, masks, group coverage, stacked filters,
+visibility changes, source texture reuse, and full-resolution export.
 
 
 ## Resident RAW preview measurements

@@ -432,6 +432,61 @@ fn benchmark_large_image_levels() {
 
 #[test]
 #[ignore = "requires a GPU; optionally set XUAN_ZOOM_BENCH_IMAGE to an image path"]
+fn benchmark_large_image_filter_layers() {
+    let (context, mut app, state) = large_image_benchmark_app();
+    eprintln!("Filter layer adapter: {:?}", state.adapter.get_info());
+    for filter in [
+        Filter::GaussianBlur { radius: 4.0 },
+        Filter::MotionBlur {
+            distance: 15.0,
+            angle: 30.0,
+        },
+        Filter::Noise {
+            amount: 10.0,
+            monochrome: false,
+        },
+        Filter::LensCorrection {
+            distortion: 10.0,
+            vignette: 15.0,
+        },
+    ] {
+        app.start_filter_layer(filter.clone());
+        for _ in 0..3 {
+            frame(&context, &mut app);
+        }
+        let mut durations = Vec::new();
+        for step in 0..12 {
+            let edit = app.effect.as_mut().unwrap();
+            let value = step as f32;
+            match edit.filter.as_mut().unwrap() {
+                Filter::GaussianBlur { radius } => *radius = 4.0 + value,
+                Filter::MotionBlur { angle, .. } => *angle = 30.0 + value,
+                Filter::Noise { amount, .. } => *amount = 10.0 + value,
+                Filter::LensCorrection { distortion, .. } => *distortion = 10.0 + value,
+            }
+            edit.refresh = true;
+            let start = std::time::Instant::now();
+            let output = frame(&context, &mut app);
+            let _ = context.tessellate(output.shapes, output.pixels_per_point);
+            state
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+            durations.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        report_benchmark(&format!("{} layer live preview", filter.name()), durations);
+        keyboard_frame(
+            &context,
+            &mut app,
+            vec![text_key(egui::Key::Escape, egui::Modifiers::NONE)],
+            egui::Modifiers::NONE,
+        );
+    }
+    assert!(app.error.is_none(), "{:?}", app.error);
+}
+
+#[test]
+#[ignore = "requires a GPU; optionally set XUAN_ZOOM_BENCH_IMAGE to an image path"]
 fn benchmark_large_image_motion_blur() {
     let (context, mut app, state) = large_image_benchmark_app();
     eprintln!("Motion Blur adapter: {:?}", state.adapter.get_info());
@@ -669,8 +724,14 @@ fn large_image_benchmark_app() -> (egui::Context, EditorApp, eframe::egui_wgpu::
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .unwrap();
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    let limits = adapter.limits();
+    let mut descriptor = wgpu::DeviceDescriptor::default();
+    // Use the same image-processing limits as the native application.
+    descriptor.required_limits.max_storage_buffer_binding_size =
+        limits.max_storage_buffer_binding_size;
+    descriptor.required_limits.max_buffer_size = limits.max_buffer_size;
+    descriptor.required_limits.max_texture_dimension_2d = limits.max_texture_dimension_2d;
+    let (device, queue) = pollster::block_on(adapter.request_device(&descriptor)).unwrap();
     let target_format = wgpu::TextureFormat::Rgba8Unorm;
     let renderer = eframe::egui_wgpu::Renderer::new(&device, target_format, Default::default());
     let state = eframe::egui_wgpu::RenderState {
@@ -687,7 +748,20 @@ fn large_image_benchmark_app() -> (egui::Context, EditorApp, eframe::egui_wgpu::
                 image::Rgba([x as u8, y as u8, (x + y) as u8, 255])
             })
         },
-        |path| io::import_image(Path::new(&path)).unwrap(),
+        |path| {
+            let path = Path::new(&path);
+            if xuan::raw::is_raw(path) {
+                let (asset, decoded) = xuan::raw::open(path).unwrap();
+                xuan::raw::render(
+                    &decoded,
+                    &asset.settings,
+                    &std::sync::atomic::AtomicBool::new(false),
+                )
+                .unwrap()
+            } else {
+                io::import_image(path).unwrap()
+            }
+        },
     );
     let mut document = Document::new(pixels.width(), pixels.height()).unwrap();
     document.layers = vec![Layer::image("Large image", pixels)];

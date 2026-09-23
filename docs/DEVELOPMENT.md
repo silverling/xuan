@@ -182,6 +182,18 @@ These measure UI updates, tessellation, and compositor completion on a 3000×300
 
 The Motion Blur benchmarks measure live GPU preview updates and full-resolution Apply, including GPU readback, against CPU filtering at distances 15 and 200. Apply uses original layer pixels even when the preview texture is downsampled. See the [GPU processing audit](GPU_PROCESSING.md) for backend routing, CPU exceptions, and transfer-inclusive benchmarks.
 
+To measure standalone filter-layer slider updates on a local image:
+
+```sh
+XUAN_ZOOM_BENCH_IMAGE=/path/to/photo.jpg cargo test --release --locked --bin xuan benchmark_large_image_filter_layers -- --ignored --nocapture --test-threads=1
+```
+
+The image benchmarks also accept RAW files, which are developed before timing.
+Filter-layer measurements cover 12 changing settings after three warm-up frames,
+including UI updates, tessellation, and GPU completion. They use the native app's
+GPU resource limits and preview resolution cap; decoding, initial uploads, shader
+compilation, and window presentation are excluded.
+
 
 ### RAW preview performance
 

@@ -2,6 +2,7 @@
 
 mod analysis;
 mod coverage;
+mod filter_layers;
 pub use analysis::{Analysis, analyze};
 pub(crate) use coverage::{CoverageMode, bake_alpha, bake_mask, coverage_image};
 mod motion_blur;
@@ -16,6 +17,8 @@ pub(crate) use paint::{
 };
 pub(crate) use raw::{crop as raw_crop, develop};
 pub use raw_preview::{RawPreview, RawPreviewRenderer};
+#[cfg(test)]
+mod filter_layer_tests;
 #[cfg(test)]
 mod processing_tests;
 pub use motion_blur::GpuMotionBlur;
@@ -90,6 +93,7 @@ pub struct GpuCompositor {
     display: wgpu::Texture,
     blank: wgpu::Texture,
     motion_blur: GpuMotionBlur,
+    filter_layers: Option<filter_layers::FilterLayers>,
 }
 
 impl GpuCompositor {
@@ -141,6 +145,7 @@ impl GpuCompositor {
             display,
             blank,
             motion_blur,
+            filter_layers: None,
         }
     }
 
@@ -188,22 +193,7 @@ impl GpuCompositor {
         straight_output: bool,
     ) {
         let prepared = render::prepare_attachments(document);
-        let flattened;
-        let document = if prepared.layers.iter().any(|l| l.filter.is_some()) {
-            // Neighborhood filters need the accumulated raster, including all
-            // lower effects. Upload that result through the usual display path.
-            let pixels = render::render_pixels(&prepared, size[0], size[1]);
-            let mut layer = Layer::image("Filtered composite", pixels);
-            layer.transform.width = document.width as f32;
-            layer.transform.height = document.height as f32;
-            flattened = Document {
-                layers: vec![layer],
-                ..prepared.into_owned()
-            };
-            &flattened
-        } else {
-            prepared.as_ref()
-        };
+        let document = prepared.as_ref();
         let motion_blur = motion_blur.filter(|_| can_preview_motion_blur(document));
         if size != self.size {
             self.size = size;
@@ -262,10 +252,14 @@ impl GpuCompositor {
                 }
                 render::CompositeStep::Layer(layer) => layer,
                 render::CompositeStep::Filtered(..) => {
-                    unreachable!("Filters are rasterized before GPU composition")
+                    unreachable!("GPU filters use the accumulated composite texture")
                 }
             };
-            if !layer.standalone_mask && layer.pixels.is_none() && layer.adjustment.is_none() {
+            if !layer.standalone_mask
+                && layer.pixels.is_none()
+                && layer.adjustment.is_none()
+                && layer.filter.is_none()
+            {
                 continue;
             }
             if let Some(pixels) = &layer.pixels {
@@ -368,25 +362,35 @@ impl GpuCompositor {
             } else {
                 None
             };
-            let source = layer
-                .pixels
-                .as_ref()
-                .map(|pixels| {
-                    &self.sources[&(
-                        Arc::as_ptr(pixels) as usize,
-                        render::source_size(document, layer, size),
-                    )]
-                        .texture
-                })
-                .unwrap_or_else(|| {
-                    if layer.standalone_mask {
-                        groups
-                            .last()
-                            .map_or(&self.blank, |(buffers, current)| &buffers[*current])
-                    } else {
-                        &self.blank
-                    }
-                });
+            let filtered = layer.filter.as_ref().map(|filter| {
+                params.flags[1] = 13;
+                let filter = filter.scaled(size[0] as f32 / document.width as f32);
+                self.filter_layers
+                    .get_or_insert_with(|| filter_layers::FilterLayers::new(&self.device, size))
+                    .render(&self.device, &mut encoder, &buffers[current], &filter)
+                    .clone()
+            });
+            let source = filtered.as_ref().unwrap_or_else(|| {
+                layer
+                    .pixels
+                    .as_ref()
+                    .map(|pixels| {
+                        &self.sources[&(
+                            Arc::as_ptr(pixels) as usize,
+                            render::source_size(document, layer, size),
+                        )]
+                            .texture
+                    })
+                    .unwrap_or_else(|| {
+                        if layer.standalone_mask {
+                            groups
+                                .last()
+                                .map_or(&self.blank, |(buffers, current)| &buffers[*current])
+                        } else {
+                            &self.blank
+                        }
+                    })
+            });
             if document.active == Some(layer.id)
                 && let Some([distance, angle]) = motion_blur
                 && let Some(pixels) = &layer.pixels
@@ -1061,7 +1065,7 @@ mod tests {
         compare(&document, &readback(&compositor), "Preview off");
     }
 
-    fn readback(compositor: &GpuCompositor) -> Vec<u8> {
+    pub(super) fn readback(compositor: &GpuCompositor) -> Vec<u8> {
         readback_mip(compositor, 0)
     }
 
@@ -1299,7 +1303,7 @@ mod tests {
         }
     }
 
-    fn compare(document: &Document, gpu: &[u8], context: &str) {
+    pub(super) fn compare(document: &Document, gpu: &[u8], context: &str) {
         let cpu = render::render(document);
         for (index, (pixel, actual)) in cpu.pixels().zip(gpu.as_chunks::<4>().0).enumerate() {
             let expected = [

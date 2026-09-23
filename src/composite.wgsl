@@ -69,6 +69,13 @@ fn composite(@builtin(global_invocation_id) id: vec3<u32>) {
         textureStore(output, position, vec4(color, alpha));
         return;
     }
+    if params.flags.y == 13u {
+        let filtered = textureLoad(source, position, 0);
+        let alpha = mix(dst.a, filtered.a, amount);
+        let color = mix(dst.rgb * dst.a, filtered.rgb * filtered.a, amount) / max(alpha, 0.000001);
+        textureStore(output, position, vec4(color, alpha));
+        return;
+    }
     if params.flags.y != 0u {
         textureStore(output, position, vec4(mix(dst.rgb, clamp(adjust(dst.rgb, point), vec3(0.0), vec3(1.0)), amount), dst.a));
         return;
