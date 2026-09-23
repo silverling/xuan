@@ -64,6 +64,12 @@ pub(super) enum Compare {
     SideBySide,
 }
 
+#[derive(Clone, Copy)]
+enum CanvasDrag {
+    Pan { origin: Pos2, pan: Vec2 },
+    Split { pointer_offset: f32 },
+}
+
 pub(super) struct Develop {
     pub id: Uuid,
     pub opened: Instant,
@@ -97,6 +103,7 @@ pub(super) struct Develop {
     /// Physical screen pixels per full-resolution image pixel.
     pub zoom: f32,
     pub pan: Vec2,
+    canvas_drag: Option<CanvasDrag>,
     pub fit: bool,
     pub picker: bool,
     pub panel: usize,
@@ -145,6 +152,7 @@ impl Develop {
             use_full_resolution: false,
             zoom: 1.0,
             pan: Vec2::ZERO,
+            canvas_drag: None,
             fit: true,
             picker: false,
             panel: 0,
@@ -181,8 +189,12 @@ impl Develop {
             }
             "zoom_in" | "zoom_out" => {
                 self.fit = false;
+                let previous_zoom = self.zoom;
                 self.zoom =
                     (self.zoom * if command == "zoom_in" { 1.25 } else { 0.8 }).clamp(0.02, 16.0);
+                if self.compare == Compare::SideBySide {
+                    self.pan *= self.zoom / previous_zoom;
+                }
             }
             _ => {}
         }
@@ -941,19 +953,21 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, inter
         d.pan = Vec2::ZERO;
     }
     let center = viewport.center() + vec2(if side_by_side { available.x * 0.5 } else { 0.0 }, 0.0);
-    // Both previews share a pan offset; anchor the one under the pointer.
-    let anchor = if side_by_side
-        && ui.input(|i| {
-            i.pointer
-                .hover_pos()
-                .is_some_and(|p| p.x < viewport.center().x)
-        }) {
-        center - vec2(available.x, 0.0)
+    let anchor = if side_by_side {
+        super::canvas::ZoomAnchor::Center
     } else {
-        center
+        super::canvas::ZoomAnchor::Pointer
     };
     if interactive
-        && super::canvas::scroll_canvas(ui, &response, anchor, &mut d.zoom, &mut d.pan, 0.02..=16.0)
+        && super::canvas::scroll_canvas(
+            ui,
+            &response,
+            center,
+            anchor,
+            &mut d.zoom,
+            &mut d.pan,
+            0.02..=16.0,
+        )
     {
         d.fit = false;
     }
@@ -1027,7 +1041,50 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, inter
         }
     }
     if !interactive {
+        d.canvas_drag = None;
         return;
+    }
+    let force_pan = ui.input(|i| {
+        i.key_down(egui::Key::Space)
+            || i.pointer.button_down(egui::PointerButton::Middle)
+            || (d.compare == Compare::Split && i.modifiers.alt)
+    });
+    let split_x = rect.left() + rect.width() * d.split;
+    let over_divider = |point: Pos2| {
+        d.compare == Compare::Split
+            && rect.intersect(viewport).contains(point)
+            && (point.x - split_x).abs() <= 8.0
+    };
+    if response.drag_started()
+        && let Some(origin) = ui.input(|i| i.pointer.press_origin())
+    {
+        // Keep the gesture chosen at its origin, even after leaving the divider.
+        d.canvas_drag = if force_pan {
+            Some(CanvasDrag::Pan { origin, pan: d.pan })
+        } else if !d.picker && !d.draw_overlay {
+            Some(if over_divider(origin) {
+                CanvasDrag::Split {
+                    pointer_offset: origin.x - split_x,
+                }
+            } else {
+                CanvasDrag::Pan { origin, pan: d.pan }
+            })
+        } else {
+            None
+        };
+    }
+    if response.hovered() || response.dragged() {
+        let cursor = match d.canvas_drag {
+            Some(CanvasDrag::Pan { .. }) => egui::CursorIcon::Grabbing,
+            Some(CanvasDrag::Split { .. }) => egui::CursorIcon::ResizeHorizontal,
+            None if force_pan => egui::CursorIcon::Grab,
+            None if d.picker || d.draw_overlay => egui::CursorIcon::Crosshair,
+            None if response.hover_pos().is_some_and(over_divider) => {
+                egui::CursorIcon::ResizeHorizontal
+            }
+            None => egui::CursorIcon::Grab,
+        };
+        ui.ctx().set_cursor_icon(cursor);
     }
     let point = response
         .interact_pointer_pos()
@@ -1051,7 +1108,22 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, inter
         .map(|(_, overlay)| overlay.points.len())
         .sum();
     let brush_limit = 8192_usize.saturating_sub(other_brush_points);
-    if d.picker
+    if let Some(drag) = d.canvas_drag {
+        if let Some(pointer) = response.interact_pointer_pos() {
+            match drag {
+                CanvasDrag::Pan { origin, pan } => {
+                    d.fit = false;
+                    d.pan = pan + (pointer - origin);
+                }
+                CanvasDrag::Split { pointer_offset } => {
+                    d.split =
+                        ((pointer.x - pointer_offset - rect.left()) / rect.width()).clamp(0.0, 1.0);
+                }
+            }
+        }
+        d.last_brush_point = None;
+    } else if !force_pan
+        && d.picker
         && response.clicked()
         && let (Some(point), Some(raw)) = (point, &d.proxy)
     {
@@ -1064,7 +1136,8 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, inter
         d.settings.white_balance = WhiteBalance::Custom;
         d.settings.tint = 0.0;
         d.picker = false;
-    } else if d.draw_overlay
+    } else if !force_pan
+        && d.draw_overlay
         && let Some(overlay) = d
             .selected_overlay
             .and_then(|i| d.settings.overlays.get_mut(i))
@@ -1108,15 +1181,9 @@ fn draw_canvas(ui: &mut egui::Ui, d: &mut Develop, texture: TextureHandle, inter
         if response.drag_stopped() {
             d.last_brush_point = None;
         }
-    } else if response.dragged() {
-        if d.compare == Compare::Split && !ui.input(|i| i.modifiers.alt) {
-            if let Some(point) = response.interact_pointer_pos() {
-                d.split = ((point.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
-            }
-        } else {
-            d.fit = false;
-            d.pan += ui.input(|i| i.pointer.delta());
-        }
+    }
+    if response.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
+        d.canvas_drag = None;
     }
     if d.show_mask
         && let Some(overlay) = d.selected_overlay.and_then(|i| d.settings.overlays.get(i))
@@ -1239,10 +1306,20 @@ mod tests {
         d: &mut Develop,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
+        canvas_input(ctx, d, events, egui::Modifiers::NONE)
+    }
+
+    fn canvas_input(
+        ctx: &egui::Context,
+        d: &mut Develop,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+    ) -> egui::FullOutput {
         ctx.run(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(160.0, 144.0))),
                 events,
+                modifiers,
                 ..Default::default()
             },
             |ctx| {
@@ -1252,6 +1329,144 @@ mod tests {
                 d.update_preview_resolution(ctx);
             },
         )
+    }
+
+    #[test]
+    fn split_view_pans_without_moving_the_divider_or_editing_masks() {
+        for (button, space, modifiers, on_divider, mask) in [
+            (
+                egui::PointerButton::Primary,
+                false,
+                egui::Modifiers::NONE,
+                false,
+                false,
+            ),
+            (
+                egui::PointerButton::Primary,
+                true,
+                egui::Modifiers::NONE,
+                true,
+                false,
+            ),
+            (
+                egui::PointerButton::Middle,
+                false,
+                egui::Modifiers::NONE,
+                true,
+                false,
+            ),
+            (
+                egui::PointerButton::Primary,
+                false,
+                egui::Modifiers::ALT,
+                true,
+                false,
+            ),
+            (
+                egui::PointerButton::Primary,
+                true,
+                egui::Modifiers::NONE,
+                true,
+                true,
+            ),
+            (
+                egui::PointerButton::Middle,
+                false,
+                egui::Modifiers::NONE,
+                true,
+                true,
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            let mut d = ready(&ctx);
+            d.compare = Compare::Split;
+            if mask {
+                d.settings.overlays.push(raw::Overlay::default());
+                d.selected_overlay = Some(0);
+                d.draw_overlay = true;
+            }
+            let settings = d.settings.clone();
+            let texture = d.texture.as_ref().unwrap().id();
+            let rect = image_rect(&canvas_frame(&ctx, &mut d, vec![]), texture);
+            let start = rect.center() - vec2(if on_divider { 0.0 } else { 28.0 }, 0.0);
+            let mut events = vec![egui::Event::PointerMoved(start)];
+            if space {
+                events.push(egui::Event::Key {
+                    key: egui::Key::Space,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                });
+            }
+            canvas_input(&ctx, &mut d, events, modifiers);
+            canvas_input(
+                &ctx,
+                &mut d,
+                vec![egui::Event::PointerButton {
+                    pos: start,
+                    button,
+                    pressed: true,
+                    modifiers,
+                }],
+                modifiers,
+            );
+            for delta in [vec2(15.0, 5.0), vec2(35.0, 10.0)] {
+                canvas_input(
+                    &ctx,
+                    &mut d,
+                    vec![egui::Event::PointerMoved(start + delta)],
+                    modifiers,
+                );
+                assert_eq!(d.pan, delta, "The image should follow the pan gesture");
+                assert_eq!(d.split, 0.5);
+                assert!(!d.fit);
+                assert_eq!(d.settings, settings);
+            }
+            canvas_input(
+                &ctx,
+                &mut d,
+                vec![egui::Event::PointerButton {
+                    pos: start + vec2(35.0, 10.0),
+                    button,
+                    pressed: false,
+                    modifiers,
+                }],
+                modifiers,
+            );
+            assert!(d.undo.is_empty());
+        }
+    }
+
+    #[test]
+    fn split_divider_drag_stays_attached_without_snapping_to_the_pointer() {
+        let ctx = egui::Context::default();
+        let mut d = ready(&ctx);
+        d.compare = Compare::Split;
+        let texture = d.texture.as_ref().unwrap().id();
+        let rect = image_rect(&canvas_frame(&ctx, &mut d, vec![]), texture);
+        let start = rect.center() + vec2(4.0, 0.0);
+        canvas_frame(&ctx, &mut d, vec![egui::Event::PointerMoved(start)]);
+        canvas_frame(
+            &ctx,
+            &mut d,
+            vec![egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        for delta in [20.0, 35.0] {
+            canvas_frame(
+                &ctx,
+                &mut d,
+                vec![egui::Event::PointerMoved(start + vec2(delta, 0.0))],
+            );
+            assert!((d.split - (0.5 + delta / rect.width())).abs() < 0.001);
+            assert_eq!(d.pan, Vec2::ZERO);
+            assert!(d.fit);
+        }
     }
 
     #[test]
@@ -1597,13 +1812,11 @@ mod tests {
     }
 
     #[test]
-    fn develop_canvas_wheel_zoom_keeps_pointer_anchored_in_each_comparison() {
+    fn develop_canvas_wheel_zoom_keeps_pointer_anchored_in_single_image_views() {
         for (compare, original) in [
             (Compare::Edited, false),
             (Compare::Original, true),
             (Compare::Split, false),
-            (Compare::SideBySide, false),
-            (Compare::SideBySide, true),
         ] {
             for (fit, zoom, delta) in [
                 (true, 1.0, 1.0),
@@ -1653,6 +1866,87 @@ mod tests {
                     assert!(d.zoom < old_zoom);
                 } else {
                     assert_eq!(d.zoom, old_zoom);
+                }
+                assert!(!d.fit);
+                assert!(d.undo.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn side_by_side_zoom_keeps_both_pane_centers_anchored() {
+        for (fit, zoom, delta) in [
+            (true, 1.0, 1.0),
+            (false, 2.0, 1.0),
+            (false, 2.0, -1.0),
+            (false, 16.0, 1.0),
+            (false, 0.02, -1.0),
+        ] {
+            for original in [true, false] {
+                let ctx = egui::Context::default();
+                let mut d = ready(&ctx);
+                d.compare = Compare::SideBySide;
+                d.fit = fit;
+                d.zoom = zoom;
+                d.pan = vec2(12.0, -8.0);
+                let textures = [
+                    d.before.as_ref().unwrap().id(),
+                    d.texture.as_ref().unwrap().id(),
+                ];
+                let output = canvas_frame(&ctx, &mut d, vec![]);
+                let viewports = textures.map(|texture| {
+                    output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Mesh(mesh) if mesh.texture_id == texture => {
+                                Some(shape.clip_rect)
+                            }
+                            _ => None,
+                        })
+                        .unwrap()
+                });
+                let points = std::array::from_fn::<_, 2, _>(|i| {
+                    let rect = image_rect(&output, textures[i]);
+                    (viewports[i].center() - rect.min) / rect.size()
+                });
+                let pointer = if original {
+                    viewports[0].lerp_inside(vec2(0.2, 0.3))
+                } else {
+                    viewports[1].lerp_inside(vec2(0.8, 0.7))
+                };
+                canvas_frame(&ctx, &mut d, vec![egui::Event::PointerMoved(pointer)]);
+                let previous_zoom = d.zoom;
+                canvas_frame(
+                    &ctx,
+                    &mut d,
+                    vec![egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Line,
+                        delta: vec2(0.0, delta),
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+                let check_centers = |output: &egui::FullOutput| {
+                    for i in 0..2 {
+                        let rect = image_rect(output, textures[i]);
+                        let after = (viewports[i].center() - rect.min) / rect.size();
+                        assert!(
+                            (after - points[i]).length() < 0.001,
+                            "Zoom must keep the same image point at each pane center"
+                        );
+                    }
+                };
+                for _ in 0..30 {
+                    check_centers(&canvas_frame(&ctx, &mut d, vec![]));
+                }
+                if previous_zoom > 0.02 && previous_zoom < 16.0 {
+                    assert_eq!((d.zoom - previous_zoom).signum(), delta.signum());
+                } else {
+                    assert_eq!(d.zoom, previous_zoom);
+                }
+                for command in ["zoom_in", "zoom_out"] {
+                    d.view_command(command);
+                    check_centers(&canvas_frame(&ctx, &mut d, vec![]));
                 }
                 assert!(!d.fit);
                 assert!(d.undo.is_empty());

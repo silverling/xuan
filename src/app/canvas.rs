@@ -23,11 +23,17 @@ const HANDLES: [Point; 8] = [
     Point::new(0.0, 0.5),
 ];
 
-/// Pan horizontally and zoom around the pointer using the unpanned image center.
+pub(super) enum ZoomAnchor {
+    Pointer,
+    Center,
+}
+
+/// Pan horizontally and zoom using the unpanned image center.
 pub(super) fn scroll_canvas(
     ui: &egui::Ui,
     response: &egui::Response,
     center: Pos2,
+    anchor: ZoomAnchor,
     zoom: &mut f32,
     pan: &mut Vec2,
     limits: RangeInclusive<f32>,
@@ -41,9 +47,11 @@ pub(super) fn scroll_canvas(
     }
     if scroll.y != 0.0 {
         let new_zoom = (*zoom * (scroll.y * 0.003).exp()).clamp(*limits.start(), *limits.end());
-        if let Some(pointer) = ui.input(|i| i.pointer.hover_pos()) {
-            *pan += (pointer - center - *pan) * (1.0 - new_zoom / *zoom);
-        }
+        let focus = match anchor {
+            ZoomAnchor::Pointer => ui.input(|i| i.pointer.hover_pos()).unwrap_or(center),
+            ZoomAnchor::Center => center,
+        };
+        *pan += (focus - center - *pan) * (1.0 - new_zoom / *zoom);
         *zoom = new_zoom;
     }
     pan.x += scroll.x;
@@ -460,6 +468,7 @@ impl EditorApp {
                         ui,
                         &response,
                         viewport.center(),
+                        ZoomAnchor::Pointer,
                         &mut session.zoom,
                         &mut session.pan,
                         0.01..=64.0,

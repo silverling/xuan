@@ -19,7 +19,7 @@ Direct pixel painting and destructive filters require **Rasterize RAW Layer**, w
 - **Masks:** linear and radial gradients or soft brush masks with exposure, warmth, saturation, visibility and inversion. Select a mask, enable Draw mask, and drag on the image. The brush radius/feather applies to the entire stroke collection in that mask. Up to 32 masks and 8,192 total brush points are saved with the RAW.
 - **Info:** camera, lens, oriented dimensions, decoded depth, ISO, aperture, shutter, focal length and embedded source size.
 
-The RGB histogram and clipping indicators describe the developed output. Compare Edited, Original (default development), Split, or Side by side. Drag the split divider; Alt-drag pans in Split view. In other views, drag pans. The wheel zooms around the pointer, including either side of Side by side; horizontal wheel input or Shift+wheel pans horizontally. Presets can save/load validated JSON settings, including crops and masks.
+The RGB histogram and clipping indicators describe the developed output. Compare Edited, Original (default development), Split, or Side by side. Drag to pan; in Split view, drag near the divider to move it. Space-drag or middle-button drag pans in every view, including while using the white-balance picker or drawing a mask. Alt-drag also pans in Split view. The wheel zooms around the pointer in single-image views. In Side by side, both images zoom around their respective pane centers and pan together. Horizontal wheel input or Shift+wheel pans horizontally. Presets can save/load validated JSON settings, including crops and masks.
 
 ## Precision and output
 
