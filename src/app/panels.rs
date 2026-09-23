@@ -319,10 +319,15 @@ impl EditorApp {
         super::chrome::status_bar(ctx, "status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if let Some(session) = self.session() {
-                    ui.label(
-                        RichText::new(format!("{:.1}%", session.zoom * 100.0))
-                            .size(11.0)
-                            .color(theme::MUTED),
+                    ui.add_sized(
+                        [50.0, 22.0],
+                        egui::Label::new(
+                            RichText::new(format!("{:.1}%", session.zoom * 100.0))
+                                .size(11.0)
+                                .color(theme::MUTED),
+                        )
+                        .halign(egui::Align::Min)
+                        .truncate(),
                     );
                     ui.separator();
                     ui.label(
