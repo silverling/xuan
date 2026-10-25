@@ -10,6 +10,8 @@ mod filter_preview;
 mod font_picker;
 mod gpu_preview;
 mod icons;
+#[cfg(feature = "interaction-probe")]
+pub mod interaction_probe;
 mod jobs;
 mod layers;
 mod levels_controls;

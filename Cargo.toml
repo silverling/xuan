@@ -6,6 +6,10 @@ rust-version = "1.88"
 description = "A native image compositor for Linux and Windows, built with Rust, wgpu and egui"
 license = "MIT"
 
+[features]
+# Opt-in headless adapter for development/CI; absent from normal application builds.
+interaction-probe = []
+
 [dependencies]
 anyhow = "1.0"
 arboard = { version = "3.6", features = ["wayland-data-control"] }

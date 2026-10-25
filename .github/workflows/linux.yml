@@ -48,6 +48,20 @@ jobs:
         run: scripts/check.sh --gpu
       - name: Validate desktop integration
         run: desktop-file-validate packaging/me.silverl.xuan.desktop
+      - name: Check interaction adapter
+        run: cargo clippy --locked --features interaction-probe --bin xuan -- -D warnings
+      - name: Check out interaction-check
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: PerchAnton/interaction-check
+          ref: 67a280537977bcc3dc14f5be0637c8431bb310be
+          path: .interaction-check-runner
+          persist-credentials: false
+      - name: Replay size-dialog interactions
+        run: python scripts/check-interactions.py .interaction-check-runner/interaction_check.py --report "$RUNNER_TEMP/size-dialog-interactions.json"
+      - name: Remove interaction-check checkout
+        if: always()
+        run: python -c "import shutil; shutil.rmtree('.interaction-check-runner', ignore_errors=True)"
       - name: Package
         run: scripts/package.sh all
       - name: Verify distribution packages

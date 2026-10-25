@@ -1,0 +1,80 @@
+{
+  "schema": 1,
+  "name": "image size: cancel",
+  "steps": [
+    {
+      "event": {
+        "type": "new"
+      },
+      "expect": {
+        "width": 8,
+        "height": 6,
+        "resolution": 72.0,
+        "undo_count": 0,
+        "dirty": false
+      }
+    },
+    {
+      "event": {
+        "type": "rename"
+      },
+      "expect": {
+        "undo_count": 1,
+        "layer_name": "Renamed"
+      }
+    },
+    {
+      "event": {
+        "type": "undo"
+      },
+      "expect": {
+        "width": 8,
+        "height": 6,
+        "resolution": 72.0,
+        "undo_count": 0,
+        "dirty": false,
+        "redo_name": "Rename",
+        "layer_name": "Layer 1"
+      }
+    },
+    {
+      "event": {
+        "type": "open_size",
+        "kind": "image"
+      },
+      "expect": {
+        "dialog_open": true
+      }
+    },
+    {
+      "event": {
+        "type": "set_size",
+        "width": 12,
+        "height": 9,
+        "resolution": 96
+      },
+      "expect": {
+        "width": 8,
+        "height": 6,
+        "resolution": 72.0,
+        "undo_count": 0,
+        "dirty": false,
+        "dialog_open": true
+      }
+    },
+    {
+      "event": {
+        "type": "cancel"
+      },
+      "expect": {
+        "width": 8,
+        "height": 6,
+        "resolution": 72.0,
+        "undo_count": 0,
+        "dirty": false,
+        "redo_name": "Rename",
+        "dialog_open": false
+      }
+    }
+  ]
+}

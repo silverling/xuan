@@ -1,5 +1,106 @@
 use super::*;
 
+#[test]
+fn size_dialog_unchanged_canvas_size_preserves_redo() {
+    size_dialog_unchanged_size_preserves_redo("canvas_size");
+}
+
+#[test]
+fn size_dialog_unchanged_image_size_preserves_redo() {
+    size_dialog_unchanged_size_preserves_redo("image_size");
+}
+
+fn size_dialog_unchanged_size_preserves_redo(command: &str) {
+    let (context, mut app) = app();
+    app.dimensions = [8, 6];
+    app.new_document();
+    app.edit("Rename", |doc| {
+        doc.layers[0].name = "Renamed".into();
+        Ok(())
+    });
+    app.command("undo");
+    assert_eq!(app.session().unwrap().history.redo_name(), Some("Rename"));
+    app.command(command);
+    frame(&context, &mut app);
+    let position = layer_label(&context, &mut app, "Apply") + egui::vec2(5.0, 5.0);
+    pointer_frame(
+        &context,
+        &mut app,
+        position,
+        Some(true),
+        egui::Modifiers::NONE,
+    );
+    pointer_frame(
+        &context,
+        &mut app,
+        position,
+        Some(false),
+        egui::Modifiers::NONE,
+    );
+    assert!(
+        app.dialog.is_none(),
+        "Apply must reach the real dialog handler"
+    );
+    let session = app.session().unwrap();
+    assert_eq!(session.history.redo_name(), Some("Rename"), "{command}");
+    assert_eq!(session.history.names().count(), 0, "{command}");
+    assert!(!session.history.dirty(), "{command}");
+}
+
+#[test]
+fn size_dialog_changed_size_remains_one_undoable_edit() {
+    for command in ["canvas_size", "image_size"] {
+        let (context, mut app) = app();
+        app.dimensions = [8, 6];
+        app.new_document();
+        app.command(command);
+        app.dimensions = [12, 9];
+        app.resolution = 96.0;
+        size_dialog_click_size_button(&context, &mut app, "Apply");
+        let session = app.session().unwrap();
+        assert_eq!((session.document.width, session.document.height), (12, 9));
+        assert_eq!(session.document.resolution, 96.0);
+        assert_eq!(session.history.names().count(), 1);
+        app.command("undo");
+        let doc = &app.session().unwrap().document;
+        assert_eq!((doc.width, doc.height, doc.resolution), (8, 6, 72.0));
+        app.command("redo");
+        assert_eq!(app.session().unwrap().document.width, 12);
+    }
+}
+
+#[test]
+fn size_dialog_cancel_size_preserves_document_and_redo() {
+    for command in ["canvas_size", "image_size"] {
+        let (context, mut app) = app();
+        app.dimensions = [8, 6];
+        app.new_document();
+        app.edit("Rename", |doc| {
+            doc.layers[0].name = "Renamed".into();
+            Ok(())
+        });
+        app.command("undo");
+        app.command(command);
+        app.dimensions = [12, 9];
+        app.resolution = 96.0;
+        size_dialog_click_size_button(&context, &mut app, "Cancel");
+        let session = app.session().unwrap();
+        assert_eq!((session.document.width, session.document.height), (8, 6));
+        assert_eq!(session.document.resolution, 72.0);
+        assert_eq!(session.history.redo_name(), Some("Rename"));
+        assert_eq!(session.history.names().count(), 0);
+        assert!(!session.history.dirty());
+    }
+}
+
+fn size_dialog_click_size_button(context: &egui::Context, app: &mut EditorApp, label: &str) {
+    frame(context, app);
+    let position = layer_label(context, app, label) + egui::vec2(5.0, 5.0);
+    pointer_frame(context, app, position, Some(true), egui::Modifiers::NONE);
+    pointer_frame(context, app, position, Some(false), egui::Modifiers::NONE);
+    assert!(app.dialog.is_none());
+}
+
 #[path = "tests/canvas_preview.rs"]
 mod canvas_preview;
 

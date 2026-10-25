@@ -1,0 +1,79 @@
+{
+  "schema": 1,
+  "name": "canvas size: change",
+  "steps": [
+    {
+      "event": {
+        "type": "new"
+      },
+      "expect": {
+        "width": 8,
+        "height": 6,
+        "resolution": 72.0,
+        "undo_count": 0,
+        "dirty": false
+      }
+    },
+    {
+      "event": {
+        "type": "open_size",
+        "kind": "canvas"
+      },
+      "expect": {
+        "dialog_open": true
+      }
+    },
+    {
+      "event": {
+        "type": "set_size",
+        "width": 12,
+        "height": 9,
+        "resolution": 96
+      },
+      "expect": {
+        "width": 8,
+        "height": 6,
+        "resolution": 72.0,
+        "undo_count": 0,
+        "dirty": false,
+        "dialog_open": true
+      }
+    },
+    {
+      "event": {
+        "type": "apply"
+      },
+      "expect": {
+        "width": 12,
+        "height": 9,
+        "resolution": 96.0,
+        "undo_count": 1,
+        "dirty": true,
+        "dialog_open": false
+      }
+    },
+    {
+      "event": {
+        "type": "undo"
+      },
+      "expect": {
+        "width": 8,
+        "height": 6,
+        "resolution": 72.0,
+        "undo_count": 0,
+        "dirty": false
+      }
+    },
+    {
+      "event": {
+        "type": "redo"
+      },
+      "expect": {
+        "width": 12,
+        "height": 9,
+        "resolution": 96.0,
+        "undo_count": 1
+      }
+    }
+  ]
+}

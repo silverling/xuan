@@ -236,6 +236,13 @@ impl EditorApp {
                 let [width, height] = self.dimensions;
                 let anchor = self.anchor;
                 let resolution = self.resolution;
+                if self.session().is_some_and(|session| {
+                    let doc = &session.document;
+                    doc.width == width && doc.height == height && doc.resolution == resolution
+                }) {
+                    self.dialog = None;
+                    return;
+                }
                 self.edit(title, |doc| {
                     if dialog == Dialog::CanvasSize {
                         operations::canvas_size(doc, width, height, anchor)?;

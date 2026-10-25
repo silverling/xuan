@@ -13,6 +13,10 @@ use clap::Parser;
     after_help = "Projects use .xuan; original .comp directory packages can also be opened."
 )]
 struct Args {
+    /// Run the headless JSONL interaction adapter instead of opening a window.
+    #[cfg(feature = "interaction-probe")]
+    #[arg(long, hide = true)]
+    interaction_probe: bool,
     /// Images or projects to open
     #[arg(value_name = "IMAGE|PROJECT")]
     paths: Vec<PathBuf>,
@@ -36,11 +40,18 @@ struct Args {
 
 fn main() -> eframe::Result {
     let Args {
+        #[cfg(feature = "interaction-probe")]
+        interaction_probe,
         paths,
         demo,
         screenshot,
         screenshot_panel,
     } = Args::parse();
+    #[cfg(feature = "interaction-probe")]
+    if interaction_probe {
+        app::interaction_probe::run().map_err(|error| eframe::Error::AppCreation(error.into()))?;
+        return Ok(());
+    }
     let icon = image::load_from_memory(include_bytes!(
         "../assets/icons/hicolor/256x256/apps/me.silverl.xuan.png"
     ))
